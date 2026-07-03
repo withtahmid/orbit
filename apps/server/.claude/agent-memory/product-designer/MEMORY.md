@@ -1,0 +1,1 @@
+- [Personal-space URL guards](project_personal_space_url_guards.md) — Categories/Settings redirect /s/me to overview; Events/Budgets don't (minor inconsistency). Accounts/analytics correctly support personal via twins.
