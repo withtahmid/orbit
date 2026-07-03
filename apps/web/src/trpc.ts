@@ -26,6 +26,15 @@ export const trpcClient = trpc.createClient({
         httpBatchLink({
             url: `${baseBackendURL}/trpc`,
             headers: getHeaders,
+            /* Batched queries go out as ONE GET with every input in the URL.
+               A post-mutation invalidate() refetches a dozen queries in the
+               same tick (analytics + personal namespaces + entity lists, each
+               with large filter inputs), and an uncapped batch URL can exceed
+               server/proxy limits — failing EVERY refetch in the batch as a
+               unit, silently. Splitting oversized batches keeps one huge
+               input from taking down unrelated refetches. 2083 = the classic
+               lowest-common-denominator URL limit. */
+            maxURLLength: 2083,
         }),
     ],
 });

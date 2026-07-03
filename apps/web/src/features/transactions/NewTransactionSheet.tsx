@@ -1254,6 +1254,14 @@ function IncomeForm({
     }, [optionalFieldsHaveContent, showMore]);
 
     const idem = useIdempotencyKey();
+    /* Same-frame double-submit lock. mutate.isPending is React state and
+       stays false until the next render, so two clicks in one frame both
+       pass that guard — firing two mutations with the SAME idempotency
+       key (double pending rows + double totals delta, and the loser can
+       surface a CONFLICT "didn't save" toast for a transaction that DID
+       save). This ref flips synchronously; onSettled re-arms it so a
+       failed submit can be retried. */
+    const submittingRef = useRef(false);
     const mutate = trpc.transaction.income.useMutation({
         onMutate: async (variables) => {
             await optimistic.cancelBoth();
@@ -1285,7 +1293,12 @@ function IncomeForm({
             optimistic.applyDelta(delta);
             return { tempId, delta };
         },
-        onSuccess: async () => {
+        onSuccess: async (data, _variables, ctx) => {
+            /* Confirm the optimistic row in place BEFORE invalidating — the
+               refetch reconciles to server truth, but must never be the only
+               thing that clears the row's "saving" spinner (it can fail or
+               be cancelled silently; see confirmPendingRow's doc). */
+            if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
             toast.success("Income recorded");
             if (typeof window !== "undefined" && accountId) {
                 window.localStorage.setItem(lastAccountKey, accountId);
@@ -1307,6 +1320,9 @@ function IncomeForm({
                 duration: Infinity,
             });
         },
+        onSettled: () => {
+            submittingRef.current = false;
+        },
     });
     useEffect(() => {
         onPendingChange(mutate.isPending);
@@ -1318,7 +1334,7 @@ function IncomeForm({
             className="nt-form"
             onSubmit={(e: FormEvent) => {
                 e.preventDefault();
-                if (mutate.isPending) return;
+                if (submittingRef.current || mutate.isPending) return;
                 if (!accountId) {
                     toast.error("Pick an account");
                     return;
@@ -1327,6 +1343,7 @@ function IncomeForm({
                     toast.error("Enter an amount");
                     return;
                 }
+                submittingRef.current = true;
                 mutate.mutate({
                     spaceId,
                     accountId,
@@ -1553,6 +1570,14 @@ function ExpenseForm({
         [envelopeId, envelopesQuery.data]
     );
     const idem = useIdempotencyKey();
+    /* Same-frame double-submit lock. mutate.isPending is React state and
+       stays false until the next render, so two clicks in one frame both
+       pass that guard — firing two mutations with the SAME idempotency
+       key (double pending rows + double totals delta, and the loser can
+       surface a CONFLICT "didn't save" toast for a transaction that DID
+       save). This ref flips synchronously; onSettled re-arms it so a
+       failed submit can be retried. */
+    const submittingRef = useRef(false);
     const mutate = trpc.transaction.expense.useMutation({
         onMutate: async (variables) => {
             await optimistic.cancelBoth();
@@ -1584,7 +1609,10 @@ function ExpenseForm({
             optimistic.applyDelta(delta);
             return { tempId, delta };
         },
-        onSuccess: async () => {
+        onSuccess: async (data, _variables, ctx) => {
+            /* See IncomeForm's onSuccess: confirm in place first so the
+               spinner never depends on the refetch landing. */
+            if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
             toast.success("Expense recorded");
             // Remember this source account so the next expense entry
             // pre-fills with the same choice.
@@ -1606,6 +1634,9 @@ function ExpenseForm({
                 duration: Infinity,
             });
         },
+        onSettled: () => {
+            submittingRef.current = false;
+        },
     });
     useEffect(() => {
         onPendingChange(mutate.isPending);
@@ -1617,7 +1648,7 @@ function ExpenseForm({
             className="nt-form"
             onSubmit={(e: FormEvent) => {
                 e.preventDefault();
-                if (mutate.isPending) return;
+                if (submittingRef.current || mutate.isPending) return;
                 if (!sourceAccountId || !categoryId) {
                     toast.error("Pick an account and category");
                     return;
@@ -1630,6 +1661,7 @@ function ExpenseForm({
                     toast.error("Enter an amount");
                     return;
                 }
+                submittingRef.current = true;
                 mutate.mutate({
                     spaceId,
                     sourceAccountId,
@@ -1917,6 +1949,14 @@ function TransferForm({
     }, [optionalFieldsHaveContent, showMore]);
 
     const idem = useIdempotencyKey();
+    /* Same-frame double-submit lock. mutate.isPending is React state and
+       stays false until the next render, so two clicks in one frame both
+       pass that guard — firing two mutations with the SAME idempotency
+       key (double pending rows + double totals delta, and the loser can
+       surface a CONFLICT "didn't save" toast for a transaction that DID
+       save). This ref flips synchronously; onSettled re-arms it so a
+       failed submit can be retried. */
+    const submittingRef = useRef(false);
     const mutate = trpc.transaction.transfer.useMutation({
         onMutate: async (variables) => {
             await optimistic.cancelBoth();
@@ -1953,7 +1993,11 @@ function TransferForm({
             optimistic.applyDelta(delta);
             return { tempId, delta };
         },
-        onSuccess: async () => {
+        onSuccess: async (data, _variables, ctx) => {
+            /* See IncomeForm's onSuccess: confirm in place first so the
+               spinner never depends on the refetch landing. The fee's
+               expense row (if any) still arrives only via the refetch. */
+            if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
             toast.success("Transfer recorded");
             if (typeof window !== "undefined" && sourceAccountId) {
                 window.localStorage.setItem(lastSourceKey, sourceAccountId);
@@ -1973,6 +2017,9 @@ function TransferForm({
                 duration: Infinity,
             });
         },
+        onSettled: () => {
+            submittingRef.current = false;
+        },
     });
     useEffect(() => {
         onPendingChange(mutate.isPending);
@@ -1988,7 +2035,7 @@ function TransferForm({
             className="nt-form"
             onSubmit={(e: FormEvent) => {
                 e.preventDefault();
-                if (mutate.isPending) return;
+                if (submittingRef.current || mutate.isPending) return;
                 if (!sourceAccountId || !destinationAccountId) {
                     toast.error("Pick both accounts");
                     return;
@@ -2015,6 +2062,7 @@ function TransferForm({
                         return;
                     }
                 }
+                submittingRef.current = true;
                 mutate.mutate({
                     spaceId,
                     sourceAccountId,
@@ -2290,6 +2338,14 @@ function AdjustmentForm({
     }, [pinState.pins]);
 
     const idem = useIdempotencyKey();
+    /* Same-frame double-submit lock. mutate.isPending is React state and
+       stays false until the next render, so two clicks in one frame both
+       pass that guard — firing two mutations with the SAME idempotency
+       key (double pending rows + double totals delta, and the loser can
+       surface a CONFLICT "didn't save" toast for a transaction that DID
+       save). This ref flips synchronously; onSettled re-arms it so a
+       failed submit can be retried. */
+    const submittingRef = useRef(false);
     // Deliberately no onMutate/optimistic row here, unlike Income/Expense/
     // Transfer: an adjustment's amount and which account is source vs.
     // destination are computed server-side from a live read of
@@ -2308,6 +2364,9 @@ function AdjustmentForm({
         },
         onError: (e) => {
             toast.error(`Balance adjustment didn't save — ${e.message}`, { duration: Infinity });
+        },
+        onSettled: () => {
+            submittingRef.current = false;
         },
     });
     useEffect(() => {
@@ -2329,7 +2388,7 @@ function AdjustmentForm({
             className="nt-form"
             onSubmit={(e: FormEvent) => {
                 e.preventDefault();
-                if (mutate.isPending) return;
+                if (submittingRef.current || mutate.isPending) return;
                 if (!accountId) {
                     toast.error("Pick an account");
                     return;
@@ -2351,6 +2410,7 @@ function AdjustmentForm({
                 const finalDesc = description.trim()
                     ? `${reasonText} — ${description.trim()}`
                     : reasonText;
+                submittingRef.current = true;
                 mutate.mutate({
                     spaceId,
                     accountId,

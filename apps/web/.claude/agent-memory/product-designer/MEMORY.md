@@ -3,4 +3,5 @@
 - [Analytics period presets](analytics_period_presets.md) — named-preset vs DateRangePicker-button mechanics divergence; rolling vs calendar-aligned; per-view defaults
 - [Unbudgeted semantics](project_unbudgeted_semantics.md) — per-viewed-month unallocated; both consumers gate on current month; stale banner comment; 90d overspend nag removed
 - [Category lifecycle gaps](project_category_lifecycle_gaps.md) — no archive; used categories can't be deleted (FK RESTRICT); merge/reassign is the missing affordance; delete-affordance defect
+- [Statement-mode balance prominence](anomaly_statement_balance_prominence.md) — RESOLVED: neutral/headline in statement mode, muted in multi-account; canonical context-vs-headline pattern
 - [Read-only copy leaks](anomaly_readonly_copy_leaks.md) — isOwner gating covers buttons but descriptive strings naming edit verbs are the missed leak; audit empty-state/helper copy for non-owners

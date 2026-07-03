@@ -455,6 +455,13 @@ function UserChip({ onNavigate }: { onNavigate: () => void }) {
 }
 
 const SL_STYLES = `
+:root {
+    /* Rendered height of .sl-mobile-header below (10+10 padding + 32px
+       menu button + 1px border). Pages that stick content beneath it
+       (e.g. the transactions day headers) consume this var — keep it in
+       sync with any change to that header's padding/content. */
+    --sl-mobile-header-h: 53px;
+}
 .sl-shell {
     min-height: 100vh;
     background: var(--bg);
@@ -517,6 +524,14 @@ const SL_STYLES = `
     font-size: 13px;
     font-weight: 500;
     color: var(--fg);
+    /* Single line, always: a long space name wrapping to two lines would
+       grow the header past --sl-mobile-header-h (53px), and sticky
+       content offset by that var (transactions day headers) would clip
+       behind it. Ellipsis instead of wrap. */
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sl-main {

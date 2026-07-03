@@ -116,6 +116,65 @@ export function useOptimisticTransactionCache() {
         }
     }
 
+    /** Success-path counterpart to removePendingRow. Flips this mutation's
+     *  own pending row into a confirmed row IN PLACE — real server id,
+     *  `__pending` stripped — instead of waiting for the follow-up
+     *  invalidate() refetch to replace the page. The refetch is still what
+     *  reconciles to full server truth (balances, fee rows, ordering), but
+     *  it must not be the only thing that clears the "saving" state: it can
+     *  fail silently (network blip, dev-server restart mid-request) or be
+     *  cancelled by a sibling submission's cancelBoth(), and with
+     *  refetchOnWindowFocus disabled nothing would ever retry — stranding a
+     *  spinner row forever. Converting under the real id keeps the React
+     *  key stable when the server row arrives (no flicker, no duplicate);
+     *  if a refetch already replaced the list, the temp id is simply absent
+     *  and this is a no-op. Duplicate temp rows (a double-submit that the
+     *  server's idempotency cache collapsed into one transaction) confirm
+     *  the first and drop the rest. */
+    function confirmPendingRow(tempId: string, realId: string) {
+        const confirmItems = (items: ListItem[]) => {
+            if (!items.some((it) => it.id === tempId)) return items;
+            let confirmed = false;
+            const out: ListItem[] = [];
+            for (const it of items) {
+                if (it.id !== tempId) {
+                    out.push(it);
+                } else if (!confirmed) {
+                    confirmed = true;
+                    const real: Record<string, unknown> = { ...it, id: realId };
+                    delete real.__pending;
+                    out.push(real as unknown as ListItem);
+                }
+            }
+            return out;
+        };
+        for (const queryKey of listKeys) {
+            queryClient.setQueriesData(
+                { queryKey },
+                (old: InfiniteData<ListPage> | ListPage | undefined) => {
+                    if (!old) return old;
+                    /* Return the SAME reference when this variant never held
+                       the temp row — a fresh wrapper object would re-render
+                       every observer of every cached filter variant for a
+                       no-op. */
+                    if ("pages" in old) {
+                        if (
+                            !old.pages.some((p) => p.items.some((it) => it.id === tempId))
+                        ) {
+                            return old;
+                        }
+                        return {
+                            ...old,
+                            pages: old.pages.map((p) => ({ ...p, items: confirmItems(p.items) })),
+                        };
+                    }
+                    const items = confirmItems(old.items);
+                    return items === old.items ? old : { ...old, items };
+                }
+            );
+        }
+    }
+
     function removePendingRow(tempId: string) {
         const placeholder = { id: tempId } as OptimisticTxRow;
         for (const queryKey of listKeys) {
@@ -147,7 +206,10 @@ export function useOptimisticTransactionCache() {
                     outTotal,
                     net: inTotal - outTotal,
                     count: old.count + delta.count,
-                    avgPerDay: outTotal / old.days,
+                    /* Server totals always send days >= 1, but mirror its own
+                       Math.max guard so a malformed cache entry can't yield
+                       Infinity. */
+                    avgPerDay: outTotal / Math.max(1, old.days),
                 };
             });
         }
@@ -163,5 +225,12 @@ export function useOptimisticTransactionCache() {
         });
     }
 
-    return { cancelBoth, addPendingRow, removePendingRow, applyDelta, reverseDelta };
+    return {
+        cancelBoth,
+        addPendingRow,
+        confirmPendingRow,
+        removePendingRow,
+        applyDelta,
+        reverseDelta,
+    };
 }

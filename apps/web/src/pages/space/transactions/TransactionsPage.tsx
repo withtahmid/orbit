@@ -40,6 +40,7 @@ import { Filter as FilterEmptyIcon, Receipt } from "lucide-react";
 import { AnalyticsFilterBar } from "../analytics/components/AnalyticsFilterBar";
 import { useAnalyticsFilters } from "../analytics/components/useAnalyticsFilters";
 import { trpc } from "@/trpc";
+import type { RouterOutput } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
 import { usePeriod } from "@/hooks/usePeriod";
@@ -86,6 +87,12 @@ function rowBalanceEntries(t: {
  *  useOptimisticTransactionCache.ts) that hasn't been confirmed by the
  *  server yet — never present on a real row. */
 const isPendingRow = (t: { id: string; __pending?: boolean }) => t.__pending === true;
+
+/** A rendered list row — the page shows either the space list or its
+ *  personal cross-space twin, so selection state carries the union. */
+type TxRow =
+    | RouterOutput["transaction"]["listBySpace"]["items"][number]
+    | RouterOutput["personal"]["transactions"]["items"][number];
 
 const TYPE_OPTIONS: Array<{ value: TxType | null; label: string }> = [
     { value: null, label: "All" },
@@ -237,9 +244,13 @@ export default function TransactionsPage() {
     const categoriesPersonalQuery = trpc.personal.listCategories.useQuery(undefined, {
         enabled: isPersonal,
     });
-    const categoriesData = isPersonal
-        ? categoriesPersonalQuery.data ?? []
-        : categoriesSpaceQuery.data ?? [];
+    const categoriesData = useMemo(
+        () =>
+            isPersonal
+                ? categoriesPersonalQuery.data ?? []
+                : categoriesSpaceQuery.data ?? [],
+        [isPersonal, categoriesPersonalQuery.data, categoriesSpaceQuery.data]
+    );
 
     // Envelopes only exist per-space; in the personal cross-space view we
     // don't have a flat envelope list to look up against, so the Envelope
@@ -254,7 +265,7 @@ export default function TransactionsPage() {
         { enabled: !isPersonal }
     );
 
-    const [selectedTx, setSelectedTx] = useState<any>(null);
+    const [selectedTx, setSelectedTx] = useState<TxRow | null>(null);
     /**
      * Page-owned edit state. Previously each row mounted its own
      * EditTransactionSheet, which could stack on top of the details
@@ -264,7 +275,7 @@ export default function TransactionsPage() {
      *   click Edit in details -> selectedTx cleared, editingTx set
      *   close edit sheet -> editingTx cleared
      */
-    const [editingTx, setEditingTx] = useState<any>(null);
+    const [editingTx, setEditingTx] = useState<TxRow | null>(null);
 
     /**
      * Keyset-cursor infinite list. tRPC's `useInfiniteQuery` manages the
@@ -655,15 +666,16 @@ export default function TransactionsPage() {
                     {isStatementMode ? (
                         <div className="tx-statement-note">
                             <Coins className="size-3.5" />
-                            Balance shown is{" "}
+                            Each row shows{" "}
                             <strong>
                                 {singleAccountId
                                     ? accountsById.get(singleAccountId)?.name ??
                                       "this account"
                                     : "this account"}
                             </strong>
-                            's true balance across all activity — filters above
-                            narrow which rows you see, not the running total.
+                            's balance after that transaction, across all
+                            activity — filters above narrow which rows you see,
+                            not the balances.
                         </div>
                     ) : (
                         (activeFilterCount > 0 || !!search) && (
@@ -688,15 +700,18 @@ export default function TransactionsPage() {
                             ...(isPersonal ? [] : ["Event"]),
                             "By",
                             "Amount",
-                            "Balance",
+                            "Balance after",
                             "",
                         ].map((h, i) => (
                             <span
                                 key={i}
-                                className="tx-th"
+                                className={cn(
+                                    "tx-th",
+                                    h === "Balance after" && "tx-th-balance"
+                                )}
                                 style={{
                                     textAlign:
-                                        h === "Amount" || h === "Balance"
+                                        h === "Amount" || h === "Balance after"
                                             ? "right"
                                             : "left",
                                 }}
@@ -778,6 +793,13 @@ export default function TransactionsPage() {
                                             return (
                                         <div
                                             key={t.id}
+                                            /* Focusable + Enter/Space so keyboard users
+                                               can open the details sheet, but NOT
+                                               role="button": the row contains account
+                                               <Link>s, and interactive descendants
+                                               inside a button are invalid ARIA that can
+                                               hide those links from screen readers. */
+                                            tabIndex={pending ? -1 : 0}
                                             className={cn(
                                                 "tx-row tx-row-grid",
                                                 pending && "tx-row-pending"
@@ -786,6 +808,19 @@ export default function TransactionsPage() {
                                             aria-disabled={pending || undefined}
                                             onClick={() => {
                                                 if (!pending) setSelectedTx(t);
+                                            }}
+                                            onKeyDown={(e) => {
+                                                /* Row-level key handling only — inner
+                                                   links/buttons keep their own native
+                                                   Enter/Space without also opening the
+                                                   details sheet (keydown bubbles), and
+                                                   holding Space must not re-fire. */
+                                                if (e.target !== e.currentTarget) return;
+                                                if (e.repeat) return;
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                    e.preventDefault();
+                                                    if (!pending) setSelectedTx(t);
+                                                }
                                             }}
                                         >
                                             <span className="tx-cell-date">
@@ -961,13 +996,31 @@ export default function TransactionsPage() {
                                                                         }
                                                                     />
                                                                 )}
+                                                                {/* Statement mode (one account selected) exists
+                                                                    to READ the running balance — full prominence
+                                                                    there, matching AccountDetailPage. In the
+                                                                    multi-account view balance is context: muted
+                                                                    + smaller so it can't be mistaken for Amount
+                                                                    (the divider + grey do the fencing). */}
                                                                 <Money
                                                                     amount={Number(
                                                                         b.balance
                                                                     )}
-                                                                    variant="neutral"
-                                                                    size={13}
-                                                                    weight={500}
+                                                                    variant={
+                                                                        isStatementMode
+                                                                            ? "neutral"
+                                                                            : "muted"
+                                                                    }
+                                                                    size={
+                                                                        isStatementMode
+                                                                            ? 13
+                                                                            : 12
+                                                                    }
+                                                                    weight={
+                                                                        isStatementMode
+                                                                            ? 500
+                                                                            : 400
+                                                                    }
                                                                 />
                                                             </span>
                                                         ));
@@ -1053,7 +1106,7 @@ export default function TransactionsPage() {
                                                                 : "expense"
                                                     }
                                                     signed={tt === "income"}
-                                                    size={13}
+                                                    size={14}
                                                     weight={500}
                                                 />
                                                 {rowBalanceEntries(t).map(
@@ -1079,9 +1132,21 @@ export default function TransactionsPage() {
                                                                     amount={Number(
                                                                         b.balance
                                                                     )}
-                                                                    variant="neutral"
-                                                                    size={11}
-                                                                    weight={500}
+                                                                    variant={
+                                                                        isStatementMode
+                                                                            ? "neutral"
+                                                                            : "muted"
+                                                                    }
+                                                                    size={
+                                                                        isStatementMode
+                                                                            ? 12
+                                                                            : 11
+                                                                    }
+                                                                    weight={
+                                                                        isStatementMode
+                                                                            ? 500
+                                                                            : 400
+                                                                    }
                                                                 />
                                                             </span>
                                                         )
@@ -1833,7 +1898,13 @@ const TX_STYLES = `
 /* Table */
 .orbit-design .od-card.tx-table-card {
     padding: 0;
+    /* clip (not hidden) keeps the border-radius clipping WITHOUT creating
+       a scroll box — an overflow:hidden ancestor silently disables the
+       position:sticky day/column headers inside. The hidden line first is
+       the Safari <16 fallback (it drops the clip declaration): corners
+       stay clipped there and only the sticky headers degrade. */
     overflow: hidden;
+    overflow: clip;
 }
 .tx-statement-note {
     display: flex;
@@ -1868,6 +1939,12 @@ const TX_STYLES = `
     padding: 12px 18px;
     border-bottom: 1px solid var(--line);
     background: var(--bg-elev-2);
+    /* Column labels stay visible while scrolling a long list; day headers
+       pin just below (see .tx-day-header's 901px+ offset). Above the
+       day headers' z-index:2, below .sl-mobile-header's 5. */
+    position: sticky;
+    top: 0;
+    z-index: 3;
 }
 .tx-th {
     font-size: 10.5px;
@@ -1875,6 +1952,24 @@ const TX_STYLES = `
     text-transform: uppercase;
     color: var(--fg-4);
     font-weight: 500;
+    /* "Balance after" is the longest label (~98px in a 120px track) —
+       nowrap so zoom / wider system fonts can't wrap it to two lines,
+       and line-height:1 makes the head's height deterministic for the
+       day headers' sticky offset below. */
+    white-space: nowrap;
+    line-height: 1;
+}
+/* Start the balance column's fence at the header so it reads as one
+   column boundary. Negative margins punch through the head's 12px
+   padding so the rule meets the head's bottom border. */
+.tx-th-balance {
+    align-self: stretch;
+    margin: -12px 0;
+    border-left: 1px solid var(--line-soft);
+    padding-left: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
 }
 .tx-rows-desktop { display: block; }
 .tx-rows-mobile { display: none; }
@@ -1938,8 +2033,32 @@ const TX_STYLES = `
     display: flex;
     flex-direction: column;
 }
+/* Day headers stick while their block scrolls, so the reader always knows
+   which day they're in on long lists. Each header is only sticky within
+   its own .tx-day-block, so the next day's header pushes it away
+   naturally. The hairline shadow matches the row separators and keeps a
+   visible seam when rows slide beneath the stuck label. */
 .tx-day-header {
     padding: 12px 18px 6px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bg-elev-1);
+    box-shadow: 0 1px 0 var(--line-soft);
+}
+@media (max-width: 767px) {
+    /* Tuck 1px behind the sticky .sl-mobile-header (opaque, z-index 5 >
+       2) — an overlap is invisible, a gap would show rows scrolling
+       through. --sl-mobile-header-h is defined next to that header's
+       rule in SpaceLayout.tsx so the two can't silently drift. */
+    .tx-day-header { top: calc(var(--sl-mobile-header-h, 53px) - 1px); }
+}
+@media (min-width: 901px) {
+    /* Below the sticky column-header band: 12+12 padding + 10.5px label
+       (line-height 1) + 1px border ≈ 35.5px; 34px tucks 1.5px behind its
+       opaque background. Only ≥901px — the 768-900px band shows the
+       mobile card list with no column head, so top:0 applies there. */
+    .tx-day-header { top: 34px; }
 }
 .tx-day-block + .tx-day-block .tx-day-header {
     border-top: 1px solid var(--line-soft);
@@ -2014,13 +2133,27 @@ const TX_STYLES = `
     white-space: nowrap;
     max-width: 130px;
 }
+/* Running balance is context, not the transaction itself — a hairline
+   fences it off from the Amount column and the muted number (vs Amount's
+   colored 13px/500) keeps the two from reading as twins. No margin-left:
+   the fixed 120/124px track must keep ~107px for the figure so 7-8 digit
+   balances (routine in BDT) never spill left across the fence into
+   Amount. The negative vertical margins extend the cell through the
+   row's own 13px padding so the border meets the row separators as one
+   continuous rule instead of floating per-row dashes. */
 .tx-cell-balance {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
+    justify-content: center;
     gap: 2px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+    align-self: stretch;
+    margin-top: -13px;
+    margin-bottom: -13px;
+    border-left: 1px solid var(--line-soft);
+    padding-left: 12px;
 }
 .tx-bal-line {
     display: inline-flex;
@@ -2126,9 +2259,23 @@ const TX_STYLES = `
     cursor: pointer;
     font-family: inherit;
     color: inherit;
+    /* Touch ergonomics: kill the 300ms double-tap delay and the default
+       grey tap flash — the :active state below is the press feedback. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 120ms ease;
 }
 .tx-mrow:last-child { border-bottom: 0; }
 .tx-mrow:hover { background: var(--bg-elev-2); }
+/* Pressed state = immediate feedback on touch, where :hover never fires. */
+.tx-mrow:active:not(:disabled) { background: var(--bg-elev-2); }
+/* Keyboard focus ring for both row surfaces. Inset so the ring survives
+   the card's clipped rounded corners on first/last rows. */
+.tx-row:focus-visible,
+.tx-mrow:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: -2px;
+}
 .tx-mrow-pending {
     opacity: 0.55;
     cursor: default;
@@ -2181,11 +2328,12 @@ const TX_STYLES = `
 }
 
 /* Footer "Load 50 more" is the primary mobile pagination interaction.
-   30px is too small for fingers; bump to 40px and span full width on
-   phones so it pairs visually with the "Showing X of Y" line above. */
+   30px is too small for fingers; bump to the 44px touch-target minimum
+   and span full width on phones so it pairs visually with the
+   "Showing X of Y" line above. */
 @media (max-width: 640px) {
     .tx-table-foot .od-btn-sm {
-        height: 40px;
+        height: 44px;
         padding: 0 14px;
         flex: 1 1 100%;
     }
@@ -2211,7 +2359,11 @@ const TX_STYLES = `
        unaffected). */
     .tx-show-balance .tx-row-grid,
     .tx-show-balance.tx-table-no-event .tx-row-grid {
-        grid-template-columns: 96px 116px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) 120px 120px 56px;
+        /* Balance track 124px (not 120) — a 14-char BDT figure
+           (−12,345,678.90) on a multi-account transfer line needs ~94px
+           of the track after the fence's 13px and the dot's 11px; 120px
+           left only ~2px of headroom. */
+        grid-template-columns: 96px 116px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) 120px 124px 56px;
     }
 }
 
