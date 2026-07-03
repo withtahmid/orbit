@@ -105,4 +105,9 @@ export const PIN_CONTROL_STYLES = `
     /* Icon-only collapse — keep the 24×24 square clean, no padding. */
     .nt-pin-btn { padding: 0; width: 24px; }
 }
+/* Touch devices: grow toward the comfortable tap size (24px is only the
+   WCAG floor). Wins over the 420px icon-only rule via source order. */
+@media (hover: none) {
+    .nt-pin-btn { height: 36px; min-width: 36px; }
+}
 `;

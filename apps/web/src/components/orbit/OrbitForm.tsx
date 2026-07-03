@@ -1014,10 +1014,10 @@ const ORBIT_FORM_STYLES = `
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    /* Name shrinks first so the meta signal (the new "pinned" /
-       "overridden" / "category default" word) stays fully visible on
-       narrow phones. min-width:0 is required for ellipsis inside a
-       flex parent; flex:1 takes the available slack. */
+    /* Name shrinks first so the meta signal (the "pinned" / "selected"
+       word) stays fully visible on narrow phones. min-width:0 is
+       required for ellipsis inside a flex parent; flex:1 takes the
+       available slack. */
     flex: 1;
     min-width: 0;
 }
@@ -1044,6 +1044,11 @@ const ORBIT_FORM_STYLES = `
     border-color: var(--line-strong);
     color: var(--fg);
     background: var(--bg-elev-1);
+}
+/* Touch devices: the chip's Change/Cancel buttons are primary controls —
+   grow them toward the 40px tap target. */
+@media (hover: none) {
+    .of-chip-btn { min-height: 36px; padding: 6px 12px; }
 }
 
 /* ---- Inline picker row (chip "Change" expanded mode) ----

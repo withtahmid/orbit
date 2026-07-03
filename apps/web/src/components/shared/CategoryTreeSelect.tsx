@@ -2,11 +2,7 @@ import { useMemo, useState } from "react";
 import { Check, ChevronsUpDown, ChevronRight, FolderTree } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { EntityAvatar } from "@/components/shared/EntityAvatar";
 
@@ -34,10 +30,16 @@ function buildTree(cats: CategoryLike[]): Node[] {
             roots.push(n);
         }
     });
+    // Alphabetical siblings — matches the /categories page ordering so the
+    // same tree reads identically everywhere (server order is created_at).
+    const byName = (a: Node, b: Node) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     const assignDepth = (n: Node, depth: number) => {
         n.depth = depth;
+        n.children.sort(byName);
         n.children.forEach((c) => assignDepth(c, depth + 1));
     };
+    roots.sort(byName);
     roots.forEach((r) => assignDepth(r, 0));
     return roots;
 }
@@ -54,6 +56,9 @@ function flatten(nodes: Node[], collapsed: Set<string>, acc: Node[] = []): Node[
  * Single-select hierarchical category picker. When a parent is selected,
  * callers are expected to treat the filter as "include all descendants" —
  * that's the server's job via `includeDescendants` flag on the procedure.
+ *
+ * Always pass the FULL category list — pre-filtering it removes parents
+ * and silently promotes their children to top level, mangling the tree.
  */
 export function CategoryTreeSelect({
     categories,
@@ -137,8 +142,7 @@ export function CategoryTreeSelect({
                 className="flex w-[--radix-popover-trigger-width] min-w-[min(18rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] flex-col p-0"
                 align="start"
                 style={{
-                    maxHeight:
-                        "min(var(--radix-popover-content-available-height, 24rem), 24rem)",
+                    maxHeight: "min(var(--radix-popover-content-available-height, 24rem), 24rem)",
                 }}
             >
                 <div className="shrink-0 border-b border-border p-2">

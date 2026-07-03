@@ -16,10 +16,7 @@ import { resolveMemberSpaceIds } from "./shared.mjs";
 export const personalListCategories = authorizedProcedure.query(async ({ ctx }) => {
     const [error, rows] = await safeAwait(
         (async () => {
-            const memberSpaces = await resolveMemberSpaceIds(
-                ctx.services.qb,
-                ctx.auth.user.id
-            );
+            const memberSpaces = await resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id);
             if (memberSpaces.length === 0) return [];
             return ctx.services.qb
                 .selectFrom("expense_categories")
@@ -29,7 +26,6 @@ export const personalListCategories = authorizedProcedure.query(async ({ ctx }) 
                     "expense_categories.space_id",
                     "spaces.name as space_name",
                     "expense_categories.parent_id",
-                    "expense_categories.default_envelop_id",
                     "expense_categories.name",
                     "expense_categories.color",
                     "expense_categories.icon",

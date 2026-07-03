@@ -36,37 +36,3 @@ export async function resolveEnvelopActive({
         });
     }
 }
-
-/**
- * Resolve the active state of the category's default envelope. Used to
- * surface a clean error when the user picks a category whose default
- * envelope has been archived.
- */
-export async function resolveCategoryEnvelopActive({
-    trx,
-    expenseCategoryId,
-}: {
-    trx: Kysely<DB>;
-    expenseCategoryId: string;
-}): Promise<void> {
-    const row = await trx
-        .selectFrom("expense_categories")
-        .innerJoin("envelops", "envelops.id", "expense_categories.default_envelop_id")
-        .select(["envelops.id", "envelops.archived", "envelops.name"])
-        .where("expense_categories.id", "=", expenseCategoryId)
-        .executeTakeFirst();
-
-    if (!row) {
-        throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Category not found",
-        });
-    }
-
-    if (row.archived) {
-        throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `This category's default envelope "${row.name}" is archived. Pick a different envelope for this transaction, or unarchive.`,
-        });
-    }
-}

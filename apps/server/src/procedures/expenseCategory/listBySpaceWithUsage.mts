@@ -41,7 +41,6 @@ export const listExpenseCategoriesBySpaceWithUsage = authorizedProcedure
                     id: string;
                     space_id: string;
                     parent_id: string | null;
-                    default_envelop_id: string;
                     name: string;
                     color: string;
                     icon: string;
@@ -75,7 +74,6 @@ export const listExpenseCategoriesBySpaceWithUsage = authorizedProcedure
                         ec.id::text,
                         ec.space_id::text,
                         ec.parent_id::text,
-                        ec.default_envelop_id::text,
                         ec.name,
                         ec.color,
                         ec.icon,
@@ -96,7 +94,6 @@ export const listExpenseCategoriesBySpaceWithUsage = authorizedProcedure
                     id: r.id,
                     space_id: r.space_id,
                     parent_id: r.parent_id,
-                    default_envelop_id: r.default_envelop_id,
                     name: r.name,
                     color: r.color,
                     icon: r.icon,
@@ -119,8 +116,7 @@ export const listExpenseCategoriesBySpaceWithUsage = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message:
-                    error.message || "Failed to fetch expense categories with usage",
+                message: error.message || "Failed to fetch expense categories with usage",
             });
         }
 

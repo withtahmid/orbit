@@ -99,16 +99,13 @@ const DocsPage = observer(function DocsPage() {
                     {/* Sticky TOC — sidebar on lg+, inline summary on mobile */}
                     <aside className="od-toc-wrap">
                         <nav className="od-toc">
-                            <span className="eyebrow od-toc-eyebrow">
-                                On this page
-                            </span>
+                            <span className="eyebrow od-toc-eyebrow">On this page</span>
                             {SECTIONS.map((s) => (
                                 <a
                                     key={s.id}
                                     href={`#${s.id}`}
                                     className={
-                                        "od-toc-link" +
-                                        (active === s.id ? " is-active" : "")
+                                        "od-toc-link" + (active === s.id ? " is-active" : "")
                                     }
                                 >
                                     <s.icon className="size-3.5 shrink-0" />
@@ -209,13 +206,11 @@ function Hero({ isAuthed }: { isAuthed: boolean }) {
                 .
             </h1>
             <p className="od-hero-lede">
-                Orbit is a collaborative personal-finance app for small groups —
-                families, couples, roommates, shared projects. It combines{" "}
-                <strong>ledger accounting</strong>,{" "}
-                <strong>envelope budgeting</strong>, and{" "}
-                <strong>goal-based planning</strong> into a single coherent ledger.
-                This guide walks through every feature so you can hit the ground
-                running.
+                Orbit is a collaborative personal-finance app for small groups — families, couples,
+                roommates, shared projects. It combines <strong>ledger accounting</strong>,{" "}
+                <strong>envelope budgeting</strong>, and <strong>goal-based planning</strong> into a
+                single coherent ledger. This guide walks through every feature so you can hit the
+                ground running.
             </p>
             <div className="od-hero-cta">
                 {isAuthed ? (
@@ -297,11 +292,10 @@ function Overview() {
             <SectionHeader id="overview" title="What is Orbit?" icon={Sparkles} />
             <Paragraph>
                 Orbit tracks where your money <i>is</i> (accounts), what it&apos;s{" "}
-                <i>earmarked for</i> (envelopes &amp; goals), and where it{" "}
-                <i>went</i> (transactions). You and everyone you collaborate with
-                see the same up-to-the-second view of the household finances — no
-                spreadsheets to merge, no &quot;did you pay the internet bill?&quot;
-                in the group chat.
+                <i>earmarked for</i> (envelopes &amp; goals), and where it <i>went</i>{" "}
+                (transactions). You and everyone you collaborate with see the same up-to-the-second
+                view of the household finances — no spreadsheets to merge, no &quot;did you pay the
+                internet bill?&quot; in the group chat.
             </Paragraph>
             <ScreenshotPlaceholder label="Overview dashboard — balance trend, allocation donut, recent transactions, upcoming events" />
             <FeatureGrid
@@ -314,7 +308,7 @@ function Overview() {
                     {
                         icon: Mail,
                         title: "Envelope budgeting",
-                        body: "Named buckets (Groceries, Rent, Fuel…) hold a logical allocation of your money. Each expense lands in an envelope, with its category suggesting which one.",
+                        body: "Named buckets (Groceries, Rent, Fuel…) hold a logical allocation of your money. Each expense lands in the envelope you pick on entry — pin your usual one for one-tap defaults.",
                     },
                     {
                         icon: Target,
@@ -341,18 +335,15 @@ function LiveDemo() {
                 <a href={DEMO_URL} className="od-link">
                     orbit-demo.withtahmid.com
                 </a>
-                . Every screen renders real data — 16 accounts, 30+ envelopes
-                (including a handful of goal envelopes), 18 months of
-                transactions, and five collaborating
-                spaces (Family Budget, Personal, Roommates, Side Business,
-                Travel Fund) — so you can explore the product end-to-end without
-                creating anything of your own.
+                . Every screen renders real data — 16 accounts, 30+ envelopes (including a handful
+                of goal envelopes), 18 months of transactions, and five collaborating spaces (Family
+                Budget, Personal, Roommates, Side Business, Travel Fund) — so you can explore the
+                product end-to-end without creating anything of your own.
             </Paragraph>
             <Paragraph>
-                The demo is <strong>read-only</strong>: log in, click around,
-                open every screen and form — nothing you do gets saved.
-                That&apos;s by design, so the sandbox stays the same for every
-                visitor.
+                The demo is <strong>read-only</strong>: log in, click around, open every screen and
+                form — nothing you do gets saved. That&apos;s by design, so the sandbox stays the
+                same for every visitor.
             </Paragraph>
 
             <div className="od-card od-demo-card">
@@ -367,12 +358,11 @@ function LiveDemo() {
                     <dd className="mono">password123</dd>
                 </dl>
                 <p className="od-prose-sm">
-                    Alex is the primary demo user and owns all five spaces. To see
-                    the app from a collaborator&apos;s perspective, log out and
-                    sign in as <span className="mono od-tag">sam@orbit.dev</span>,{" "}
+                    Alex is the primary demo user and owns all five spaces. To see the app from a
+                    collaborator&apos;s perspective, log out and sign in as{" "}
+                    <span className="mono od-tag">sam@orbit.dev</span>,{" "}
                     <span className="mono od-tag">jordan@orbit.dev</span>, or{" "}
-                    <span className="mono od-tag">taylor@orbit.dev</span> — same
-                    password.
+                    <span className="mono od-tag">taylor@orbit.dev</span> — same password.
                 </p>
             </div>
 
@@ -396,11 +386,9 @@ function Concepts() {
                 icon={BookOpen}
             />
             <Paragraph>
-                Orbit&apos;s design priority is{" "}
-                <strong>correctness → clarity → performance</strong>. Almost
-                every number you see is computed on-read, so edits to a
-                transaction or an allocation propagate instantly — no manual
-                reconciliation.
+                Orbit&apos;s design priority is <strong>correctness → clarity → performance</strong>
+                . Almost every number you see is computed on-read, so edits to a transaction or an
+                allocation propagate instantly — no manual reconciliation.
             </Paragraph>
             <div className="od-grid-2">
                 <ConceptCard
@@ -417,7 +405,7 @@ function Concepts() {
                 />
                 <ConceptCard
                     title="Category"
-                    body="A nestable label on an expense. It carries a default envelope that pre-fills the entry form — but the envelope you actually pick is saved on the transaction itself."
+                    body="A nestable label on an expense — what the money was for. Fully independent from envelopes: the envelope is picked per transaction (pin one for quick entry)."
                 />
                 <ConceptCard
                     title="Allocation"
@@ -439,11 +427,7 @@ function Concepts() {
 function GettingStarted() {
     return (
         <section className="od-section">
-            <SectionHeader
-                id="getting-started"
-                title="Getting started"
-                icon={ArrowRight}
-            />
+            <SectionHeader id="getting-started" title="Getting started" icon={ArrowRight} />
             <ol className="od-steps">
                 <StepCard
                     step={1}
@@ -463,7 +447,7 @@ function GettingStarted() {
                 <StepCard
                     step={4}
                     title="Create envelopes & categories"
-                    body="Pick a cadence (monthly or none) for each envelope. Create expense categories, each with a default envelope to pre-fill the entry form."
+                    body="Pick a cadence (monthly or none) for each envelope. Create expense categories — nestable labels for what money gets spent on."
                 />
                 <StepCard
                     step={5}
@@ -486,34 +470,29 @@ function Spaces() {
         <section className="od-section">
             <SectionHeader id="spaces" title="Spaces & collaboration" icon={Users} />
             <Paragraph>
-                A <strong>space</strong> is a coherent ledger: transactions,
-                envelopes, categories, and events all belong to exactly
-                one space. Accounts are different — an account can be shared
-                into many spaces (more on this below).
+                A <strong>space</strong> is a coherent ledger: transactions, envelopes, categories,
+                and events all belong to exactly one space. Accounts are different — an account can
+                be shared into many spaces (more on this below).
             </Paragraph>
             <Paragraph>
-                Each space has members with roles. Owners have full control,
-                editors can record transactions and allocate money but
-                can&apos;t change membership, viewers are read-only. You can be
-                in as many spaces as you like — use the space picker in the
+                Each space has members with roles. Owners have full control, editors can record
+                transactions and allocate money but can&apos;t change membership, viewers are
+                read-only. You can be in as many spaces as you like — use the space picker in the
                 header to jump between them.
             </Paragraph>
             <CalloutCard title="Invite by email">
-                From <strong>Settings → Members</strong>, an owner or editor
-                enters an email address, picks a role, and sends an invite. The
-                recipient gets a link that resolves at{" "}
-                <span className="mono od-tag">/invite/&lt;token&gt;</span> — they
-                can accept with any Orbit account, not just one matching the
-                invited address. Invites expire in 72 hours; pending ones show
-                up in the same settings tab where any owner/editor can revoke
-                them.
+                From <strong>Settings → Members</strong>, an owner or editor enters an email
+                address, picks a role, and sends an invite. The recipient gets a link that resolves
+                at <span className="mono od-tag">/invite/&lt;token&gt;</span> — they can accept with
+                any Orbit account, not just one matching the invited address. Invites expire in 72
+                hours; pending ones show up in the same settings tab where any owner/editor can
+                revoke them.
             </CalloutCard>
             <CalloutCard title="Leaving a space">
-                Any member can self-remove via{" "}
-                <strong>Settings → Danger → Leave space</strong>. The space and
-                its data stay intact for the remaining members. The one refusal:
-                if you&apos;re the sole owner, you have to either transfer
-                ownership to another member or delete the space first.
+                Any member can self-remove via <strong>Settings → Danger → Leave space</strong>. The
+                space and its data stay intact for the remaining members. The one refusal: if
+                you&apos;re the sole owner, you have to either transfer ownership to another member
+                or delete the space first.
             </CalloutCard>
             <ScreenshotPlaceholder label="Space picker + space settings — members table, pending invites, danger tab" />
         </section>
@@ -525,27 +504,24 @@ function Accounts() {
         <section className="od-section">
             <SectionHeader id="accounts" title="Accounts" icon={Wallet} />
             <Paragraph>
-                Three types: <strong>asset</strong> (bank, wallet — money you
-                have), <strong>liability</strong> (credit card, loan — money you
-                owe), <strong>locked</strong> (FDs, DPS — money you can&apos;t
-                spend right now but still counts toward net worth). Each account
-                has a color, icon, and balance that&apos;s maintained
-                automatically by your transactions.
+                Three types: <strong>asset</strong> (bank, wallet — money you have),{" "}
+                <strong>liability</strong> (credit card, loan — money you owe),{" "}
+                <strong>locked</strong> (FDs, DPS — money you can&apos;t spend right now but still
+                counts toward net worth). Each account has a color, icon, and balance that&apos;s
+                maintained automatically by your transactions.
             </Paragraph>
             <CalloutCard title="Cross-space account sharing">
-                Got a joint account used by two households? Share it across both
-                spaces. Each space sees the same live balance, but transactions
-                and allocations remain per-space. Go to the account&apos;s
-                detail page → <strong>Shared with</strong> tab to manage.
+                Got a joint account used by two households? Share it across both spaces. Each space
+                sees the same live balance, but transactions and allocations remain per-space. Go to
+                the account&apos;s detail page → <strong>Shared with</strong> tab to manage.
             </CalloutCard>
             <CalloutCard title="Account members — an ACL of its own">
-                Separate from space membership, each account has its own member
-                list (<strong>owner</strong> / <strong>viewer</strong>). Owners
-                can edit the account, share it into other spaces, or delete it;
-                viewers can only see it. Manage from the account detail →{" "}
-                <strong>Members</strong> tab. This is what makes &quot;my
-                personal wallet shared into the household space, visible to my
-                partner as a viewer&quot; possible.
+                Separate from space membership, each account has its own member list (
+                <strong>owner</strong> / <strong>viewer</strong>). Owners can edit the account,
+                share it into other spaces, or delete it; viewers can only see it. Manage from the
+                account detail → <strong>Members</strong> tab. This is what makes &quot;my personal
+                wallet shared into the household space, visible to my partner as a viewer&quot;
+                possible.
             </CalloutCard>
             <ScreenshotPlaceholder label="Account detail tabs: Allocations · Transactions · Shared with · Members · Settings" />
             <Paragraph>
@@ -553,9 +529,9 @@ function Accounts() {
                 <Link to={ROUTES.myAccounts} className="od-link">
                     My Accounts
                 </Link>{" "}
-                page shows every account you can access across every space
-                you&apos;re in, grouped by asset / liability / locked with links
-                straight into each space&apos;s detail view.
+                page shows every account you can access across every space you&apos;re in, grouped
+                by asset / liability / locked with links straight into each space&apos;s detail
+                view.
             </Paragraph>
         </section>
     );
@@ -566,43 +542,34 @@ function Envelopes() {
         <section className="od-section">
             <SectionHeader id="envelopes" title="Envelopes" icon={Mail} />
             <Paragraph>
-                Envelopes are named budget buckets. Pick a cadence —{" "}
-                <strong>monthly</strong> resets on the 1st of each month,{" "}
-                <strong>none</strong> stays open-ended. Allocate money into them
-                from your space&apos;s unallocated pool; as you spend money
-                against categories that roll up to an envelope, its remaining
-                balance drops.
+                Envelopes are named budget buckets. Pick a cadence — <strong>monthly</strong> resets
+                on the 1st of each month, <strong>none</strong> stays open-ended. Allocate money
+                into them from your space&apos;s unallocated pool; every expense you record spends
+                from the envelope you pick on it, and that envelope&apos;s remaining balance drops.
             </Paragraph>
             <CalloutCard title="Goal envelopes">
                 Attach a <strong>target amount</strong> and (optionally) a{" "}
-                <strong>target date</strong> to a rolling (cadence: none)
-                envelope, and Orbit treats it as a goal. Same envelope
-                ledger — your contributions accrue, your spending draws
-                down — plus a goal progress bar on the card, a deadline
-                pill, and a Goals card on the Overview. Progress is
-                measured against cumulative positive contributions, so
-                completing a goal stays complete even after you spend the
-                money you saved. To create one, open the Budgets page,
-                hit <strong>New envelope</strong>, leave cadence on{" "}
-                <em>Rolling</em>, and fill in the target fields that
-                appear.
+                <strong>target date</strong> to a rolling (cadence: none) envelope, and Orbit treats
+                it as a goal. Same envelope ledger — your contributions accrue, your spending draws
+                down — plus a goal progress bar on the card, a deadline pill, and a Goals card on
+                the Overview. Progress is measured against cumulative positive contributions, so
+                completing a goal stays complete even after you spend the money you saved. To create
+                one, open the Budgets page, hit <strong>New envelope</strong>, leave cadence on{" "}
+                <em>Rolling</em>, and fill in the target fields that appear.
             </CalloutCard>
             <CalloutCard title="Monthly vs rolling">
-                <strong>Monthly</strong> envelopes reset their allocation each
-                period — a fresh budget every month. <strong>Rolling</strong>{" "}
-                (cadence: none) envelopes are a lifetime pool: contributions and
-                spending accrue across periods, which is what makes goal
-                envelopes work.
+                <strong>Monthly</strong> envelopes reset their allocation each period — a fresh
+                budget every month. <strong>Rolling</strong> (cadence: none) envelopes are a
+                lifetime pool: contributions and spending accrue across periods, which is what makes
+                goal envelopes work.
             </CalloutCard>
             <Paragraph>
-                Categories (not envelopes) carry a <strong>priority tier</strong>{" "}
-                — <i>Essential</i>, <i>Important</i>, <i>Discretionary</i>, or{" "}
-                <i>Luxury</i>. Children without a tier inherit from the nearest
-                ancestor, so you typically tag once at the top-level category
-                and only override leaves where a sub-category genuinely differs.
-                The Analytics → By priority donut rolls this up into a single
-                &quot;what fraction of this month was must-spend vs
-                want-spend?&quot; view.
+                Categories (not envelopes) carry a <strong>priority tier</strong> — <i>Essential</i>
+                , <i>Important</i>, <i>Discretionary</i>, or <i>Luxury</i>. Children without a tier
+                inherit from the nearest ancestor, so you typically tag once at the top-level
+                category and only override leaves where a sub-category genuinely differs. The
+                Analytics → By priority donut rolls this up into a single &quot;what fraction of
+                this month was must-spend vs want-spend?&quot; view.
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -632,23 +599,18 @@ function Categories() {
         <section className="od-section">
             <SectionHeader id="categories" title="Categories" icon={FolderTree} />
             <Paragraph>
-                Categories are hierarchical labels for expenses. Each category
-                carries a <strong>default envelope</strong> that pre-fills the
-                envelope picker when you choose that category on the entry form.
-                The picker stays editable, and the envelope you actually pick is
-                frozen on the transaction — so a category describes{" "}
-                <i>what</i> you spent on, the envelope describes{" "}
-                <i>which budget</i> it came out of, and the two are recorded
-                independently.
+                Categories are hierarchical labels for expenses, fully independent from envelopes. A
+                category describes <i>what</i> you spent on; the envelope — picked per transaction
+                (pin your usual one for quick entry) — describes <i>which budget</i> it came out of.
+                The two are recorded independently on every transaction.
             </Paragraph>
             <Paragraph>
-                You can rename a category, move it to a different parent, or
-                change its default envelope. All three are non-destructive:
-                existing transactions keep both the category and the envelope
-                they were saved with, so reorganizing your category tree never
-                rewrites historical analytics.
+                You can rename a category, restyle it, or move it to a different parent. All of it
+                is non-destructive: existing transactions keep both the category and the envelope
+                they were saved with, so reorganizing your category tree never rewrites historical
+                analytics.
             </Paragraph>
-            <ScreenshotPlaceholder label="Categories tree with edit / move-parent / move-envelope actions" />
+            <ScreenshotPlaceholder label="Categories tree with edit / move-parent actions" />
         </section>
     );
 }
@@ -656,11 +618,7 @@ function Categories() {
 function Transactions() {
     return (
         <section className="od-section">
-            <SectionHeader
-                id="transactions"
-                title="Transactions"
-                icon={ArrowLeftRight}
-            />
+            <SectionHeader id="transactions" title="Transactions" icon={ArrowLeftRight} />
             <Paragraph>Four types — each with its own rules:</Paragraph>
             <div className="od-grid-2">
                 <TxTypeCard
@@ -669,7 +627,7 @@ function Transactions() {
                 />
                 <TxTypeCard
                     type="Expense"
-                    body="Money leaving a source account to outside the system. You pick both a category and an envelope — the category pre-fills the envelope, but you can override it, and the chosen envelope is frozen on the transaction."
+                    body="Money leaving a source account to outside the system. You pick both a category (what it was for) and an envelope (which budget it spends from) — the two are independent, and both are frozen on the transaction."
                 />
                 <TxTypeCard
                     type="Transfer"
@@ -681,10 +639,9 @@ function Transactions() {
                 />
             </div>
             <Paragraph>
-                Everything is editable after the fact — click the pencil icon on
-                any row in the Transactions page. Delete-permission is the
-                creator or a space editor/owner. Balance and envelope numbers
-                recompute automatically.
+                Everything is editable after the fact — click the pencil icon on any row in the
+                Transactions page. Delete-permission is the creator or a space editor/owner. Balance
+                and envelope numbers recompute automatically.
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -705,13 +662,11 @@ function Transactions() {
                 />
             </div>
             <CalloutCard title="Pinned defaults">
-                Pin the values you reach for most so the new-transaction form
-                opens pre-filled. Your <strong>account</strong> pin is personal —
-                every member keeps their own default account in a space.{" "}
-                <strong>Envelope</strong> and <strong>event</strong> pins are
-                space-wide, so only an owner or editor can set them. Tap the
-                small pin glyph beside a field to set or clear a default; clear
-                it anytime.
+                Pin the values you reach for most so the new-transaction form opens pre-filled. Your{" "}
+                <strong>account</strong> pin is personal — every member keeps their own default
+                account in a space. <strong>Envelope</strong> and <strong>event</strong> pins are
+                space-wide, so only an owner or editor can set them. Tap the small pin glyph beside
+                a field to set or clear a default; clear it anytime.
             </CalloutCard>
             <Paragraph>
                 You can attach image receipts to any transaction. See{" "}
@@ -730,10 +685,9 @@ function Events() {
         <section className="od-section">
             <SectionHeader id="events" title="Events" icon={CalendarDays} />
             <Paragraph>
-                Events are named time-bound groupings — a wedding, a trip, a
-                renovation. Attach any transaction to an event and later slice
-                the ledger by it to see the full cost and cashflow of the
-                occasion. You can also attach image files directly to an event
+                Events are named time-bound groupings — a wedding, a trip, a renovation. Attach any
+                transaction to an event and later slice the ledger by it to see the full cost and
+                cashflow of the occasion. You can also attach image files directly to an event
                 (tickets, confirmations, photos) — see{" "}
                 <a href="#attachments" className="od-link">
                     Attachments
@@ -741,27 +695,22 @@ function Events() {
                 .
             </Paragraph>
             <CalloutCard title="Lifecycle: active vs closed">
-                Every event has a <strong>status</strong>.{" "}
-                <strong>Active</strong> events show up in the
-                transaction-entry event picker; <strong>closed</strong> events
-                disappear from the picker but remain in the events list,
-                analytics, and historical filters. Close an event when the trip
-                is over so the picker stays tidy — you can reopen it later if a
-                late receipt comes in.
+                Every event has a <strong>status</strong>. <strong>Active</strong> events show up in
+                the transaction-entry event picker; <strong>closed</strong> events disappear from
+                the picker but remain in the events list, analytics, and historical filters. Close
+                an event when the trip is over so the picker stays tidy — you can reopen it later if
+                a late receipt comes in.
             </CalloutCard>
             <CalloutCard title="Estimated budget">
-                Optionally set an <strong>estimated amount</strong> on the
-                event. The event detail page tracks total spend vs estimate
-                with an over/under chip, so you can answer &quot;how badly did
-                we blow the wedding budget&quot; without doing arithmetic in
-                your head. Leave it blank for events you&apos;re not tracking
-                against a target.
+                Optionally set an <strong>estimated amount</strong> on the event. The event detail
+                page tracks total spend vs estimate with an over/under chip, so you can answer
+                &quot;how badly did we blow the wedding budget&quot; without doing arithmetic in
+                your head. Leave it blank for events you&apos;re not tracking against a target.
             </CalloutCard>
             <Paragraph>
-                The dedicated <strong>event detail</strong> page shows every
-                transaction tagged to the event in one place, with totals broken
-                down by income / expense and a quick close / reopen toggle in
-                the corner.
+                The dedicated <strong>event detail</strong> page shows every transaction tagged to
+                the event in one place, with totals broken down by income / expense and a quick
+                close / reopen toggle in the corner.
             </Paragraph>
             <ScreenshotPlaceholder label="Events page — active and closed events with estimate chips; detail page with transaction roll-up" />
         </section>
@@ -778,9 +727,9 @@ function Attachments() {
                 icon={Paperclip}
             />
             <Paragraph>
-                Attach images to transactions (receipts) and to events (tickets,
-                confirmations, photos). Uploads go straight from your browser to
-                secure storage, so they don&apos;t slow the app down.
+                Attach images to transactions (receipts) and to events (tickets, confirmations,
+                photos). Uploads go straight from your browser to secure storage, so they don&apos;t
+                slow the app down.
             </Paragraph>
             <div className="od-grid-3">
                 <InfoCard
@@ -797,10 +746,9 @@ function Attachments() {
                 />
             </div>
             <Paragraph>
-                Download links expire after a short window for safety — the app
-                refreshes them every time you view an attachment, so sharing a
-                link outside the app won&apos;t leak access. Remove an
-                attachment and the file is deleted straight away.
+                Download links expire after a short window for safety — the app refreshes them every
+                time you view an attachment, so sharing a link outside the app won&apos;t leak
+                access. Remove an attachment and the file is deleted straight away.
             </Paragraph>
             <ScreenshotPlaceholder label="Transaction detail sheet — receipt thumbnails with add / remove controls" />
         </section>
@@ -817,8 +765,8 @@ function Allocations() {
                 icon={Sparkles}
             />
             <Paragraph>
-                Two orthogonal questions about your money — and Orbit gives each
-                one its own surface so you don&apos;t conflate them:
+                Two orthogonal questions about your money — and Orbit gives each one its own surface
+                so you don&apos;t conflate them:
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -832,17 +780,15 @@ function Allocations() {
             </div>
             <Paragraph>
                 Allocations live on the envelope, not on an account. Plan{" "}
-                <strong>300 for Groceries</strong> at the start of the month —
-                the system doesn&apos;t care which checking, wallet, or card the
-                actual purchases hit. As the month progresses, transactions
-                tagged to a Groceries category drain that envelope; the
+                <strong>300 for Groceries</strong> at the start of the month — the system
+                doesn&apos;t care which checking, wallet, or card the actual purchases hit. As the
+                month progresses, expenses you assign to the Groceries envelope drain it; the
                 accounts independently reflect where the cash actually moved.
             </Paragraph>
             <Paragraph>
-                The <strong>Budget this month</strong> page gives you a single
-                screen to set every envelope at once — last month&apos;s actual,
-                last month&apos;s budget, and a fresh column for this month.
-                Envelopes are space-wide budget intent; you never have to pin
+                The <strong>Budget this month</strong> page gives you a single screen to set every
+                envelope at once — last month&apos;s actual, last month&apos;s budget, and a fresh
+                column for this month. Envelopes are space-wide budget intent; you never have to pin
                 them to a particular account.
             </Paragraph>
             <ScreenshotPlaceholder label="Budget this month — bulk-edit screen with last actual / last budget / this budget columns" />
@@ -855,10 +801,9 @@ function Drift() {
         <section className="od-section">
             <SectionHeader id="drift" title="Overspend" icon={Shield} />
             <Paragraph>
-                Envelopes are a <strong>planning</strong> tool, not a cash
-                partition. When an envelope spends more than it was allocated
-                for the period, nothing blocks you — the transaction always
-                records. You have two honest ways to handle the gap.
+                Envelopes are a <strong>planning</strong> tool, not a cash partition. When an
+                envelope spends more than it was allocated for the period, nothing blocks you — the
+                transaction always records. You have two honest ways to handle the gap.
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -878,26 +823,45 @@ function Analytics() {
     return (
         <section className="od-section">
             <SectionHeader id="analytics" title="Analytics" icon={BarChart3} />
-            <Paragraph>
-                Ten dedicated analytics views, all period-filterable:
-            </Paragraph>
+            <Paragraph>Ten dedicated analytics views, all period-filterable:</Paragraph>
             <ul className="od-list">
-                <li><strong>Cash flow</strong> — income vs expense by day / week / month</li>
-                <li><strong>Categories</strong> — spend by category with subtree roll-up</li>
-                <li><strong>Envelopes</strong> — utilization across your buckets</li>
-                <li><strong>Balance</strong> — running total balance over time</li>
-                <li><strong>Accounts</strong> — distribution donut across accounts</li>
-                <li><strong>Heatmap</strong> — daily expense calendar</li>
-                <li><strong>Allocations</strong> — where each envelope&apos;s budget is committed</li>
-                <li><strong>Trends</strong> — projection vs prior period, daily burn rate, YoY</li>
-                <li><strong>Anomalies</strong> — recurring-bill changes, category outliers, spending shape</li>
-                <li><strong>By priority</strong> — essential / important / discretionary / luxury split</li>
+                <li>
+                    <strong>Cash flow</strong> — income vs expense by day / week / month
+                </li>
+                <li>
+                    <strong>Categories</strong> — spend by category with subtree roll-up
+                </li>
+                <li>
+                    <strong>Envelopes</strong> — utilization across your buckets
+                </li>
+                <li>
+                    <strong>Balance</strong> — running total balance over time
+                </li>
+                <li>
+                    <strong>Accounts</strong> — distribution donut across accounts
+                </li>
+                <li>
+                    <strong>Heatmap</strong> — daily expense calendar
+                </li>
+                <li>
+                    <strong>Allocations</strong> — where each envelope&apos;s budget is committed
+                </li>
+                <li>
+                    <strong>Trends</strong> — projection vs prior period, daily burn rate, YoY
+                </li>
+                <li>
+                    <strong>Anomalies</strong> — recurring-bill changes, category outliers, spending
+                    shape
+                </li>
+                <li>
+                    <strong>By priority</strong> — essential / important / discretionary / luxury
+                    split
+                </li>
             </ul>
             <Paragraph>
-                A standalone <strong>Year report</strong> lives outside the
-                analytics index — a 12-column envelope × month grid showing
-                planned vs spent for every envelope across the year, with the
-                overspend total per row.
+                A standalone <strong>Year report</strong> lives outside the analytics index — a
+                12-column envelope × month grid showing planned vs spent for every envelope across
+                the year, with the overspend total per row.
             </Paragraph>
             <ScreenshotPlaceholder label="Analytics index with the 10 sub-view cards" />
         </section>
@@ -907,33 +871,24 @@ function Analytics() {
 function MyMoney() {
     return (
         <section className="od-section">
-            <SectionHeader
-                id="my-money"
-                title="Your money across spaces"
-                icon={LineChart}
-            />
+            <SectionHeader id="my-money" title="Your money across spaces" icon={LineChart} />
             <Paragraph>
-                A Roommates space, an Office one, a Family one — each is its
-                own ledger, which is exactly what you want when you&apos;re
-                collaborating. The downside: your own financial picture gets
-                fragmented across three or four spaces.{" "}
-                <strong>My money</strong> fixes that by stitching your personal
-                activity back into one place — except it&apos;s not a separate
-                page, it&apos;s a <strong>virtual space</strong> that shows up
-                right alongside your real spaces in the space switcher.
+                A Roommates space, an Office one, a Family one — each is its own ledger, which is
+                exactly what you want when you&apos;re collaborating. The downside: your own
+                financial picture gets fragmented across three or four spaces.{" "}
+                <strong>My money</strong> fixes that by stitching your personal activity back into
+                one place — except it&apos;s not a separate page, it&apos;s a{" "}
+                <strong>virtual space</strong> that shows up right alongside your real spaces in the
+                space switcher.
             </Paragraph>
             <Paragraph>
-                The anchor is{" "}
-                <strong>accounts you personally own</strong> — the ones where
-                you&apos;re listed as owner in the account&apos;s members. Your
-                salary account, your wallet, your savings. Open{" "}
-                <strong>My money</strong> and you get the same overview,
-                accounts, transactions, and analytics views you&apos;d see in
-                any real space — but unioned across <i>every</i> space
-                you&apos;re in, filtered to transactions that touch your owned
-                accounts. Each row is tagged with the real space it came from,
-                so you can drill straight back into the shared ledger when you
-                need to.
+                The anchor is <strong>accounts you personally own</strong> — the ones where
+                you&apos;re listed as owner in the account&apos;s members. Your salary account, your
+                wallet, your savings. Open <strong>My money</strong> and you get the same overview,
+                accounts, transactions, and analytics views you&apos;d see in any real space — but
+                unioned across <i>every</i> space you&apos;re in, filtered to transactions that
+                touch your owned accounts. Each row is tagged with the real space it came from, so
+                you can drill straight back into the shared ledger when you need to.
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -946,9 +901,9 @@ function MyMoney() {
                 />
             </div>
             <Paragraph>
-                My money is read-only — every change belongs to a specific real
-                space, so to record something, jump into a real space via the
-                switcher (or click any row&apos;s space chip).
+                My money is read-only — every change belongs to a specific real space, so to record
+                something, jump into a real space via the switcher (or click any row&apos;s space
+                chip).
             </Paragraph>
             <ScreenshotPlaceholder label="My money virtual space — overview, analytics, and transactions unioned across every space you're in" />
         </section>
@@ -977,13 +932,11 @@ function Permissions() {
                 />
             </div>
             <Paragraph>
-                Accounts have their own separate ACL (owner / viewer), managed
-                from the account detail → <strong>Members</strong> tab. Account
-                owners can share the account into spaces, add/remove account
-                members, rename, recolor, and delete; viewers can only see it.
-                Because the account ACL is independent of space membership, you
-                can keep a private wallet visible to you only, even while
-                sharing it into a household space.
+                Accounts have their own separate ACL (owner / viewer), managed from the account
+                detail → <strong>Members</strong> tab. Account owners can share the account into
+                spaces, add/remove account members, rename, recolor, and delete; viewers can only
+                see it. Because the account ACL is independent of space membership, you can keep a
+                private wallet visible to you only, even while sharing it into a household space.
             </Paragraph>
         </section>
     );
@@ -995,28 +948,24 @@ function Profile() {
             <SectionHeader id="profile" title="Your profile" icon={UserCircle} />
             <Paragraph>
                 Your profile — name, email, avatar, password — lives in{" "}
-                <strong>Settings → Profile</strong> and{" "}
-                <strong>Settings → Security</strong>, reachable from the user
-                avatar menu in the top-right corner. Uploading a new avatar
-                replaces your picture everywhere you appear in Orbit (space
-                member list, transaction creator tags, account members).
+                <strong>Settings → Profile</strong> and <strong>Settings → Security</strong>,
+                reachable from the user avatar menu in the top-right corner. Uploading a new avatar
+                replaces your picture everywhere you appear in Orbit (space member list, transaction
+                creator tags, account members).
             </Paragraph>
             <Paragraph>
-                <strong>Changing your email</strong> takes effect immediately
-                once you confirm with your current password.{" "}
-                <strong>Changing your password</strong> while signed in: enter
-                current + new, both required. If you&apos;ve forgotten your
-                password, use the <strong>Forgot password</strong> link on the
-                login screen, which sends a 6-digit code to your inbox.
+                <strong>Changing your email</strong> takes effect immediately once you confirm with
+                your current password. <strong>Changing your password</strong> while signed in:
+                enter current + new, both required. If you&apos;ve forgotten your password, use the{" "}
+                <strong>Forgot password</strong> link on the login screen, which sends a 6-digit
+                code to your inbox.
             </Paragraph>
             <CalloutCard title="Deleting your account">
-                Settings → Security → <strong>Delete my account</strong>.
-                Confirm by typing <span className="mono od-tag">DELETE</span>{" "}
-                and your current password — the action is irreversible. Your
-                user record, memberships, and personal accounts are erased.
-                The one refusal: if you&apos;re the sole owner of any space,
-                transfer ownership or delete that space first. Spaces with
-                another owner continue to exist without you.
+                Settings → Security → <strong>Delete my account</strong>. Confirm by typing{" "}
+                <span className="mono od-tag">DELETE</span> and your current password — the action
+                is irreversible. Your user record, memberships, and personal accounts are erased.
+                The one refusal: if you&apos;re the sole owner of any space, transfer ownership or
+                delete that space first. Spaces with another owner continue to exist without you.
             </CalloutCard>
             <ScreenshotPlaceholder label="Profile settings — avatar uploader, name/email forms, password card, delete-account flow" />
         </section>
@@ -1028,12 +977,10 @@ function Timezone() {
         <section className="od-section">
             <SectionHeader id="timezone" title="Time & timezone" icon={Clock} />
             <Paragraph>
-                Orbit currently shows all dates in{" "}
-                <strong>Asia/Dhaka (+06:00)</strong> — so &quot;this
-                month&quot;, envelope period boundaries, and displayed
-                transaction times are identical for everyone, no matter where
-                they open the app. Per-space timezone customization is on the
-                roadmap.
+                Orbit currently shows all dates in <strong>Asia/Dhaka (+06:00)</strong> — so
+                &quot;this month&quot;, envelope period boundaries, and displayed transaction times
+                are identical for everyone, no matter where they open the app. Per-space timezone
+                customization is on the roadmap.
             </Paragraph>
         </section>
     );
@@ -1050,7 +997,7 @@ function Faq() {
                 />
                 <FaqItem
                     q="Can I edit a transaction after recording it?"
-                    a="Yes. Everything is editable — amount, date, account, category, event, description. Balances and envelope usage recompute automatically."
+                    a="Yes. Everything is editable — amount, date, account, category, envelope, event, description. Balances and envelope usage recompute automatically."
                 />
                 <FaqItem
                     q="What happens when I delete an account?"
@@ -1179,15 +1126,7 @@ function ConceptCard({ title, body }: { title: string; body: string }) {
     );
 }
 
-function StepCard({
-    step,
-    title,
-    body,
-}: {
-    step: number;
-    title: string;
-    body: string;
-}) {
+function StepCard({ step, title, body }: { step: number; title: string; body: string }) {
     return (
         <li className="od-card od-step">
             <span className="od-step-num">{step}</span>
@@ -1199,13 +1138,7 @@ function StepCard({
     );
 }
 
-function CalloutCard({
-    title,
-    children,
-}: {
-    title: string;
-    children: ReactNode;
-}) {
+function CalloutCard({ title, children }: { title: string; children: ReactNode }) {
     return (
         <div className="od-card od-callout">
             <p className="od-callout-title">{title}</p>
@@ -1242,11 +1175,7 @@ function RoleCard({
     body: string;
 }) {
     const color =
-        tone === "income"
-            ? "var(--income)"
-            : tone === "brand"
-              ? "var(--brand)"
-              : "var(--fg-3)";
+        tone === "income" ? "var(--income)" : tone === "brand" ? "var(--brand)" : "var(--fg-3)";
     return (
         <div className="od-card od-role-card">
             <p className="od-role-title" style={{ color }}>

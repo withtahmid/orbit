@@ -1,0 +1,1 @@
+- [Envelope attribution](envelope_attribution.md) — expense→envelope is `t.envelop_id` (041 CHECK), tier/category totals are envelope-independent; sub-totals sum exactly.

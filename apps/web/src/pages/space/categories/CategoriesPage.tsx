@@ -10,7 +10,6 @@ import {
     CornerDownRight,
     Folder,
     GripVertical,
-    Layers,
     Search,
     X,
 } from "lucide-react";
@@ -22,12 +21,7 @@ import { ColorPickerButton } from "@/components/shared/ColorPicker";
 import { IconPickerButton } from "@/components/shared/IconPicker";
 import { CategoryTreeSelect } from "@/components/shared/CategoryTreeSelect";
 import { OrbitField } from "@/components/orbit/OrbitModalShell";
-import {
-    OrbitFormStyles,
-    OrbitInput,
-    OrbitSelect,
-    OrbitInfoPill,
-} from "@/components/orbit/OrbitForm";
+import { OrbitFormStyles, OrbitInput } from "@/components/orbit/OrbitForm";
 import { EntityAvatar } from "@/components/shared/EntityAvatar";
 import { trpc } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
@@ -55,7 +49,6 @@ interface CategoryUsage {
     id: string;
     space_id: string;
     name: string;
-    default_envelop_id: string;
     parent_id: string | null;
     color: string;
     icon: string;
@@ -66,14 +59,6 @@ interface CategoryUsage {
 
 interface CategoryNode extends CategoryUsage {
     children: CategoryNode[];
-}
-
-interface EnvelopeLite {
-    id: string;
-    name: string;
-    color: string;
-    icon: string;
-    archived: boolean;
 }
 
 /** A row in the flattened, currently-visible tree. */
@@ -186,13 +171,11 @@ function CategoriesWorkbench() {
     const categoriesQuery = trpc.expenseCategory.listBySpaceWithUsage.useQuery({
         spaceId: space.id,
     });
-    const envelopesQuery = trpc.envelop.listBySpace.useQuery({ spaceId: space.id });
 
     const categories = useMemo(
         () => (categoriesQuery.data ?? []) as CategoryUsage[],
         [categoriesQuery.data]
     );
-    const envelopes = (envelopesQuery.data ?? []) as EnvelopeLite[];
 
     const { roots, byId } = useMemo(() => buildTree(categories), [categories]);
 
@@ -379,14 +362,6 @@ function CategoriesWorkbench() {
                     ? `Moved "${moved?.name ?? "category"}" under "${target.name}"`
                     : `Moved "${moved?.name ?? "category"}" to top level`
             );
-            if (target && moved && target.default_envelop_id !== moved.default_envelop_id) {
-                toast.info(
-                    "The parent defaults to a different envelope — this category keeps its own default.",
-                    {
-                        duration: 5000,
-                    }
-                );
-            }
             await invalidate(space.id);
         },
         onError: (e) => toast.error(e.message),
@@ -780,7 +755,6 @@ function CategoriesWorkbench() {
                             parentId={creating.parentId}
                             byId={byId}
                             allCategories={categories}
-                            envelopes={envelopes}
                             onCancel={() => setCreating(null)}
                             onCreated={(id, parentId) => {
                                 setCreating(null);
@@ -803,7 +777,6 @@ function CategoriesWorkbench() {
                             node={selected}
                             byId={byId}
                             allCategories={categories}
-                            envelopes={envelopes}
                             isOwner={isOwner}
                             onSelect={selectNode}
                             onAddChild={() => openCreate(selected.id)}
@@ -816,8 +789,8 @@ function CategoriesWorkbench() {
                             <p className="ct-empty-title">Select a category</p>
                             <p className="ct-empty-sub">
                                 {isOwner
-                                    ? "Pick one to rename it, restyle it, change its priority, envelope, or parent — or create a new one."
-                                    : "Pick one from the tree to see its priority, envelope, parent, and usage."}
+                                    ? "Pick one to rename it, restyle it, change its priority or parent — or create a new one."
+                                    : "Pick one from the tree to see its priority, parent, and usage."}
                             </p>
                             {isOwner && (
                                 <button
@@ -1079,7 +1052,6 @@ function Inspector({
     node,
     byId,
     allCategories,
-    envelopes,
     isOwner,
     onSelect,
     onAddChild,
@@ -1089,7 +1061,6 @@ function Inspector({
     node: CategoryNode;
     byId: Map<string, CategoryNode>;
     allCategories: CategoryUsage[];
-    envelopes: EnvelopeLite[];
     isOwner: boolean;
     onSelect: (id: string) => void;
     onAddChild: () => void;
@@ -1103,7 +1074,6 @@ function Inspector({
     const [color, setColor] = useState(node.color);
     const [icon, setIcon] = useState(node.icon);
     const [priority, setPriority] = useState<Priority | "">(node.priority ?? "");
-    const [envelopId, setEnvelopId] = useState(node.default_envelop_id);
     const [parentId, setParentId] = useState<string | null>(node.parent_id);
     const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -1112,7 +1082,6 @@ function Inspector({
         color !== node.color ||
         icon !== node.icon ||
         (priority || null) !== node.priority ||
-        envelopId !== node.default_envelop_id ||
         parentId !== node.parent_id;
 
     // The page guards navigation that would silently destroy unsaved edits;
@@ -1132,7 +1101,6 @@ function Inspector({
         setColor(node.color);
         setIcon(node.icon);
         setPriority(node.priority ?? "");
-        setEnvelopId(node.default_envelop_id);
         setParentId(node.parent_id);
     }, [node]);
     // Parent is drag-owned: dragging this very node in the tree changes
@@ -1168,7 +1136,6 @@ function Inspector({
             if (icon !== node.icon) fieldPatch.icon = icon;
             if ((priority || null) !== node.priority)
                 fieldPatch.priority = priority === "" ? null : priority;
-            if (envelopId !== node.default_envelop_id) fieldPatch.defaultEnvelopId = envelopId;
 
             if (Object.keys(fieldPatch).length > 0) {
                 await update.mutateAsync({ categoryId: node.id, ...fieldPatch });
@@ -1191,7 +1158,6 @@ function Inspector({
         setColor(node.color);
         setIcon(node.icon);
         setPriority(node.priority ?? "");
-        setEnvelopId(node.default_envelop_id);
         setParentId(node.parent_id);
     };
 
@@ -1209,31 +1175,6 @@ function Inspector({
                 .map((id) => byId.get(id)!),
         [node.id, byId]
     );
-
-    const activeEnvelopes = envelopes.filter((e) => !e.archived);
-    const currentEnvelope = envelopes.find((e) => e.id === envelopId);
-    // A category may still default to a since-archived envelope; the select
-    // must be able to display that value (server only rejects *changing to*
-    // an archived one via create).
-    const envelopeItems = useMemo(() => {
-        const items = activeEnvelopes.map((e) => ({
-            value: e.id,
-            label: e.name,
-            leadIcon: <Layers className="size-3.5" />,
-            leadColor: e.color || "var(--ent-2)",
-        }));
-        if (currentEnvelope?.archived) {
-            items.unshift({
-                value: currentEnvelope.id,
-                label: `${currentEnvelope.name} (archived)`,
-                leadIcon: <Layers className="size-3.5" />,
-                leadColor: currentEnvelope.color || "var(--ent-2)",
-            });
-        }
-        return items;
-    }, [activeEnvelopes, currentEnvelope]);
-    const chosenParent = parentId ? byId.get(parentId) : null;
-    const envelopeMismatch = chosenParent != null && chosenParent.default_envelop_id !== envelopId;
 
     const inheritedPriority = useMemo(() => {
         const seen = new Set<string>();
@@ -1301,23 +1242,9 @@ function Inspector({
                             <span className="ct-dim">None</span>
                         )}
                     </ReadOnlyRow>
-                    <ReadOnlyRow label="Default envelope">
-                        {currentEnvelope ? (
-                            <span className="ct-ro-entity">
-                                <EntityAvatar
-                                    size="sm"
-                                    color={currentEnvelope.color}
-                                    icon={currentEnvelope.icon}
-                                />
-                                {currentEnvelope.name}
-                            </span>
-                        ) : (
-                            <span className="ct-dim">—</span>
-                        )}
-                    </ReadOnlyRow>
                     <ReadOnlyRow label="Parent">
-                        {chosenParent ? (
-                            chosenParent.name
+                        {node.parent_id ? (
+                            (byId.get(node.parent_id)?.name ?? "—")
                         ) : (
                             <span className="ct-dim">Top level</span>
                         )}
@@ -1392,20 +1319,6 @@ function Inspector({
                         </OrbitField>
 
                         <OrbitField
-                            label="Default envelope"
-                            hint="New transactions on this category default here"
-                        >
-                            <OrbitSelect
-                                value={envelopId}
-                                onValueChange={setEnvelopId}
-                                items={envelopeItems}
-                                placeholder="Choose envelope"
-                                leadIcon={<Layers className="size-3.5" />}
-                                leadColor="var(--ent-2)"
-                            />
-                        </OrbitField>
-
-                        <OrbitField
                             label="Parent"
                             hint="You can also drag rows in the tree to re-nest"
                         >
@@ -1417,13 +1330,6 @@ function Inspector({
                                 allowAll
                             />
                         </OrbitField>
-
-                        {envelopeMismatch && (
-                            <OrbitInfoPill tone="gold">
-                                The parent defaults to a different envelope. That's allowed — this
-                                category keeps its own default.
-                            </OrbitInfoPill>
-                        )}
 
                         <ChildrenSection node={node} onSelect={onSelect} onAddChild={onAddChild} />
 
@@ -1577,20 +1483,17 @@ function CreatePanel({
     parentId: initialParentId,
     byId,
     allCategories,
-    envelopes,
     onCancel,
     onCreated,
 }: {
     parentId: string | null;
     byId: Map<string, CategoryNode>;
     allCategories: CategoryUsage[];
-    envelopes: EnvelopeLite[];
     onCancel: () => void;
     onCreated: (id: string, parentId: string | null) => void;
 }) {
     const { space } = useCurrentSpace();
     const [name, setName] = useState("");
-    const [envelopId, setEnvelopId] = useState("");
     const [parentId, setParentId] = useState<string | null>(initialParentId);
     const [color, setColor] = useState<string>(DEFAULT_COLOR);
     const [icon, setIcon] = useState("folder");
@@ -1609,24 +1512,6 @@ function CreatePanel({
     });
 
     const parentCategory = parentId ? (byId.get(parentId) ?? null) : null;
-    // Server rejects archived envelopes; don't offer them.
-    const activeEnvelopes = useMemo(() => envelopes.filter((e) => !e.archived), [envelopes]);
-    const parentEnvelope = parentCategory
-        ? (activeEnvelopes.find((e) => e.id === parentCategory.default_envelop_id) ?? null)
-        : null;
-    // Follow the parent's envelope as a default; stays user-overridable.
-    // Keyed by parent *id* — object identities churn on every background
-    // refetch, and re-running then would clobber a manual envelope choice.
-    const prefilledForParent = useRef<string | null | undefined>(undefined);
-    useEffect(() => {
-        // Don't lock in a prefill decision before the envelope list has
-        // loaded — that would permanently skip the parent's default.
-        if (envelopes.length === 0) return;
-        if (prefilledForParent.current === parentId) return;
-        prefilledForParent.current = parentId;
-        if (parentEnvelope) setEnvelopId(parentEnvelope.id);
-        else if (parentCategory) setEnvelopId("");
-    }, [envelopes.length, parentId, parentCategory, parentEnvelope]);
 
     const breadcrumb = useMemo(() => {
         if (!parentId) return [];
@@ -1650,14 +1535,9 @@ function CreatePanel({
 
     const submit = () => {
         if (create.isPending || !name.trim()) return;
-        if (!envelopId) {
-            toast.error("Pick an envelope");
-            return;
-        }
         create.mutate({
             spaceId: space.id,
             name: name.trim(),
-            envelopId,
             parentId: parentId ?? undefined,
             color,
             icon,
@@ -1716,42 +1596,13 @@ function CreatePanel({
                     />
                 </OrbitField>
 
-                <OrbitField label="Parent" hint="Optional">
-                    <CategoryTreeSelect
-                        categories={allCategories}
-                        value={parentId}
-                        onChange={(v) => setParentId(v)}
-                        placeholder="(none — top level)"
-                        allowAll
-                    />
-                </OrbitField>
-
-                <OrbitField
-                    label="Envelope"
-                    hint={
-                        parentCategory
-                            ? parentEnvelope
-                                ? envelopId === parentEnvelope.id
-                                    ? "Parent's default"
-                                    : "Overriding parent's default"
-                                : "Parent's envelope is archived — pick another"
-                            : "Required"
-                    }
-                    required
-                >
-                    <OrbitSelect
-                        value={envelopId}
-                        onValueChange={setEnvelopId}
-                        items={activeEnvelopes.map((e) => ({
-                            value: e.id,
-                            label: e.name,
-                            leadIcon: <Layers className="size-3.5" />,
-                            leadColor: e.color || "var(--ent-2)",
-                        }))}
-                        placeholder="Choose envelope"
-                        leadIcon={<Layers className="size-3.5" />}
-                        leadColor="var(--ent-2)"
-                    />
+                {/* Field order mirrors the edit inspector (Name / Style /
+                    Priority / Parent) so muscle memory transfers. */}
+                <OrbitField label="Style" interactiveHint>
+                    <div className="ct-insp-style-row">
+                        <ColorPickerButton value={color} onChange={setColor} />
+                        <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                    </div>
                 </OrbitField>
 
                 <OrbitField
@@ -1799,13 +1650,14 @@ function CreatePanel({
                     </div>
                 </OrbitField>
 
-                {/* interactiveHint renders a div, not a label — a <label> around a
-    button group forwards label-text clicks to the first button. */}
-                <OrbitField label="Style" interactiveHint>
-                    <div className="ct-insp-style-row">
-                        <ColorPickerButton value={color} onChange={setColor} />
-                        <IconPickerButton value={icon} onChange={setIcon} color={color} />
-                    </div>
+                <OrbitField label="Parent" hint="Optional">
+                    <CategoryTreeSelect
+                        categories={allCategories}
+                        value={parentId}
+                        onChange={(v) => setParentId(v)}
+                        placeholder="(none — top level)"
+                        allowAll
+                    />
                 </OrbitField>
             </div>
 
@@ -1823,7 +1675,7 @@ function CreatePanel({
                 <button
                     type="button"
                     className="od-btn od-btn-sm od-btn-primary"
-                    disabled={!name.trim() || !envelopId || create.isPending}
+                    disabled={!name.trim() || create.isPending}
                     onClick={submit}
                 >
                     <Plus className="size-3" />
@@ -2469,7 +2321,6 @@ const CT_STYLES = `
 }
 .ct-ro-label { font-size: 12px; color: var(--fg-3); }
 .ct-ro-value { font-size: 12.5px; color: var(--fg); display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-.ct-ro-entity { display: inline-flex; align-items: center; gap: 8px; }
 .ct-dim { color: var(--fg-3); }
 
 /* children */
