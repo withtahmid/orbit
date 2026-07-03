@@ -16,3 +16,4 @@
 - [BudgetDetail .ed-row3 breakpoint trap](budget_detail_row3_breakpoint_trap.md) — flex-wrap keys off container but stack media-query keys off viewport; breaks 2+1 with orphaned dividers at 961-1279px. (FIXED: now flex-wrap:nowrap + 1280px stack query.)
 - [BudgetDetail donut undecodable](budget_detail_donut_undecodable.md) — "Where it went" donut uses hideLegend+hideTooltip; color-only wedges no user can map to a category. Donut has no SVG a11y attrs.
 - [Envelope color contrast / custom hex](envelope_color_contrast_custom_hex.md) — envelope.color themes chart marks; palette + free custom-hex input means dark colors can drop marks below 3:1, but value labels carry the data so not a WCAG 1.4.1 fail.
+- [SpaceLayout full-bleed pattern](spacelayout-bleed-pattern.md) — space-page negative margins must match `.sl-main` padding (1.5rem/1rem <768, 2rem ≥768); 53px mobile header; sidebar sits outside page inert scope so in-page slide-overs can leak focus.

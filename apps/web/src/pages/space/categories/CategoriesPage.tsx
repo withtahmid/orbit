@@ -1,110 +1,55 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     FolderTree,
     Plus,
     Trash2,
     ChevronRight,
     ChevronDown,
-    Pencil,
-    Move,
-    FolderInput,
-    MoreHorizontal,
-    Filter as FilterIcon,
+    ChevronsDownUp,
+    ChevronsUpDown,
+    CornerDownRight,
+    Folder,
+    GripVertical,
+    Layers,
+    Search,
+    X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { PermissionGate } from "@/components/shared/PermissionGate";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-    DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
+import { Navigate } from "react-router-dom";
+import { ROUTES } from "@/router/routes";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ColorPickerButton } from "@/components/shared/ColorPicker";
 import { IconPickerButton } from "@/components/shared/IconPicker";
 import { CategoryTreeSelect } from "@/components/shared/CategoryTreeSelect";
-import { DateRangePicker } from "@/components/shared/DateRangePicker";
-import { OrbitModalShell, OrbitField } from "@/components/orbit/OrbitModalShell";
+import { OrbitField } from "@/components/orbit/OrbitModalShell";
 import {
     OrbitFormStyles,
     OrbitInput,
-    OrbitRadioRow,
     OrbitSelect,
-    OrbitTextarea,
     OrbitInfoPill,
 } from "@/components/orbit/OrbitForm";
 import { EntityAvatar } from "@/components/shared/EntityAvatar";
-import { Folder, Layers, Check } from "lucide-react";
-import { usePeriod } from "@/hooks/usePeriod";
 import { trpc } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
-import { useCurrentSpace } from "@/hooks/useCurrentSpace";
+import { useCurrentSpace, useIsOwner } from "@/hooks/useCurrentSpace";
 import { useIdempotencyKey } from "@/hooks/useIdempotencyKey";
 import { DEFAULT_COLOR } from "@/lib/entityStyle";
-import { resolvePeriod, addMonths } from "@/lib/dates";
+import { APP_TIMEZONE } from "@/lib/dates";
+
+/* ============================================================
+   Types & tree helpers
+   ============================================================ */
 
 type Priority = "essential" | "important" | "discretionary" | "luxury";
 
-const PRIORITIES: Record<
-    Priority,
-    { label: string; color: string; desc: string }
-> = {
-    essential: {
-        label: "Essential",
-        color: "var(--income)",
-        desc: "Must-spend",
-    },
-    important: {
-        label: "Important",
-        color: "var(--ent-2)",
-        desc: "Should-spend",
-    },
-    discretionary: {
-        label: "Discretionary",
-        color: "var(--gold)",
-        desc: "Want-spend",
-    },
-    luxury: {
-        label: "Luxury",
-        color: "var(--expense)",
-        desc: "Splurge",
-    },
+const PRIORITIES: Record<Priority, { label: string; color: string; desc: string }> = {
+    essential: { label: "Essential", color: "var(--income)", desc: "Must-spend" },
+    important: { label: "Important", color: "var(--ent-2)", desc: "Should-spend" },
+    discretionary: { label: "Discretionary", color: "var(--gold)", desc: "Want-spend" },
+    luxury: { label: "Luxury", color: "var(--expense)", desc: "Splurge" },
 };
 
-const PRIORITY_OPTIONS: Array<{ value: Priority; label: string }> = [
-    { value: "essential", label: "Essential" },
-    { value: "important", label: "Important" },
-    { value: "discretionary", label: "Discretionary" },
-    { value: "luxury", label: "Luxury" },
-];
-
-const PERIOD_PRESETS: Array<{ value: string; label: string }> = [
-    { value: "this-month", label: "This month" },
-    { value: "last-month", label: "Last month" },
-    { value: "last-3-months", label: "Last 3 months" },
-    { value: "this-year", label: "This year" },
-    { value: "all-time", label: "All time" },
-];
+const PRIORITY_KEYS = Object.keys(PRIORITIES) as Priority[];
 
 interface CategoryUsage {
     id: string;
@@ -116,14 +61,13 @@ interface CategoryUsage {
     icon: string;
     priority: Priority | null;
     tx_count: number;
-    spent_total: number;
     last_used: Date | string | null;
 }
+
 interface CategoryNode extends CategoryUsage {
     children: CategoryNode[];
-    subtree_tx_count: number;
-    subtree_spent: number;
 }
+
 interface EnvelopeLite {
     id: string;
     name: string;
@@ -132,324 +76,1429 @@ interface EnvelopeLite {
     archived: boolean;
 }
 
-function buildTree(flat: CategoryUsage[]): CategoryNode[] {
-    const map = new Map<string, CategoryNode>();
-    flat.forEach((c) =>
-        map.set(c.id, {
-            ...c,
-            children: [],
-            subtree_tx_count: c.tx_count,
-            subtree_spent: c.spent_total,
-        })
-    );
+/** A row in the flattened, currently-visible tree. */
+interface VisibleRow {
+    node: CategoryNode;
+    depth: number;
+    effectivePriority: Priority | null;
+    priorityInherited: boolean;
+    descendants: number;
+}
+
+function buildTree(flat: CategoryUsage[]): {
+    roots: CategoryNode[];
+    byId: Map<string, CategoryNode>;
+} {
+    const byId = new Map<string, CategoryNode>();
+    flat.forEach((c) => byId.set(c.id, { ...c, children: [] }));
     const roots: CategoryNode[] = [];
-    map.forEach((node) => {
-        if (node.parent_id && map.has(node.parent_id)) {
-            map.get(node.parent_id)!.children.push(node);
+    byId.forEach((node) => {
+        if (node.parent_id && byId.has(node.parent_id)) {
+            byId.get(node.parent_id)!.children.push(node);
         } else {
             roots.push(node);
         }
     });
-    const accumulate = (n: CategoryNode): { tx: number; spent: number } => {
-        let tx = n.tx_count;
-        let spent = n.spent_total;
-        for (const c of n.children) {
-            const r = accumulate(c);
-            tx += r.tx;
-            spent += r.spent;
-        }
-        n.subtree_tx_count = tx;
-        n.subtree_spent = spent;
-        return { tx, spent };
+    const byName = (a: CategoryNode, b: CategoryNode) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    const sortRec = (nodes: CategoryNode[]) => {
+        nodes.sort(byName);
+        nodes.forEach((n) => sortRec(n.children));
     };
-    roots.forEach(accumulate);
-    return roots;
+    sortRec(roots);
+    return { roots, byId };
 }
 
-function maxDepth(n: CategoryNode): number {
-    if (n.children.length === 0) return 1;
-    return 1 + Math.max(...n.children.map(maxDepth));
+/* All tree walkers carry visited-guards so that corrupt data (a
+   parent_id cycle) degrades gracefully instead of hanging the tab. */
+
+function countDescendants(n: CategoryNode): number {
+    const seen = new Set<string>([n.id]);
+    let total = 0;
+    const stack = [...n.children];
+    while (stack.length) {
+        const cur = stack.pop()!;
+        if (seen.has(cur.id)) continue;
+        seen.add(cur.id);
+        total++;
+        stack.push(...cur.children);
+    }
+    return total;
 }
+
+/** id of node + every descendant — used to forbid cyclic reparenting. */
+function subtreeIds(n: CategoryNode): Set<string> {
+    const out = new Set<string>();
+    const stack = [n];
+    while (stack.length) {
+        const cur = stack.pop()!;
+        if (out.has(cur.id)) continue;
+        out.add(cur.id);
+        stack.push(...cur.children);
+    }
+    return out;
+}
+
+function ancestorIds(id: string, byId: Map<string, CategoryNode>): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>([id]);
+    let cur = byId.get(id);
+    // byId.has mirrors buildTree's orphan stance: a parent_id pointing at a
+    // missing node means "treat as top-level", never emit a phantom ancestor.
+    while (cur && cur.parent_id && !seen.has(cur.parent_id) && byId.has(cur.parent_id)) {
+        seen.add(cur.parent_id);
+        out.push(cur.parent_id);
+        cur = byId.get(cur.parent_id);
+    }
+    return out;
+}
+
+function formatLastUsed(v: Date | string | null): string | null {
+    if (!v) return null;
+    const d = typeof v === "string" ? new Date(v) : v;
+    if (Number.isNaN(d.getTime())) return null;
+    // Wall-clock dates in this app are APP_TZ, not the browser's zone.
+    return d.toLocaleDateString("en-US", {
+        timeZone: APP_TIMEZONE,
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+    });
+}
+
+/* ============================================================
+   Page
+   ============================================================ */
 
 export default function CategoriesPage() {
     const { space } = useCurrentSpace();
-    const { period, preset, setPreset, setCustom } = usePeriod();
+    // Categories are a space-local concept; the virtual "My money" space
+    // has no nav entry for them, but the URL is still typeable.
+    if (space.isPersonal) return <Navigate to={ROUTES.space(space.id)} replace />;
+    return <CategoriesWorkbench />;
+}
 
-    const envelopesQuery = trpc.envelop.listBySpace.useQuery({
-        spaceId: space.id,
-    });
+function CategoriesWorkbench() {
+    const { space } = useCurrentSpace();
+    const isOwner = useIsOwner();
+    const invalidate = useInvalidateAnalytics();
+
     const categoriesQuery = trpc.expenseCategory.listBySpaceWithUsage.useQuery({
         spaceId: space.id,
-        periodStart: period.start,
-        periodEnd: period.end,
     });
-
-    /* Last-period spend for trend deltas. For named month-aligned presets
-       we shift both ends back by whole calendar months so "this month vs
-       last month" actually compares Feb-as-a-calendar-month, not a
-       same-millisecond-span window that straddles month boundaries. For
-       custom ranges we fall back to span subtraction since there's no
-       canonical "previous custom range." */
-    const lastPeriod = useMemo(() => {
-        if (preset === "custom" || preset === "all-time") {
-            const start = new Date(period.start);
-            const end = new Date(period.end);
-            const span = end.getTime() - start.getTime();
-            return {
-                start: new Date(start.getTime() - span),
-                end: new Date(start.getTime()),
-            };
-        }
-        const monthsBack =
-            preset === "last-3-months"
-                ? 3
-                : preset === "last-6-months"
-                  ? 6
-                  : preset === "last-12-months" || preset === "this-year"
-                    ? 12
-                    : 1;
-        return {
-            start: addMonths(period.start, -monthsBack),
-            end: addMonths(period.end, -monthsBack),
-        };
-    }, [period.start, period.end, preset]);
-    const prevQuery = trpc.expenseCategory.listBySpaceWithUsage.useQuery({
-        spaceId: space.id,
-        periodStart: lastPeriod.start,
-        periodEnd: lastPeriod.end,
-    });
+    const envelopesQuery = trpc.envelop.listBySpace.useQuery({ spaceId: space.id });
 
     const categories = useMemo(
         () => (categoriesQuery.data ?? []) as CategoryUsage[],
         [categoriesQuery.data]
     );
+    const envelopes = (envelopesQuery.data ?? []) as EnvelopeLite[];
 
-    const tree = useMemo(() => buildTree(categories), [categories]);
+    const { roots, byId } = useMemo(() => buildTree(categories), [categories]);
 
-    /* Build a parallel tree for the previous period and index every node
-       by id. Trend math in CategoryRow looks up the matching prev node
-       and uses subtree_spent or spent_total to MATCH the cell's display
-       rule (depth=0 shows subtree, deeper shows leaf) — otherwise a
-       parent row with $0 direct spend always reads as 0%/new. */
-    const prevNodeById = useMemo(() => {
-        const prevTree = buildTree(
-            (prevQuery.data ?? []) as CategoryUsage[]
-        );
-        const m = new Map<string, CategoryNode>();
-        const walk = (n: CategoryNode) => {
-            m.set(n.id, n);
-            n.children.forEach(walk);
-        };
-        prevTree.forEach(walk);
-        return m;
-    }, [prevQuery.data]);
+    /* ---- selection & create mode ---- */
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const selected = selectedId ? (byId.get(selectedId) ?? null) : null;
+    /* When set, the right-hand panel shows the create form instead of the
+       inspector. Cancel returns to whatever was selected. `seq` remounts the
+       form on every open — clicking "+" always means "start fresh here",
+       even if the previous form's parent field was edited. */
+    const [creating, setCreating] = useState<{ parentId: string | null; seq: number } | null>(null);
+    const createSeq = useRef(0);
+    const panelOpen = !!selected || !!creating;
 
-    const totals = useMemo(() => {
-        const byPriority: Record<Priority, number> = {
-            essential: 0,
-            important: 0,
-            discretionary: 0,
-            luxury: 0,
+    /* Unsaved inspector edits must not be silently destroyed: navigation
+       that would unmount a dirty inspector is parked in pendingAction and
+       confirmed first. (The create form intentionally discards freely.) */
+    const [inspectorDirty, setInspectorDirty] = useState(false);
+    const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+    const guardDirty = (action: () => void) => {
+        // The inspector is only mounted (and thus only dirty-able) when a
+        // node is selected and the create form isn't covering it.
+        if (inspectorDirty && selected && !creating) setPendingAction(() => action);
+        else action();
+    };
+    const openCreate = (parentId: string | null) =>
+        guardDirty(() => setCreating({ parentId, seq: ++createSeq.current }));
+
+    /* Below 1080px the inspector becomes a scrim-backed slide-over — a
+       modal. Track that so we can give it dialog semantics + Escape. */
+    const [isOverlay, setIsOverlay] = useState(false);
+    useEffect(() => {
+        const mq = window.matchMedia("(max-width: 1079px)");
+        const update = () => setIsOverlay(mq.matches);
+        update();
+        mq.addEventListener("change", update);
+        return () => mq.removeEventListener("change", update);
+    }, []);
+    useEffect(() => {
+        if (!panelOpen || !isOverlay) return;
+        const onKey = (e: KeyboardEvent) => {
+            // Radix layers (popovers, dialogs) preventDefault their own
+            // Escape — only dismiss the slide-over when nothing else did.
+            if (e.key !== "Escape" || e.defaultPrevented) return;
+            if (creating) {
+                setCreating(null);
+                return;
+            }
+            if (inspectorDirty && selected) {
+                setPendingAction(() => () => setSelectedId(null));
+                return;
+            }
+            setSelectedId(null);
         };
-        const resolveEffective = (
-            id: string,
-            map: Map<string, CategoryUsage>
-        ): Priority | null => {
-            const cur = map.get(id);
-            if (!cur) return null;
-            if (cur.priority) return cur.priority;
-            if (cur.parent_id) return resolveEffective(cur.parent_id, map);
-            return null;
-        };
-        const map = new Map<string, CategoryUsage>();
-        for (const c of categories) map.set(c.id, c);
-        let total = 0;
-        for (const c of categories) {
-            total += c.spent_total;
-            const eff = resolveEffective(c.id, map);
-            if (eff) byPriority[eff] += c.spent_total;
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [panelOpen, isOverlay, creating, inspectorDirty, selected]);
+    useEffect(() => {
+        // Selected node was deleted (or the space changed) — drop selection.
+        if (selectedId && !categoriesQuery.isLoading && !byId.has(selectedId)) {
+            setSelectedId(null);
         }
-        return { byPriority, total };
-    }, [categories]);
+    }, [selectedId, byId, categoriesQuery.isLoading]);
 
-    const depth =
-        tree.length > 0 ? Math.max(...tree.map(maxDepth)) : 0;
+    /* ---- expansion ---- */
+    const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const expandedInitialized = useRef(false);
+    useEffect(() => {
+        if (expandedInitialized.current || roots.length === 0) return;
+        expandedInitialized.current = true;
+        // Start with top-level groups open, deeper levels folded — keeps
+        // large trees short on first load without hiding the structure.
+        setExpanded(new Set(roots.map((r) => r.id)));
+    }, [roots]);
+
+    const toggleExpand = (id: string) =>
+        setExpanded((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+
+    const expandAll = () =>
+        setExpanded(
+            new Set(categories.filter((c) => byId.get(c.id)!.children.length > 0).map((c) => c.id))
+        );
+    const collapseAll = () => setExpanded(new Set());
+
+    const selectNode = (id: string) => {
+        const apply = () => {
+            setSelectedId(id);
+            setCreating(null); // picking a node leaves create mode
+            // Reveal it — expand every ancestor.
+            setExpanded((prev) => {
+                const next = new Set(prev);
+                ancestorIds(id, byId).forEach((a) => next.add(a));
+                return next;
+            });
+        };
+        // Re-clicking the selected node keeps in-progress edits.
+        if (id === selectedId && !creating) return;
+        guardDirty(apply);
+    };
+
+    /* ---- search ---- */
+    const [search, setSearch] = useState("");
+    const query = search.trim().toLowerCase();
+
+    /** ids visible while searching: matches + all their ancestors. */
+    const searchVisible = useMemo(() => {
+        if (!query) return null;
+        const visible = new Set<string>();
+        for (const c of categories) {
+            if (c.name.toLowerCase().includes(query)) {
+                visible.add(c.id);
+                ancestorIds(c.id, byId).forEach((a) => visible.add(a));
+            }
+        }
+        return visible;
+    }, [query, categories, byId]);
+
+    /* ---- flatten to visible rows, grouped per top-level category ----
+       Each root becomes a masonry card in the tree pane, so the page
+       spreads across the full width instead of one long skinny column
+       (nesting tops out at 3-4 levels, so cards stay compact). */
+    const groups = useMemo(() => {
+        const out: { root: CategoryNode; rows: VisibleRow[] }[] = [];
+        const walk = (
+            acc: VisibleRow[],
+            nodes: CategoryNode[],
+            depth: number,
+            inherited: Priority | null
+        ) => {
+            for (const n of nodes) {
+                if (searchVisible && !searchVisible.has(n.id)) continue;
+                const effective = n.priority ?? inherited;
+                acc.push({
+                    node: n,
+                    depth,
+                    effectivePriority: effective,
+                    priorityInherited: !n.priority && !!inherited,
+                    descendants: countDescendants(n),
+                });
+                const open = searchVisible ? true : expanded.has(n.id);
+                if (open && n.children.length > 0) {
+                    walk(acc, n.children, depth + 1, effective);
+                }
+            }
+        };
+        for (const root of roots) {
+            const acc: VisibleRow[] = [];
+            walk(acc, [root], 0, null);
+            if (acc.length > 0) out.push({ root, rows: acc });
+        }
+        return out;
+    }, [roots, expanded, searchVisible]);
+
+    /* Flat DFS order across all groups — keyboard nav + selection walk. */
+    const rows = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+    /* Search can filter the selected node out of the DOM — never point
+       aria-activedescendant at an id that isn't rendered. */
+    const selectedIsRendered = useMemo(
+        () => !!selectedId && rows.some((r) => r.node.id === selectedId),
+        [rows, selectedId]
+    );
+
+    const matchCount = useMemo(() => {
+        if (!query) return 0;
+        return categories.filter((c) => c.name.toLowerCase().includes(query)).length;
+    }, [query, categories]);
+
+    /* ---- drag & drop reparenting ---- */
+    const [dragId, setDragId] = useState<string | null>(null);
+    const [dropId, setDropId] = useState<string | null>(null); // node id or "__root__"
+    const forbiddenDrops = useRef<Set<string>>(new Set());
+
+    const changeParent = trpc.expenseCategory.changeParent.useMutation({
+        onSuccess: async (_, vars) => {
+            const moved = byId.get(vars.categoryId);
+            const target = vars.parentId ? byId.get(vars.parentId) : null;
+            toast.success(
+                target
+                    ? `Moved "${moved?.name ?? "category"}" under "${target.name}"`
+                    : `Moved "${moved?.name ?? "category"}" to top level`
+            );
+            if (target && moved && target.default_envelop_id !== moved.default_envelop_id) {
+                toast.info(
+                    "The parent defaults to a different envelope — this category keeps its own default.",
+                    {
+                        duration: 5000,
+                    }
+                );
+            }
+            await invalidate(space.id);
+        },
+        onError: (e) => toast.error(e.message),
+    });
+
+    const dragNode = dragId ? byId.get(dragId) : null;
+
+    const handleDragStart = (e: React.DragEvent, node: CategoryNode) => {
+        // A drag started against a stale tree (while a move is still
+        // committing) could sneak past the descendant check — block it.
+        if (!isOwner || changeParent.isPending) {
+            e.preventDefault();
+            return;
+        }
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", node.id);
+        forbiddenDrops.current = subtreeIds(node);
+        setDragId(node.id);
+    };
+
+    const canDropOn = (targetId: string) => {
+        if (!dragId || !dragNode) return false;
+        if (targetId === "__root__") return dragNode.parent_id !== null;
+        return !forbiddenDrops.current.has(targetId) && targetId !== dragNode.parent_id;
+    };
+
+    /* NOTE: no spring-load (hover-to-expand) here on purpose — expanding
+       mid-drag reflows the masonry columns and can move the drop target
+       out from under the cursor. Expand before dragging instead. */
+    const handleDragOver = (e: React.DragEvent, target: CategoryNode) => {
+        if (!canDropOn(target.id)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        if (dropId !== target.id) setDropId(target.id);
+    };
+
+    const handleDrop = (e: React.DragEvent, targetId: string | null) => {
+        e.preventDefault();
+        const id = dragId;
+        setDragId(null);
+        setDropId(null);
+        if (!id || changeParent.isPending) return;
+        if (targetId !== null && !canDropOn(targetId)) return;
+        if (targetId === null && byId.get(id)?.parent_id === null) return;
+        changeParent.mutate({ categoryId: id, parentId: targetId });
+    };
+
+    const handleDragEnd = () => {
+        setDragId(null);
+        setDropId(null);
+    };
+
+    /* ---- overlay focus management ---- */
+    const inspectorRef = useRef<HTMLElement>(null);
+    const overlayOpen = isOverlay && panelOpen;
+    /* The scrim covers the viewport but SpaceLayout's sidebar / mobile
+       header live outside this page's DOM, so the JSX-level inert on our
+       own topbar + tree pane can't reach them — without this, Tab escapes
+       the "modal" into nav controls dimmed behind the scrim. */
+    useEffect(() => {
+        if (!overlayOpen) return;
+        const chrome = document.querySelectorAll<HTMLElement>(".sl-aside, .sl-mobile-header");
+        chrome.forEach((el) => el.setAttribute("inert", ""));
+        return () => chrome.forEach((el) => el.removeAttribute("inert"));
+    }, [overlayOpen]);
+    /* Focus WRAP for the dialog: with the background inert, the only leak
+       left is tabbing off the panel's last control into browser chrome.
+       Only intervene while focus is actually inside the panel, so Radix
+       portals (selects, pickers) keep their own Tab behavior. */
+    useEffect(() => {
+        if (!overlayOpen) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "Tab") return;
+            const panel = inspectorRef.current;
+            if (!panel || !panel.contains(document.activeElement)) return;
+            const focusables = Array.from(
+                panel.querySelectorAll<HTMLElement>(
+                    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+                )
+            );
+            if (focusables.length === 0) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [overlayOpen]);
+    const overlayWasOpen = useRef(false);
+    useEffect(() => {
+        if (overlayOpen) {
+            overlayWasOpen.current = true;
+            // Move focus into the panel once the slide-in has started —
+            // unless something inside already claimed it (the create
+            // form's autofocused Name field).
+            const t = setTimeout(() => {
+                const panel = inspectorRef.current;
+                if (!panel || panel.contains(document.activeElement)) return;
+                panel.querySelector<HTMLElement>(".ct-insp-close")?.focus();
+            }, 50);
+            return () => clearTimeout(t);
+        }
+        if (overlayWasOpen.current) {
+            overlayWasOpen.current = false;
+            treeRef.current?.focus();
+        }
+    }, [overlayOpen]);
+
+    /* ---- keyboard navigation ---- */
+    const treeRef = useRef<HTMLDivElement>(null);
+    const handleTreeKeyDown = (e: React.KeyboardEvent) => {
+        if (rows.length === 0) return;
+        const idx = rows.findIndex((r) => r.node.id === selectedId);
+        const go = (i: number) => {
+            const row = rows[Math.max(0, Math.min(rows.length - 1, i))];
+            if (row) selectNode(row.node.id);
+        };
+        switch (e.key) {
+            case "ArrowDown":
+                e.preventDefault();
+                go(idx < 0 ? 0 : idx + 1);
+                break;
+            case "ArrowUp":
+                e.preventDefault();
+                go(idx < 0 ? 0 : idx - 1);
+                break;
+            case "ArrowRight": {
+                if (idx < 0) return;
+                e.preventDefault();
+                const n = rows[idx].node;
+                // While searching, rows are force-open — don't mutate the
+                // stored expansion state, just move.
+                if (!query && n.children.length > 0 && !expanded.has(n.id)) {
+                    toggleExpand(n.id);
+                } else if (n.children.length > 0) {
+                    go(idx + 1);
+                }
+                break;
+            }
+            case "ArrowLeft": {
+                if (idx < 0) return;
+                e.preventDefault();
+                const n = rows[idx].node;
+                if (!query && n.children.length > 0 && expanded.has(n.id)) {
+                    toggleExpand(n.id);
+                } else if (n.parent_id) {
+                    selectNode(n.parent_id);
+                }
+                break;
+            }
+            case "Home":
+                e.preventDefault();
+                go(0);
+                break;
+            case "End":
+                e.preventDefault();
+                go(rows.length - 1);
+                break;
+        }
+    };
+
     const totalCount = categories.length;
+    const isLoading = categoriesQuery.isLoading;
 
     return (
-        <div className="orbit-design ca-root">
-            <style>{CA_STYLES}</style>
+        <div className="orbit-design ct-root">
+            <style>{CT_STYLES}</style>
 
-            <header className="ca-topbar">
-                <div className="ca-topbar-text">
-                    <span className="eyebrow">
-                        {tree.length} top-level · {totalCount} categories · up to{" "}
-                        {Math.max(1, depth)} levels deep
-                    </span>
-                    <h1 className="display ca-title">Categories</h1>
-                    <p className="ca-sub">
-                        Nest as deep as you need. Priority inherits down the tree —
-                        override only where it matters.
-                    </p>
-                </div>
-                <div className="ca-topbar-actions">
-                    <PeriodPicker
-                        preset={preset}
-                        period={period}
-                        onPresetChange={setPreset}
-                        onCustomChange={setCustom}
-                    />
-                    <PermissionGate roles={["owner"]}>
-                        <CreateCategoryDialog
-                            envelopes={envelopesQuery.data ?? []}
-                            categories={categories}
-                            trigger={
-                                <button
-                                    type="button"
-                                    className="od-btn od-btn-primary"
-                                >
-                                    <Plus className="size-3.5" /> New category
-                                </button>
-                            }
-                        />
-                    </PermissionGate>
+            {/* ============ Top bar ============ */}
+            {/* inert: while the slide-over is modal, the background must not
+                take focus or clicks — aria-modal alone doesn't enforce it. */}
+            <header className="ct-topbar" inert={overlayOpen || undefined}>
+                <div className="ct-topbar-inner">
+                    <div className="ct-topbar-text">
+                        <span className="eyebrow">
+                            {roots.length} top-level · {totalCount} total
+                        </span>
+                        <h1 className="display ct-title">Categories</h1>
+                    </div>
+                    {isOwner && (
+                        <button
+                            type="button"
+                            className="od-btn od-btn-primary"
+                            onClick={() => openCreate(null)}
+                        >
+                            <Plus className="size-3.5" /> New category
+                        </button>
+                    )}
                 </div>
             </header>
 
-            <div className="ca-scroll">
-                {/* Priority legend */}
-                <div className="od-card ca-priorities">
-                    <span className="ca-priorities-head">
-                        <span className="eyebrow">Priorities</span>
-                        <span className="ca-priorities-sub">
-                            Set on a category, inherited by its descendants
-                        </span>
-                    </span>
-                    <span className="ca-priorities-divider" />
-                    {(Object.keys(PRIORITIES) as Priority[]).map((p) => (
-                        <span key={p} className="ca-priority-legend-cell">
-                            <PriorityBadge priority={p} />
-                            <span className="ca-priority-desc">
-                                {PRIORITIES[p].desc}
-                            </span>
-                        </span>
-                    ))}
-                    <span className="ca-priorities-inh">
-                        <PriorityBadge priority="discretionary" inherited />
-                        = inherited from parent
-                    </span>
-                </div>
+            {/* ============ Body: tree + inspector ============ */}
+            <div className="ct-body">
+                {/* -------- Tree pane -------- */}
+                <section
+                    className="od-card ct-tree-pane"
+                    aria-label="Category tree"
+                    inert={overlayOpen || undefined}
+                >
+                    <div className="ct-tree-toolbar">
+                        <div className="ct-search">
+                            <Search className="size-3.5 ct-search-icon" />
+                            <input
+                                className="ct-search-input"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                placeholder="Find a category…"
+                                aria-label="Search categories"
+                            />
+                            {search && (
+                                <button
+                                    type="button"
+                                    className="ct-search-clear"
+                                    onClick={() => setSearch("")}
+                                    aria-label="Clear search"
+                                >
+                                    <X className="size-3" />
+                                </button>
+                            )}
+                        </div>
+                        <button
+                            type="button"
+                            className="ct-tool-btn"
+                            onClick={expandAll}
+                            title="Expand all"
+                            aria-label="Expand all"
+                        >
+                            <ChevronsUpDown className="size-3.5" />
+                        </button>
+                        <button
+                            type="button"
+                            className="ct-tool-btn"
+                            onClick={collapseAll}
+                            title="Collapse all"
+                            aria-label="Collapse all"
+                        >
+                            <ChevronsDownUp className="size-3.5" />
+                        </button>
+                    </div>
 
-                {/* Tree table */}
-                <div className="od-card ca-table-card">
-                    <div className="ca-th-row">
-                        {["Category", "Priority", "Spent", "Tx Count", "Trend"].map(
-                            (h) => (
-                                <span key={h} className="ca-th">
-                                    {h}
-                                </span>
-                            )
+                    {query && (
+                        /* Stays mounted at 0 so the live region still announces,
+                           but visually the body empty state covers that case. */
+                        <div
+                            className={`ct-search-meta ${matchCount === 0 ? "sr-only" : ""}`}
+                            role="status"
+                        >
+                            {matchCount === 0
+                                ? "No matches"
+                                : `${matchCount} match${matchCount === 1 ? "" : "es"}`}
+                        </div>
+                    )}
+
+                    {/* Root drop zone — appears while dragging a nested node */}
+                    {dragId && dragNode?.parent_id && (
+                        <div
+                            className={`ct-rootdrop ${dropId === "__root__" ? "is-over" : ""}`}
+                            onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                                setDropId("__root__");
+                            }}
+                            onDragLeave={() => setDropId((d) => (d === "__root__" ? null : d))}
+                            onDrop={(e) => handleDrop(e, null)}
+                        >
+                            <CornerDownRight className="size-3.5" />
+                            Drop here to make top-level
+                        </div>
+                    )}
+
+                    <div
+                        ref={treeRef}
+                        className="ct-tree-scroll"
+                        role="tree"
+                        aria-label="Categories"
+                        aria-activedescendant={
+                            selectedIsRendered ? `ct-item-${selectedId}` : undefined
+                        }
+                        tabIndex={0}
+                        onKeyDown={handleTreeKeyDown}
+                    >
+                        {isLoading ? (
+                            <TreeSkeleton />
+                        ) : totalCount === 0 ? (
+                            <div className="ct-empty">
+                                <FolderTree className="size-6" />
+                                <p className="ct-empty-title">No categories yet</p>
+                                <p className="ct-empty-sub">
+                                    Categories label your expenses and nest as deep as you need.
+                                </p>
+                                {isOwner && (
+                                    <button
+                                        type="button"
+                                        className="od-btn od-btn-sm"
+                                        onClick={() => openCreate(null)}
+                                    >
+                                        <Plus className="size-3" /> Create the first one
+                                    </button>
+                                )}
+                            </div>
+                        ) : rows.length === 0 ? (
+                            <div className="ct-empty">
+                                <Search className="size-5" />
+                                <p className="ct-empty-title">Nothing matches “{search.trim()}”</p>
+                                <button
+                                    type="button"
+                                    className="od-btn od-btn-sm"
+                                    onClick={() => setSearch("")}
+                                >
+                                    Clear search
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="ct-groups">
+                                {groups.map((g) => (
+                                    <div key={g.root.id} className="ct-group" role="none">
+                                        {g.rows.map((r) => (
+                                            <TreeRow
+                                                key={r.node.id}
+                                                row={r}
+                                                query={query}
+                                                isOwner={isOwner}
+                                                isSelected={r.node.id === selectedId}
+                                                isExpanded={query ? true : expanded.has(r.node.id)}
+                                                isDragging={r.node.id === dragId}
+                                                isDropTarget={r.node.id === dropId}
+                                                dropAllowed={canDropOn(r.node.id)}
+                                                onSelect={() => selectNode(r.node.id)}
+                                                onToggle={() => toggleExpand(r.node.id)}
+                                                onAddChild={() => openCreate(r.node.id)}
+                                                onDragStart={(e) => handleDragStart(e, r.node)}
+                                                onDragOver={(e) => handleDragOver(e, r.node)}
+                                                onDragLeave={() =>
+                                                    setDropId((d) => (d === r.node.id ? null : d))
+                                                }
+                                                onDrop={(e) => handleDrop(e, r.node.id)}
+                                                onDragEnd={handleDragEnd}
+                                            />
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
                         )}
                     </div>
-                    {categoriesQuery.isLoading ? (
-                        <div className="ca-empty">Loading…</div>
-                    ) : tree.length === 0 ? (
-                        <div className="ca-empty">
-                            <FolderTree
-                                className="size-5"
-                                style={{ color: "var(--fg-4)" }}
-                            />
-                            <span>No categories yet.</span>
-                        </div>
-                    ) : (
-                        tree.map((g, i) => (
-                            <CategoryRow
-                                key={g.id}
-                                node={g}
-                                depth={0}
-                                inheritedPriority={null}
-                                parentColor={g.color}
-                                parentIcon={g.icon}
-                                isLast={i === tree.length - 1}
-                                envelopes={envelopesQuery.data ?? []}
-                                allCategories={categories}
-                                prevNodeById={prevNodeById}
-                            />
-                        ))
-                    )}
-                </div>
 
-                {/* Spend by priority */}
-                <div className="od-card ca-section">
-                    <div className="ca-sect-head">
-                        <div className="ca-sect-text">
-                            <h2 className="display ca-sect-title">
-                                Spend by priority
-                            </h2>
-                            <span className="ca-sect-sub">
-                                Rolled up across the entire tree, this period
+                    <footer className="ct-tree-foot">
+                        {PRIORITY_KEYS.map((p) => (
+                            <span key={p} className="ct-legend-item">
+                                <span
+                                    className="ct-pri-dot"
+                                    style={{ background: PRIORITIES[p].color }}
+                                />
+                                {PRIORITIES[p].label}
                             </span>
+                        ))}
+                        <span className="ct-legend-item ct-legend-muted">
+                            <span className="ct-pri-dot is-inherited" />
+                            inherited
+                        </span>
+                        {isOwner && <span className="ct-legend-hint">Drag rows to re-nest</span>}
+                    </footer>
+                </section>
+
+                {/* -------- Detail panel / slide-over -------- */}
+                <div
+                    className={`ct-scrim ${panelOpen ? "is-open" : ""}`}
+                    onClick={() =>
+                        guardDirty(() => {
+                            setCreating(null);
+                            setSelectedId(null);
+                        })
+                    }
+                    aria-hidden="true"
+                />
+                <aside
+                    ref={inspectorRef}
+                    className={`od-card ct-inspector ${panelOpen ? "is-open" : ""}`}
+                    role={overlayOpen ? "dialog" : undefined}
+                    aria-modal={overlayOpen ? true : undefined}
+                    aria-label={creating ? "New category" : "Category details"}
+                >
+                    {creating ? (
+                        <CreatePanel
+                            key={`${creating.parentId ?? "__top__"}-${creating.seq}`}
+                            parentId={creating.parentId}
+                            byId={byId}
+                            allCategories={categories}
+                            envelopes={envelopes}
+                            onCancel={() => setCreating(null)}
+                            onCreated={(id, parentId) => {
+                                setCreating(null);
+                                // Query cache was refreshed before this fires,
+                                // so the node exists in byId — select + reveal.
+                                setSelectedId(id);
+                                if (parentId) {
+                                    setExpanded((prev) => {
+                                        const next = new Set(prev);
+                                        next.add(parentId);
+                                        ancestorIds(parentId, byId).forEach((a) => next.add(a));
+                                        return next;
+                                    });
+                                }
+                            }}
+                        />
+                    ) : selected ? (
+                        <Inspector
+                            key={selected.id}
+                            node={selected}
+                            byId={byId}
+                            allCategories={categories}
+                            envelopes={envelopes}
+                            isOwner={isOwner}
+                            onSelect={selectNode}
+                            onAddChild={() => openCreate(selected.id)}
+                            onClose={() => guardDirty(() => setSelectedId(null))}
+                            onDirtyChange={setInspectorDirty}
+                        />
+                    ) : (
+                        <div className="ct-empty ct-inspector-empty">
+                            <Folder className="size-6" />
+                            <p className="ct-empty-title">Select a category</p>
+                            <p className="ct-empty-sub">
+                                {isOwner
+                                    ? "Pick one to rename it, restyle it, change its priority, envelope, or parent — or create a new one."
+                                    : "Pick one from the tree to see its priority, envelope, parent, and usage."}
+                            </p>
+                            {isOwner && (
+                                <button
+                                    type="button"
+                                    className="od-btn od-btn-sm"
+                                    onClick={() => openCreate(null)}
+                                >
+                                    <Plus className="size-3" /> New category
+                                </button>
+                            )}
+                            <div className="ct-tips">
+                                <span className="eyebrow">Tips</span>
+                                {isOwner && (
+                                    <span className="ct-tip">
+                                        <GripVertical className="size-3" />
+                                        Drag any row onto another to nest it
+                                    </span>
+                                )}
+                                {isOwner && (
+                                    <span className="ct-tip">
+                                        <Plus className="size-3" />
+                                        Hover a row and hit “+” for a quick subcategory
+                                    </span>
+                                )}
+                                <span className="ct-tip">
+                                    <ChevronsUpDown className="size-3" />
+                                    Arrow keys walk the tree once it has focus
+                                </span>
+                                <span className="ct-tip">
+                                    <Search className="size-3" />
+                                    Search shows matches with their full path
+                                </span>
+                            </div>
+                        </div>
+                    )}
+                </aside>
+            </div>
+
+            {/* Discard-confirmation for unsaved inspector edits */}
+            <ConfirmDialog
+                open={pendingAction !== null}
+                onOpenChange={(v) => {
+                    if (!v) setPendingAction(null);
+                }}
+                title="Discard unsaved changes?"
+                description={
+                    selected
+                        ? `You have unsaved edits on “${selected.name}”. They'll be lost.`
+                        : "You have unsaved edits. They'll be lost."
+                }
+                confirmLabel="Discard"
+                destructive
+                onConfirm={() => {
+                    setInspectorDirty(false);
+                    const act = pendingAction;
+                    setPendingAction(null);
+                    act?.();
+                }}
+            />
+        </div>
+    );
+}
+
+/* ============================================================
+   Tree row
+   ============================================================ */
+
+function TreeRow({
+    row,
+    query,
+    isOwner,
+    isSelected,
+    isExpanded,
+    isDragging,
+    isDropTarget,
+    dropAllowed,
+    onSelect,
+    onToggle,
+    onAddChild,
+    onDragStart,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+    onDragEnd,
+}: {
+    row: VisibleRow;
+    query: string;
+    isOwner: boolean;
+    isSelected: boolean;
+    isExpanded: boolean;
+    isDragging: boolean;
+    isDropTarget: boolean;
+    dropAllowed: boolean;
+    onSelect: () => void;
+    onToggle: () => void;
+    onAddChild: () => void;
+    onDragStart: (e: React.DragEvent) => void;
+    onDragOver: (e: React.DragEvent) => void;
+    onDragLeave: () => void;
+    onDrop: (e: React.DragEvent) => void;
+    onDragEnd: () => void;
+}) {
+    const { node, depth, effectivePriority, priorityInherited, descendants } = row;
+    const hasKids = node.children.length > 0;
+    const ref = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (isSelected) ref.current?.scrollIntoView({ block: "nearest" });
+    }, [isSelected]);
+
+    return (
+        <div
+            ref={ref}
+            id={`ct-item-${node.id}`}
+            role="treeitem"
+            aria-level={depth + 1}
+            aria-selected={isSelected}
+            aria-expanded={hasKids ? isExpanded : undefined}
+            tabIndex={-1}
+            className={[
+                "ct-row",
+                depth === 0 ? "is-root" : "",
+                isSelected ? "is-selected" : "",
+                isDragging ? "is-dragging" : "",
+                isDropTarget && dropAllowed ? "is-drop" : "",
+            ].join(" ")}
+            draggable={isOwner}
+            onClick={onSelect}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            onDragEnd={onDragEnd}
+        >
+            {/* indent guides */}
+            {Array.from({ length: depth }).map((_, i) => (
+                <span key={i} className="ct-guide" />
+            ))}
+
+            {hasKids ? (
+                <button
+                    type="button"
+                    className="ct-chevron"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onToggle();
+                    }}
+                    disabled={!!query}
+                    aria-label={isExpanded ? "Collapse" : "Expand"}
+                >
+                    {isExpanded ? (
+                        <ChevronDown className="size-3.5" />
+                    ) : (
+                        <ChevronRight className="size-3.5" />
+                    )}
+                </button>
+            ) : (
+                <span className="ct-chevron ct-chevron-leaf" aria-hidden="true">
+                    <span className="ct-leaf-dot" style={{ background: node.color }} />
+                </span>
+            )}
+
+            <EntityAvatar size="sm" color={node.color} icon={node.icon} />
+
+            <span className="ct-row-name" title={node.name}>
+                <Highlight text={node.name} query={query} />
+            </span>
+
+            {hasKids && (
+                <span
+                    className="ct-count-chip tabular"
+                    title={`${descendants} nested categor${descendants === 1 ? "y" : "ies"}`}
+                >
+                    {descendants}
+                </span>
+            )}
+
+            {effectivePriority && (
+                <span
+                    className={`ct-pri-dot ${priorityInherited ? "is-inherited" : ""}`}
+                    style={{
+                        background: PRIORITIES[effectivePriority].color,
+                    }}
+                    title={`${PRIORITIES[effectivePriority].label}${priorityInherited ? " (inherited)" : ""}`}
+                />
+            )}
+
+            <span className="ct-row-spacer" />
+
+            {isOwner && (
+                <span className="ct-row-actions">
+                    <button
+                        type="button"
+                        className="ct-row-btn"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onAddChild();
+                        }}
+                        title={`Add subcategory to ${node.name}`}
+                        aria-label={`Add subcategory to ${node.name}`}
+                    >
+                        <Plus className="size-3.5" />
+                    </button>
+                    <span className="ct-row-grip" aria-hidden="true">
+                        <GripVertical className="size-3.5" />
+                    </span>
+                </span>
+            )}
+        </div>
+    );
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+    if (!query) return <>{text}</>;
+    const idx = text.toLowerCase().indexOf(query);
+    if (idx < 0) return <>{text}</>;
+    return (
+        <>
+            {text.slice(0, idx)}
+            <mark className="ct-mark">{text.slice(idx, idx + query.length)}</mark>
+            {text.slice(idx + query.length)}
+        </>
+    );
+}
+
+function TreeSkeleton() {
+    // Mirrors the loaded masonry footprint so the layout doesn't pop from
+    // one skinny column to a grid when data arrives.
+    const cards = [
+        [0, 1, 1, 2],
+        [0, 1],
+        [0, 1, 1, 1, 2],
+        [0, 1, 1],
+    ];
+    return (
+        <div className="ct-groups ct-skeleton" aria-hidden="true">
+            {cards.map((depths, c) => (
+                <div key={c} className="ct-group">
+                    {depths.map((d, i) => (
+                        <div key={i} className="ct-skel-row" style={{ marginLeft: d * 22 }}>
+                            <span className="ct-skel-dot" />
+                            <span
+                                className="ct-skel-bar"
+                                style={{ width: `${46 + (((c * 7 + i) * 17) % 38)}%` }}
+                            />
+                        </div>
+                    ))}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+/* ============================================================
+   Inspector — edit-in-place details for the selected category
+   ============================================================ */
+
+function Inspector({
+    node,
+    byId,
+    allCategories,
+    envelopes,
+    isOwner,
+    onSelect,
+    onAddChild,
+    onClose,
+    onDirtyChange,
+}: {
+    node: CategoryNode;
+    byId: Map<string, CategoryNode>;
+    allCategories: CategoryUsage[];
+    envelopes: EnvelopeLite[];
+    isOwner: boolean;
+    onSelect: (id: string) => void;
+    onAddChild: () => void;
+    onClose: () => void;
+    onDirtyChange: (dirty: boolean) => void;
+}) {
+    const { space } = useCurrentSpace();
+    const invalidate = useInvalidateAnalytics();
+
+    const [name, setName] = useState(node.name);
+    const [color, setColor] = useState(node.color);
+    const [icon, setIcon] = useState(node.icon);
+    const [priority, setPriority] = useState<Priority | "">(node.priority ?? "");
+    const [envelopId, setEnvelopId] = useState(node.default_envelop_id);
+    const [parentId, setParentId] = useState<string | null>(node.parent_id);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+
+    const dirty =
+        name.trim() !== node.name ||
+        color !== node.color ||
+        icon !== node.icon ||
+        (priority || null) !== node.priority ||
+        envelopId !== node.default_envelop_id ||
+        parentId !== node.parent_id;
+
+    // The page guards navigation that would silently destroy unsaved edits;
+    // report dirtiness up (and clear the flag on unmount).
+    useEffect(() => {
+        onDirtyChange(dirty);
+    }, [dirty, onDirtyChange]);
+    useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+
+    // External changes (e.g. drag-drop moved this node) land while the form
+    // is pristine — follow them. Never clobber in-progress edits.
+    const dirtyRef = useRef(dirty);
+    dirtyRef.current = dirty;
+    useEffect(() => {
+        if (dirtyRef.current) return;
+        setName(node.name);
+        setColor(node.color);
+        setIcon(node.icon);
+        setPriority(node.priority ?? "");
+        setEnvelopId(node.default_envelop_id);
+        setParentId(node.parent_id);
+    }, [node]);
+    // Parent is drag-owned: dragging this very node in the tree changes
+    // node.parent_id underneath us and would otherwise read as a "dirty"
+    // form edit (whose Save would revert the move). External parent moves
+    // always win over an unsaved parent-field edit.
+    const lastNodeParent = useRef(node.parent_id);
+    useEffect(() => {
+        if (node.parent_id !== lastNodeParent.current) {
+            lastNodeParent.current = node.parent_id;
+            setParentId(node.parent_id);
+        }
+    }, [node.parent_id]);
+
+    const update = trpc.expenseCategory.update.useMutation();
+    const changeParent = trpc.expenseCategory.changeParent.useMutation();
+    const del = trpc.expenseCategory.delete.useMutation({
+        onSuccess: async () => {
+            toast.success("Category deleted");
+            await invalidate(space.id);
+        },
+        onError: (e) => toast.error(e.message),
+    });
+
+    const saving = update.isPending || changeParent.isPending;
+
+    const save = async () => {
+        if (!name.trim() || saving) return;
+        try {
+            const fieldPatch: Record<string, unknown> = {};
+            if (name.trim() !== node.name) fieldPatch.name = name.trim();
+            if (color !== node.color) fieldPatch.color = color;
+            if (icon !== node.icon) fieldPatch.icon = icon;
+            if ((priority || null) !== node.priority)
+                fieldPatch.priority = priority === "" ? null : priority;
+            if (envelopId !== node.default_envelop_id) fieldPatch.defaultEnvelopId = envelopId;
+
+            if (Object.keys(fieldPatch).length > 0) {
+                await update.mutateAsync({ categoryId: node.id, ...fieldPatch });
+            }
+            if (parentId !== node.parent_id) {
+                await changeParent.mutateAsync({ categoryId: node.id, parentId });
+            }
+            toast.success("Category saved");
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Failed to save");
+        } finally {
+            // The field update may have committed even if the parent change
+            // failed — always refresh so the tree never shows stale data.
+            await invalidate(space.id);
+        }
+    };
+
+    const discard = () => {
+        setName(node.name);
+        setColor(node.color);
+        setIcon(node.icon);
+        setPriority(node.priority ?? "");
+        setEnvelopId(node.default_envelop_id);
+        setParentId(node.parent_id);
+    };
+
+    /* parent candidates: everything outside this node's subtree */
+    const forbidden = useMemo(() => subtreeIds(node), [node]);
+    const parentCandidates = useMemo(
+        () => allCategories.filter((c) => !forbidden.has(c.id)),
+        [allCategories, forbidden]
+    );
+
+    const breadcrumb = useMemo(
+        () =>
+            ancestorIds(node.id, byId)
+                .reverse()
+                .map((id) => byId.get(id)!),
+        [node.id, byId]
+    );
+
+    const activeEnvelopes = envelopes.filter((e) => !e.archived);
+    const currentEnvelope = envelopes.find((e) => e.id === envelopId);
+    // A category may still default to a since-archived envelope; the select
+    // must be able to display that value (server only rejects *changing to*
+    // an archived one via create).
+    const envelopeItems = useMemo(() => {
+        const items = activeEnvelopes.map((e) => ({
+            value: e.id,
+            label: e.name,
+            leadIcon: <Layers className="size-3.5" />,
+            leadColor: e.color || "var(--ent-2)",
+        }));
+        if (currentEnvelope?.archived) {
+            items.unshift({
+                value: currentEnvelope.id,
+                label: `${currentEnvelope.name} (archived)`,
+                leadIcon: <Layers className="size-3.5" />,
+                leadColor: currentEnvelope.color || "var(--ent-2)",
+            });
+        }
+        return items;
+    }, [activeEnvelopes, currentEnvelope]);
+    const chosenParent = parentId ? byId.get(parentId) : null;
+    const envelopeMismatch = chosenParent != null && chosenParent.default_envelop_id !== envelopId;
+
+    const inheritedPriority = useMemo(() => {
+        const seen = new Set<string>();
+        let cur = parentId ? byId.get(parentId) : null;
+        while (cur && !seen.has(cur.id)) {
+            seen.add(cur.id);
+            if (cur.priority) return cur.priority;
+            cur = cur.parent_id ? byId.get(cur.parent_id) : null;
+        }
+        return null;
+    }, [parentId, byId]);
+
+    const lastUsed = formatLastUsed(node.last_used);
+    const hasKids = node.children.length > 0;
+
+    return (
+        <div className="ct-insp">
+            <OrbitFormStyles />
+
+            {/* Header */}
+            <div className="ct-insp-head">
+                <EntityAvatar size="lg" color={color} icon={icon} />
+                <div className="ct-insp-head-text">
+                    {breadcrumb.length > 0 && (
+                        <span className="ct-insp-crumbs">
+                            {breadcrumb.map((a) => (
+                                <button
+                                    key={a.id}
+                                    type="button"
+                                    className="ct-insp-crumb"
+                                    onClick={() => onSelect(a.id)}
+                                >
+                                    {a.name}
+                                    <ChevronRight className="size-2.5" />
+                                </button>
+                            ))}
+                        </span>
+                    )}
+                    <span className="ct-insp-name">{name.trim() || node.name}</span>
+                    <span className="ct-insp-usage tabular">
+                        {node.tx_count > 0
+                            ? `${node.tx_count.toLocaleString("en-US")} transaction${node.tx_count === 1 ? "" : "s"}${lastUsed ? ` · last used ${lastUsed}` : ""}`
+                            : "Never used"}
+                    </span>
+                </div>
+                <button
+                    type="button"
+                    className="ct-tool-btn ct-insp-close"
+                    onClick={onClose}
+                    aria-label="Close details"
+                >
+                    <X className="size-3.5" />
+                </button>
+            </div>
+
+            {!isOwner ? (
+                /* Read-only view for editors/viewers */
+                <div className="ct-insp-body">
+                    <ReadOnlyRow label="Priority">
+                        {node.priority ? (
+                            <PriorityChipStatic priority={node.priority} />
+                        ) : inheritedPriority ? (
+                            <PriorityChipStatic priority={inheritedPriority} inherited />
+                        ) : (
+                            <span className="ct-dim">None</span>
+                        )}
+                    </ReadOnlyRow>
+                    <ReadOnlyRow label="Default envelope">
+                        {currentEnvelope ? (
+                            <span className="ct-ro-entity">
+                                <EntityAvatar
+                                    size="sm"
+                                    color={currentEnvelope.color}
+                                    icon={currentEnvelope.icon}
+                                />
+                                {currentEnvelope.name}
+                            </span>
+                        ) : (
+                            <span className="ct-dim">—</span>
+                        )}
+                    </ReadOnlyRow>
+                    <ReadOnlyRow label="Parent">
+                        {chosenParent ? (
+                            chosenParent.name
+                        ) : (
+                            <span className="ct-dim">Top level</span>
+                        )}
+                    </ReadOnlyRow>
+                    <ChildrenSection node={node} onSelect={onSelect} />
+                </div>
+            ) : (
+                <>
+                    <div className="ct-insp-body">
+                        <OrbitField label="Name" required>
+                            <OrbitInput
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                maxLength={255}
+                                required
+                                placeholder="Category name"
+                            />
+                        </OrbitField>
+
+                        {/* interactiveHint renders a div, not a label — a <label> around a
+    button group forwards label-text clicks to the first button. */}
+                        <OrbitField label="Style" interactiveHint>
+                            <div className="ct-insp-style-row">
+                                <ColorPickerButton value={color} onChange={setColor} />
+                                <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                            </div>
+                        </OrbitField>
+
+                        <OrbitField
+                            label="Priority"
+                            interactiveHint
+                            hint={
+                                priority === "" && inheritedPriority
+                                    ? `Inheriting ${PRIORITIES[inheritedPriority].label} from parent`
+                                    : "Descendants inherit unless they override"
+                            }
+                        >
+                            <div className="ct-pri-choices" role="group" aria-label="Priority">
+                                <button
+                                    type="button"
+                                    aria-pressed={priority === ""}
+                                    className={`ct-pri-choice ${priority === "" ? "is-active" : ""}`}
+                                    onClick={() => setPriority("")}
+                                >
+                                    None
+                                </button>
+                                {PRIORITY_KEYS.map((p) => (
+                                    <button
+                                        key={p}
+                                        type="button"
+                                        aria-pressed={priority === p}
+                                        className={`ct-pri-choice ${priority === p ? "is-active" : ""}`}
+                                        style={
+                                            priority === p
+                                                ? {
+                                                      color: PRIORITIES[p].color,
+                                                      borderColor: `color-mix(in oklab, ${PRIORITIES[p].color} 45%, transparent)`,
+                                                      background: `color-mix(in oklab, ${PRIORITIES[p].color} 10%, transparent)`,
+                                                  }
+                                                : undefined
+                                        }
+                                        title={PRIORITIES[p].desc}
+                                    >
+                                        <span
+                                            className="ct-pri-dot"
+                                            style={{ background: PRIORITIES[p].color }}
+                                        />
+                                        {PRIORITIES[p].label}
+                                    </button>
+                                ))}
+                            </div>
+                        </OrbitField>
+
+                        <OrbitField
+                            label="Default envelope"
+                            hint="New transactions on this category default here"
+                        >
+                            <OrbitSelect
+                                value={envelopId}
+                                onValueChange={setEnvelopId}
+                                items={envelopeItems}
+                                placeholder="Choose envelope"
+                                leadIcon={<Layers className="size-3.5" />}
+                                leadColor="var(--ent-2)"
+                            />
+                        </OrbitField>
+
+                        <OrbitField
+                            label="Parent"
+                            hint="You can also drag rows in the tree to re-nest"
+                        >
+                            <CategoryTreeSelect
+                                categories={parentCandidates}
+                                value={parentId}
+                                onChange={(v) => setParentId(v)}
+                                placeholder="(top level — no parent)"
+                                allowAll
+                            />
+                        </OrbitField>
+
+                        {envelopeMismatch && (
+                            <OrbitInfoPill tone="gold">
+                                The parent defaults to a different envelope. That's allowed — this
+                                category keeps its own default.
+                            </OrbitInfoPill>
+                        )}
+
+                        <ChildrenSection node={node} onSelect={onSelect} onAddChild={onAddChild} />
+
+                        {/* Danger zone */}
+                        <div className="ct-danger">
+                            <div className="ct-danger-text">
+                                <span className="ct-danger-title">Delete category</span>
+                                <span className="ct-danger-sub">
+                                    {hasKids
+                                        ? `Move or delete its ${node.children.length} subcategor${node.children.length === 1 ? "y" : "ies"} first.`
+                                        : node.tx_count > 0
+                                          ? `Blocked — ${node.tx_count.toLocaleString("en-US")} transaction${node.tx_count === 1 ? "" : "s"} reference it. Rename or re-nest it instead.`
+                                          : "Never used — safe to delete."}
+                                </span>
+                            </div>
+                            <button
+                                type="button"
+                                className="ct-danger-btn"
+                                disabled={hasKids || node.tx_count > 0 || del.isPending}
+                                onClick={() => setDeleteOpen(true)}
+                            >
+                                <Trash2 className="size-3.5" />
+                                Delete
+                            </button>
                         </div>
                     </div>
-                    <PriorityBar totals={totals} />
-                    <div className="ca-priority-grid">
-                        {(Object.keys(PRIORITIES) as Priority[]).map((p) => {
-                            const v = totals.byPriority[p];
-                            const pct = totals.total > 0 ? (v / totals.total) * 100 : 0;
-                            return (
-                                <div key={p} className="ca-priority-cell">
-                                    <PriorityBadge priority={p} />
-                                    <span
-                                        className="tabular ca-priority-amt"
-                                        style={{ color: "var(--fg)" }}
-                                    >
-                                        {v.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                        })}
-                                    </span>
-                                    <span className="ca-priority-pct">
-                                        {pct.toFixed(0)}% of spend
-                                    </span>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
 
-function PriorityBar({
-    totals,
-}: {
-    totals: { byPriority: Record<Priority, number>; total: number };
-}) {
-    if (totals.total === 0) {
-        return <div className="ca-priority-bar empty" />;
-    }
-    return (
-        <div className="ca-priority-bar">
-            {(Object.keys(PRIORITIES) as Priority[]).map((p) => {
-                const v = totals.byPriority[p];
-                const pct = (v / totals.total) * 100;
-                if (pct <= 0) return null;
-                return (
-                    <span
-                        key={p}
-                        style={{
-                            width: `${pct}%`,
-                            background: PRIORITIES[p].color,
-                        }}
+                    {/* Sticky save bar */}
+                    {dirty && (
+                        <div className="ct-savebar">
+                            <span className="ct-savebar-label">Unsaved changes</span>
+                            <button
+                                type="button"
+                                className="od-btn od-btn-sm"
+                                onClick={discard}
+                                disabled={saving}
+                            >
+                                Discard
+                            </button>
+                            <button
+                                type="button"
+                                className="od-btn od-btn-sm od-btn-primary"
+                                onClick={save}
+                                disabled={!name.trim() || saving}
+                            >
+                                {saving ? "Saving…" : "Save"}
+                            </button>
+                        </div>
+                    )}
+
+                    <ConfirmDialog
+                        open={deleteOpen}
+                        onOpenChange={setDeleteOpen}
+                        title={`Delete "${node.name}"?`}
+                        description="This category has never been used. This can't be undone."
+                        confirmLabel="Delete"
+                        destructive
+                        onConfirm={() => del.mutate({ categoryId: node.id })}
                     />
-                );
-            })}
+                </>
+            )}
         </div>
     );
 }
 
-function PriorityBadge({
+function ReadOnlyRow({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div className="ct-ro-row">
+            <span className="ct-ro-label">{label}</span>
+            <span className="ct-ro-value">{children}</span>
+        </div>
+    );
+}
+
+function PriorityChipStatic({
     priority,
     inherited = false,
 }: {
@@ -459,554 +1508,157 @@ function PriorityBadge({
     const m = PRIORITIES[priority];
     return (
         <span
-            className="ca-pri-badge"
+            className="ct-pri-chip"
             style={{
                 color: m.color,
-                borderColor: `color-mix(in oklab, ${m.color} ${
-                    inherited ? 18 : 30
-                }%, transparent)`,
-                background: `color-mix(in oklab, ${m.color} ${
-                    inherited ? 6 : 10
-                }%, transparent)`,
-                fontStyle: inherited ? "italic" : "normal",
-                opacity: inherited ? 0.78 : 1,
+                borderColor: `color-mix(in oklab, ${m.color} ${inherited ? 18 : 32}%, transparent)`,
+                background: `color-mix(in oklab, ${m.color} ${inherited ? 6 : 10}%, transparent)`,
+                opacity: inherited ? 0.8 : 1,
             }}
         >
-            <span
-                className="ca-pri-dot"
-                style={{
-                    background: m.color,
-                    opacity: inherited ? 0.55 : 1,
-                }}
-            />
+            <span className="ct-pri-dot" style={{ background: m.color }} />
             {m.label}
-            {inherited && <span className="ca-pri-inh">· inh.</span>}
+            {inherited && <span className="ct-dim"> · inherited</span>}
         </span>
     );
 }
 
-function CategoryRow({
+function ChildrenSection({
     node,
-    depth,
-    inheritedPriority,
-    parentColor,
-    parentIcon,
-    isLast,
-    envelopes,
-    allCategories,
-    prevNodeById,
+    onSelect,
+    onAddChild,
 }: {
     node: CategoryNode;
-    depth: number;
-    inheritedPriority: Priority | null;
-    parentColor: string;
-    parentIcon: string;
-    isLast: boolean;
-    envelopes: EnvelopeLite[];
-    allCategories: CategoryUsage[];
-    prevNodeById: Map<string, CategoryNode>;
+    onSelect: (id: string) => void;
+    onAddChild?: () => void;
 }) {
-    const [open, setOpen] = useState(depth < 2);
-    const hasKids = node.children.length > 0;
-    const effective = node.priority ?? inheritedPriority;
-    const ownPriority = !!node.priority;
-    const c = node.color || parentColor;
-    const i = node.icon || parentIcon;
-    const indent = 18 + depth * 24;
-    // Match the cell's display rule (line below): depth=0 shows subtree
-    // total, deeper rows show leaf-only. Trend must compare the same
-    // level on both sides — otherwise a $0-direct parent always reads 0%.
-    const useSubtree = depth === 0;
-    const cur = useSubtree ? node.subtree_spent : node.spent_total;
-    const prevNode = prevNodeById.get(node.id);
-    const prev = prevNode
-        ? useSubtree
-            ? prevNode.subtree_spent
-            : prevNode.spent_total
-        : 0;
-    const trend =
-        prev > 0 ? ((cur - prev) / prev) * 100 : cur > 0 ? Infinity : 0;
-    const trendUp = trend > 0;
-
     return (
-        <>
-            <div
-                className={`ca-row ${depth === 0 ? "is-root" : ""}`}
-                style={{
-                    paddingLeft: indent,
-                    borderBottom:
-                        isLast && !open ? "none" : "1px solid var(--line-soft)",
-                    fontSize: depth === 0 ? 13.5 : 12.5,
-                    background: depth === 0 ? "var(--bg-elev-1)" : "transparent",
-                    color: depth === 0 ? "var(--fg)" : "var(--fg-2)",
-                    fontWeight: depth === 0 ? 500 : 400,
-                }}
-            >
-                <span className="ca-cell-name">
-                    {hasKids ? (
-                        <button
-                            type="button"
-                            onClick={() => setOpen((o) => !o)}
-                            className="ca-toggle"
-                            aria-label={open ? "Collapse" : "Expand"}
-                        >
-                            {open ? (
-                                <ChevronDown className="size-3" />
-                            ) : (
-                                <ChevronRight className="size-3" />
-                            )}
-                        </button>
-                    ) : (
-                        <span className="ca-toggle ca-toggle-placeholder">
-                            <span
-                                style={{
-                                    width: 4,
-                                    height: 4,
-                                    borderRadius: 99,
-                                    background: c,
-                                    opacity: 0.5,
-                                }}
-                            />
-                        </span>
-                    )}
-                    {depth === 0 ? (
-                        <Avatar icon={i} color={c} size={26} />
-                    ) : (
-                        <span
-                            className="ca-tree-line"
-                            style={{
-                                borderLeft: "1px solid var(--line)",
-                                borderBottom: "1px solid var(--line)",
-                            }}
-                        />
-                    )}
-                    <span className="ca-cell-label">{node.name}</span>
-                    {hasKids && depth === 0 && (
-                        <span className="ca-count-chip">
-                            {node.children.length +
-                                node.children.reduce(
-                                    (s, k) =>
-                                        s +
-                                        countDescendants(k as unknown as CategoryNode),
-                                    0
-                                )}
-                        </span>
-                    )}
-                    {hasKids && depth > 0 && (
-                        <span className="ca-tree-count">
-                            · {node.children.length}
-                        </span>
-                    )}
+        <div className="ct-children">
+            <div className="ct-children-head">
+                <span className="eyebrow">
+                    Subcategories{node.children.length > 0 ? ` · ${node.children.length}` : ""}
                 </span>
-                <span className="ca-cell-priority">
-                    {effective ? (
-                        <PriorityBadge
-                            priority={effective}
-                            inherited={!ownPriority}
-                        />
-                    ) : (
-                        <span style={{ color: "var(--fg-4)" }}>—</span>
-                    )}
-                </span>
-                <span className="ca-cell-amt tabular">
-                    {(depth === 0 ? node.subtree_spent : node.spent_total).toLocaleString(
-                        "en-US",
-                        {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                        }
-                    )}
-                </span>
-                <span className="ca-cell-amt tabular" style={{ color: "var(--fg-4)" }}>
-                    {(depth === 0
-                        ? node.subtree_tx_count
-                        : node.tx_count
-                    ).toLocaleString("en-US")}
-                </span>
-                <span className="ca-cell-trend">
-                    {Number.isFinite(trend) && trend !== 0 ? (
-                        <>
-                            <Sparkline color={c} />
-                            <span
-                                style={{
-                                    fontSize: 11,
-                                    color: trendUp
-                                        ? "var(--expense)"
-                                        : "var(--income)",
-                                }}
-                            >
-                                {trendUp ? "+" : "−"}
-                                {Math.abs(trend).toFixed(0)}%
-                            </span>
-                        </>
-                    ) : (
-                        <span style={{ color: "var(--fg-4)", fontSize: 11 }}>
-                            {trend === 0 ? "0%" : "new"}
-                        </span>
-                    )}
-                    <PermissionGate roles={["owner"]}>
-                        <CategoryRowActions
-                            node={node}
-                            envelopes={envelopes}
-                            allCategories={allCategories}
-                        />
-                    </PermissionGate>
-                </span>
+                {onAddChild && (
+                    <button type="button" className="ct-children-add" onClick={onAddChild}>
+                        <Plus className="size-3" /> Add
+                    </button>
+                )}
             </div>
-            {open &&
-                hasKids &&
-                node.children.map((k, idx) => (
-                    <CategoryRow
-                        key={k.id}
-                        node={k}
-                        depth={depth + 1}
-                        inheritedPriority={effective}
-                        parentColor={c}
-                        parentIcon={i}
-                        isLast={idx === node.children.length - 1 && isLast}
-                        envelopes={envelopes}
-                        allCategories={allCategories}
-                        prevNodeById={prevNodeById}
-                    />
-                ))}
-        </>
-    );
-}
-
-function countDescendants(n: CategoryNode): number {
-    return (
-        n.children.length +
-        n.children.reduce((s, k) => s + countDescendants(k), 0)
-    );
-}
-
-function Sparkline({ color }: { color: string }) {
-    return (
-        <svg width="60" height="16" viewBox="0 0 60 16" style={{ display: "block" }}>
-            <path
-                d="M2 10 L10 7 L18 9 L28 5 L38 8 L48 4 L58 6"
-                fill="none"
-                stroke={color}
-                strokeWidth="1.4"
-                strokeLinejoin="round"
-                strokeLinecap="round"
-            />
-        </svg>
-    );
-}
-
-function Avatar({
-    icon,
-    color,
-    size = 26,
-}: {
-    icon: string;
-    color: string;
-    size?: number;
-}) {
-    return (
-        <span
-            style={{
-                width: size,
-                height: size,
-                borderRadius: 8,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: `color-mix(in oklab, ${color} 18%, transparent)`,
-                border: `1px solid color-mix(in oklab, ${color} 30%, transparent)`,
-                color,
-                flexShrink: 0,
-            }}
-        >
-            <DesignIcon name={icon} size={size * 0.5} color={color} />
-        </span>
-    );
-}
-
-const ICON_PATHS: Record<string, string> = {
-    home: "M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z",
-    cart: "M3 4h2l3 12h11l2-8H7M9 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm9 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
-    car: "M5 13l1.5-4.5A2 2 0 0 1 8.4 7h7.2a2 2 0 0 1 1.9 1.5L19 13m-14 0v5h2v-2h10v2h2v-5m-14 0h14",
-    book: "M4 4h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3zM4 17a3 3 0 0 1 3-3h11",
-    heart: "M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z",
-    star: "m12 3 2.7 5.6 6 .7-4.4 4.3 1.2 6.1L12 16.8 6.5 19.7l1.2-6.1L3.3 9.3l6-.7z",
-    bolt: "M13 2 3 14h7l-1 8 10-12h-7z",
-    coffee:
-        "M5 8h12v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4zm12 1h2a2 2 0 1 1 0 4h-2zM7 4v2M11 4v2M15 4v2",
-    folder: "M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z",
-    flame: "M12 22s7-4 7-10c0-3-2-5-3-6 0 2-1 3-2 3-1-3-3-5-3-7-2 1-6 5-6 10 0 6 7 10 7 10z",
-    music: "M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm11-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3z",
-    camera: "M3 8h4l2-3h6l2 3h4v11H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
-    dot: "M12 12h.01",
-};
-
-function DesignIcon({
-    name,
-    size,
-    color,
-}: {
-    name: string;
-    size: number;
-    color: string;
-}) {
-    const d = ICON_PATHS[name] ?? ICON_PATHS.folder;
-    return (
-        <svg
-            width={size}
-            height={size}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke={color}
-            strokeWidth={1.7}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-        >
-            <path d={d} />
-        </svg>
-    );
-}
-
-function PeriodPicker({
-    preset,
-    period,
-    onCustomChange,
-}: {
-    preset: string;
-    period: { start: Date; end: Date };
-    onPresetChange: (p: any) => void;
-    onCustomChange: (start: Date, end: Date) => void;
-}) {
-    const [open, setOpen] = useState(false);
-    const found = PERIOD_PRESETS.find((p) => p.value === preset);
-    const label = found?.label ?? "Custom";
-    void resolvePeriod;
-    return (
-        <Popover open={open} onOpenChange={setOpen}>
-            <PopoverTrigger asChild>
-                <button type="button" className="od-btn">
-                    <FilterIcon className="size-3.5" /> {label}
-                    <ChevronDown
-                        className="size-3"
-                        style={{ color: "var(--fg-4)" }}
-                    />
-                </button>
-            </PopoverTrigger>
-            <PopoverContent
-                align="end"
-                className="orbit-design p-0 border-0 bg-transparent shadow-none"
-                style={{ width: "min(640px, calc(100vw - 32px))" }}
-            >
-                <DateRangePicker
-                    start={period.start}
-                    end={period.end}
-                    onChange={() => {}}
-                    onApply={(s, e) => {
-                        onCustomChange(s, e);
-                        setOpen(false);
-                    }}
-                    onCancel={() => setOpen(false)}
-                />
-            </PopoverContent>
-        </Popover>
+            {node.children.length === 0 ? (
+                <p className="ct-children-empty">None — this is a leaf category.</p>
+            ) : (
+                <div className="ct-children-list">
+                    {node.children.map((c) => (
+                        <button
+                            key={c.id}
+                            type="button"
+                            className="ct-child-row"
+                            onClick={() => onSelect(c.id)}
+                        >
+                            <EntityAvatar size="sm" color={c.color} icon={c.icon} />
+                            <span className="ct-child-name">{c.name}</span>
+                            {c.children.length > 0 && (
+                                <span className="ct-count-chip tabular">{countDescendants(c)}</span>
+                            )}
+                            <ChevronRight className="size-3 ct-child-arrow" />
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
     );
 }
 
 /* ============================================================
-   Dialogs (preserved)
+   Create panel — lives in the same right-hand pane as the inspector
    ============================================================ */
 
-function CategoryRowActions({
-    node,
-    envelopes,
+function CreatePanel({
+    parentId: initialParentId,
+    byId,
     allCategories,
-}: {
-    node: CategoryNode;
-    envelopes: EnvelopeLite[];
-    allCategories: CategoryUsage[];
-}) {
-    const { space } = useCurrentSpace();
-    const invalidate = useInvalidateAnalytics();
-    const [editOpen, setEditOpen] = useState(false);
-    const [reparentOpen, setReparentOpen] = useState(false);
-    const [envelopeOpen, setEnvelopeOpen] = useState(false);
-    const [deleteOpen, setDeleteOpen] = useState(false);
-    const del = trpc.expenseCategory.delete.useMutation({
-        onSuccess: async () => {
-            toast.success("Category deleted");
-            await invalidate(space.id);
-        },
-        onError: (e) => toast.error(e.message),
-    });
-
-    return (
-        <>
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 shrink-0 opacity-60 hover:opacity-100"
-                        aria-label="Category actions"
-                    >
-                        <MoreHorizontal className="size-3.5" />
-                    </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                    <DropdownMenuItem
-                        onSelect={(e) => {
-                            e.preventDefault();
-                            setEditOpen(true);
-                        }}
-                    >
-                        <Pencil />
-                        Edit details
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                        onSelect={(e) => {
-                            e.preventDefault();
-                            setReparentOpen(true);
-                        }}
-                    >
-                        <FolderInput />
-                        Change parent
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                        onSelect={(e) => {
-                            e.preventDefault();
-                            setEnvelopeOpen(true);
-                        }}
-                    >
-                        <Move />
-                        Move to envelope
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                        variant="destructive"
-                        onSelect={(e) => {
-                            e.preventDefault();
-                            setDeleteOpen(true);
-                        }}
-                    >
-                        <Trash2 />
-                        Delete
-                    </DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>
-
-            <EditCategoryDialog
-                category={node}
-                open={editOpen}
-                onOpenChange={setEditOpen}
-            />
-            <ChangeParentDialog
-                category={node}
-                allCategories={allCategories}
-                open={reparentOpen}
-                onOpenChange={setReparentOpen}
-            />
-            <MoveEnvelopDialog
-                category={node}
-                envelopes={envelopes}
-                hasChildren={node.children.length > 0}
-                open={envelopeOpen}
-                onOpenChange={setEnvelopeOpen}
-            />
-            <ConfirmDialog
-                open={deleteOpen}
-                onOpenChange={setDeleteOpen}
-                title={`Delete "${node.name}"?`}
-                description={
-                    node.children.length > 0
-                        ? "This category has sub-categories. They must be deleted or reparented first."
-                        : "Transactions using this category will keep it referenced."
-                }
-                confirmLabel="Delete"
-                destructive
-                onConfirm={() => del.mutate({ categoryId: node.id })}
-            />
-        </>
-    );
-}
-
-function CreateCategoryDialog({
     envelopes,
-    categories,
-    trigger,
-    defaultEnvelopeId,
+    onCancel,
+    onCreated,
 }: {
+    parentId: string | null;
+    byId: Map<string, CategoryNode>;
+    allCategories: CategoryUsage[];
     envelopes: EnvelopeLite[];
-    categories: CategoryUsage[];
-    trigger?: React.ReactNode;
-    defaultEnvelopeId?: string;
+    onCancel: () => void;
+    onCreated: (id: string, parentId: string | null) => void;
 }) {
     const { space } = useCurrentSpace();
-    const [open, setOpen] = useState(false);
     const [name, setName] = useState("");
-    const [envelopId, setEnvelopId] = useState(defaultEnvelopeId ?? "");
-    const [parentId, setParentId] = useState("");
+    const [envelopId, setEnvelopId] = useState("");
+    const [parentId, setParentId] = useState<string | null>(initialParentId);
     const [color, setColor] = useState<string>(DEFAULT_COLOR);
     const [icon, setIcon] = useState("folder");
     const [priority, setPriority] = useState<Priority | "">("");
-    const [notes, setNotes] = useState("");
     const invalidate = useInvalidateAnalytics();
     const idem = useIdempotencyKey();
+
     const create = trpc.expenseCategory.create.useMutation({
-        onSuccess: async () => {
+        onSuccess: async (created) => {
             toast.success("Category created");
             idem.rotate();
             await invalidate(space.id);
-            setName("");
-            setEnvelopId(defaultEnvelopeId ?? "");
-            setParentId("");
-            setColor(DEFAULT_COLOR);
-            setIcon("folder");
-            setPriority("");
-            setNotes("");
-            setOpen(false);
+            if (created?.id) onCreated(created.id, created.parent_id ?? null);
         },
         onError: (e) => toast.error(e.message),
     });
 
-    const parentCategory = parentId ? categories.find((c) => c.id === parentId) : null;
-    // Server rejects archived envelopes; filter them out of the picker
-    // so the user can't pick one to begin with.
-    const activeEnvelopes = useMemo(
-        () => envelopes.filter((e) => !e.archived),
-        [envelopes]
-    );
+    const parentCategory = parentId ? (byId.get(parentId) ?? null) : null;
+    // Server rejects archived envelopes; don't offer them.
+    const activeEnvelopes = useMemo(() => envelopes.filter((e) => !e.archived), [envelopes]);
     const parentEnvelope = parentCategory
-        ? activeEnvelopes.find((e) => e.id === parentCategory.default_envelop_id)
+        ? (activeEnvelopes.find((e) => e.id === parentCategory.default_envelop_id) ?? null)
         : null;
-    // Pre-fill the envelope when a parent is selected (acting as a sensible
-    // default), but keep the field editable — the user can override. If
-    // the parent's default points at an archived envelope, leave the field
-    // empty so the user explicitly picks an active one.
+    // Follow the parent's envelope as a default; stays user-overridable.
+    // Keyed by parent *id* — object identities churn on every background
+    // refetch, and re-running then would clobber a manual envelope choice.
+    const prefilledForParent = useRef<string | null | undefined>(undefined);
     useEffect(() => {
-        if (!parentCategory) return;
+        // Don't lock in a prefill decision before the envelope list has
+        // loaded — that would permanently skip the parent's default.
+        if (envelopes.length === 0) return;
+        if (prefilledForParent.current === parentId) return;
+        prefilledForParent.current = parentId;
         if (parentEnvelope) setEnvelopId(parentEnvelope.id);
-        else setEnvelopId("");
-    }, [parentCategory, parentEnvelope]);
-    const envelopeInheritedFromParent =
-        parentEnvelope != null && envelopId === parentEnvelope.id;
+        else if (parentCategory) setEnvelopId("");
+    }, [envelopes.length, parentId, parentCategory, parentEnvelope]);
+
+    const breadcrumb = useMemo(() => {
+        if (!parentId) return [];
+        const chain = ancestorIds(parentId, byId)
+            .reverse()
+            .map((id) => byId.get(id)!);
+        const parent = byId.get(parentId);
+        return parent ? [...chain, parent] : chain;
+    }, [parentId, byId]);
+
+    const inheritedPriority = useMemo(() => {
+        const seen = new Set<string>();
+        let cur = parentId ? byId.get(parentId) : null;
+        while (cur && !seen.has(cur.id)) {
+            seen.add(cur.id);
+            if (cur.priority) return cur.priority;
+            cur = cur.parent_id ? byId.get(cur.parent_id) : null;
+        }
+        return null;
+    }, [parentId, byId]);
 
     const submit = () => {
-        if (create.isPending) return;
-        if (!name.trim()) return;
+        if (create.isPending || !name.trim()) return;
         if (!envelopId) {
             toast.error("Pick an envelope");
-            return;
-        }
-        if (activeEnvelopes.length === 0) {
-            toast.error("Create an envelope first");
             return;
         }
         create.mutate({
             spaceId: space.id,
             name: name.trim(),
             envelopId,
-            parentId: parentId || undefined,
+            parentId: parentId ?? undefined,
             color,
             icon,
             priority: priority === "" ? undefined : priority,
@@ -1015,957 +1667,914 @@ function CreateCategoryDialog({
     };
 
     return (
-        <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-                {trigger ?? (
-                    <Button variant="gradient">
-                        <Plus />
-                        New category
-                    </Button>
-                )}
-            </DialogTrigger>
-            <DialogContent className="orbit-shell-host">
-                <DialogTitle className="sr-only">Create category</DialogTitle>
-                <OrbitModalShell
-                    width={620}
-                    eyebrow="Categories"
-                    title="New category"
-                    subtitle="Hierarchical labels for transactions. Priority inherits from parent unless overridden."
-                    leadIcon={<Folder className="size-4" />}
-                    leadColor={color}
-                    onClose={() => setOpen(false)}
-                    footer={
-                        <>
-                            <button
-                                type="button"
-                                className="orbit-btn"
-                                onClick={() => setOpen(false)}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className="orbit-btn orbit-btn-primary"
-                                disabled={
-                                    !name.trim() || !envelopId || create.isPending
-                                }
-                                onClick={submit}
-                            >
-                                <Plus className="size-3.5" />
-                                {create.isPending ? "Creating…" : "Create category"}
-                            </button>
-                        </>
-                    }
-                >
-                    <OrbitFormStyles />
-                    <style>{CAT_MODAL_STYLES}</style>
-                    <div className="cat-mod-grid">
-                        {/* Form column */}
-                        <div className="cat-mod-form">
-                            {/* Live preview */}
-                            <div className="cat-mod-preview">
-                                <EntityAvatar color={color} icon={icon} size="lg" />
-                                <div className="cat-mod-preview-text">
-                                    {parentCategory && (
-                                        <span className="cat-mod-breadcrumb">
-                                            {parentCategory.name}{" "}
-                                            <ChevronRight className="size-2.5" />
-                                        </span>
-                                    )}
-                                    <span className="cat-mod-name">
-                                        {name.trim() || "New category"}
-                                    </span>
-                                    {priority !== "" && (
-                                        <span
-                                            className="cat-mod-prio-chip"
-                                            style={{
-                                                color: PRIORITIES[priority as Priority].color,
-                                                borderColor: `color-mix(in oklab, ${PRIORITIES[priority as Priority].color} 30%, transparent)`,
-                                                background: `color-mix(in oklab, ${PRIORITIES[priority as Priority].color} 10%, transparent)`,
-                                            }}
-                                        >
-                                            <span
-                                                style={{
-                                                    width: 5,
-                                                    height: 5,
-                                                    borderRadius: 99,
-                                                    background:
-                                                        PRIORITIES[priority as Priority].color,
-                                                }}
-                                            />
-                                            {PRIORITIES[priority as Priority].label}
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
+        <div className="ct-insp">
+            <OrbitFormStyles />
 
-                            <OrbitField label="Name" required>
-                                <OrbitInput
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    placeholder="Groceries, Restaurants…"
-                                    required
-                                    maxLength={255}
-                                    autoFocus
-                                />
-                            </OrbitField>
-
-                            <OrbitField
-                                label="Parent"
-                                hint="Optional · controls inheritance"
-                            >
-                                <CategoryTreeSelect
-                                    categories={categories as never}
-                                    value={parentId || null}
-                                    onChange={(v) => setParentId(v ?? "")}
-                                    placeholder="(none — top level)"
-                                    allowAll={false}
-                                />
-                            </OrbitField>
-
-                            <OrbitField
-                                label="Envelope"
-                                hint={
-                                    parentCategory
-                                        ? parentEnvelope
-                                            ? envelopeInheritedFromParent
-                                                ? `Default from ${parentCategory.name} — change to override`
-                                                : "Overriding parent's default"
-                                            : `Parent's envelope is archived — pick another`
-                                        : "Required"
-                                }
-                                required
-                            >
-                                <OrbitSelect
-                                    value={envelopId}
-                                    onValueChange={setEnvelopId}
-                                    items={activeEnvelopes.map((e) => ({
-                                        value: e.id,
-                                        label: e.name,
-                                        leadIcon: <Layers className="size-3.5" />,
-                                        leadColor: e.color || "var(--ent-2)",
-                                    }))}
-                                    placeholder="Choose envelope"
-                                    leadIcon={<Layers className="size-3.5" />}
-                                    leadColor="var(--ent-2)"
-                                />
-                            </OrbitField>
-
-                            <OrbitField
-                                label="Priority"
-                                hint={
-                                    parentCategory && parentCategory.priority
-                                        ? `Inherited: ${PRIORITIES[parentCategory.priority as Priority]?.label ?? parentCategory.priority}`
-                                        : "Optional"
-                                }
-                            >
-                                <OrbitRadioRow
-                                    name="cat-priority"
-                                    value={priority || "__unset"}
-                                    onChange={(v) =>
-                                        setPriority(
-                                            v === "__unset" ? "" : (v as Priority)
-                                        )
-                                    }
-                                    options={[
-                                        ...PRIORITY_OPTIONS.map((p) => ({
-                                            value: p.value,
-                                            label: p.label,
-                                            hint:
-                                                p.value === "essential"
-                                                    ? "Must"
-                                                    : p.value === "important"
-                                                      ? "Should"
-                                                      : p.value === "discretionary"
-                                                        ? "Want"
-                                                        : "Splurge",
-                                        })),
-                                    ]}
-                                    accent="var(--brand)"
-                                />
-                            </OrbitField>
-
-                            {parentCategory && priority !== "" && (
-                                <OrbitInfoPill tone="gold">
-                                    Overriding parent's priority. Changes affect rolled-up
-                                    "Spend by priority" totals.
-                                </OrbitInfoPill>
-                            )}
-
-                            <OrbitField label="Notes" hint="Optional">
-                                <OrbitTextarea
-                                    rows={2}
-                                    value={notes}
-                                    onChange={(e) => setNotes(e.target.value)}
-                                    placeholder="What counts here? e.g. anything over 6 a cup…"
-                                />
-                            </OrbitField>
-
-                            <OrbitField label="Style">
-                                <div className="cat-mod-style-row">
-                                    <ColorPickerButton
-                                        value={color}
-                                        onChange={setColor}
-                                    />
-                                    <IconPickerButton
-                                        value={icon}
-                                        onChange={setIcon}
-                                        color={color}
-                                    />
-                                </div>
-                            </OrbitField>
-                        </div>
-                    </div>
-                </OrbitModalShell>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-const CAT_MODAL_STYLES = `
-.cat-mod-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-.cat-mod-form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.cat-mod-style-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.cat-mod-preview {
-    padding: 16px 18px;
-    background: var(--bg-elev-2);
-    border: 1px solid var(--line-soft);
-    border-radius: 14px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-.cat-mod-preview-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 0;
-}
-.cat-mod-breadcrumb {
-    font-size: 11px;
-    color: var(--fg-4);
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.cat-mod-name {
-    font-size: 16px;
-    color: var(--fg);
-    font-weight: 500;
-}
-.cat-mod-prio-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 22px;
-    padding: 0 9px;
-    border-radius: 99px;
-    border: 1px solid;
-    font-size: 11px;
-    font-weight: 500;
-    margin-top: 4px;
-    width: fit-content;
-}
-
-.cat-mod-locked {
-    height: 38px;
-    padding: 0 12px;
-    border-radius: 10px;
-    background: var(--bg-elev-1);
-    border: 1px solid var(--line);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--fg-3);
-    font-size: 12.5px;
-    opacity: 0.85;
-}
-.cat-mod-env-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 22px;
-    padding: 0 9px;
-    border-radius: 99px;
-    border: 1px solid;
-    font-size: 11px;
-    font-weight: 500;
-}
-.cat-mod-locked-hint { font-size: 11px; color: var(--fg-4); }
-.cat-mod-locked-hint em { font-style: normal; color: var(--fg-3); }
-`;
-
-function EditCategoryDialog({
-    category,
-    open,
-    onOpenChange,
-}: {
-    category: CategoryUsage;
-    open: boolean;
-    onOpenChange: (v: boolean) => void;
-}) {
-    const { space } = useCurrentSpace();
-    const [name, setName] = useState(category.name);
-    const [color, setColor] = useState(category.color);
-    const [icon, setIcon] = useState(category.icon);
-    const [priority, setPriority] = useState<Priority | "">(
-        category.priority ?? ""
-    );
-    const invalidate = useInvalidateAnalytics();
-    const update = trpc.expenseCategory.update.useMutation({
-        onSuccess: async () => {
-            toast.success("Category updated");
-            await invalidate(space.id);
-            onOpenChange(false);
-        },
-        onError: (e) => toast.error(e.message),
-    });
-    const submit = () => {
-        update.mutate({
-            categoryId: category.id,
-            name: name.trim(),
-            color,
-            icon,
-            priority: priority === "" ? null : priority,
-        });
-    };
-    return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="orbit-shell-host">
-                <DialogTitle className="sr-only">Edit category</DialogTitle>
-                <OrbitModalShell
-                    width={560}
-                    eyebrow="Categories"
-                    title="Edit category"
-                    subtitle="Rename, restyle, or override the inherited priority."
-                    leadIcon={<Folder className="size-4" />}
-                    leadColor={color}
-                    onClose={() => onOpenChange(false)}
-                    footer={
-                        <>
-                            <button
-                                type="button"
-                                className="orbit-btn"
-                                onClick={() => onOpenChange(false)}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className="orbit-btn orbit-btn-primary"
-                                disabled={!name.trim() || update.isPending}
-                                onClick={submit}
-                            >
-                                <Check className="size-3.5" />
-                                {update.isPending ? "Saving…" : "Save"}
-                            </button>
-                        </>
-                    }
-                >
-                    <OrbitFormStyles />
-                    <style>{CAT_MODAL_STYLES}</style>
-                    <div className="cat-mod-grid">
-                        <div className="cat-mod-form">
-                            <div className="cat-mod-preview">
-                                <EntityAvatar color={color} icon={icon} size="lg" />
-                                <div className="cat-mod-preview-text">
-                                    <span className="cat-mod-name">
-                                        {name.trim() || category.name}
-                                    </span>
-                                    {priority !== "" && (
-                                        <span
-                                            className="cat-mod-prio-chip"
-                                            style={{
-                                                color: PRIORITIES[priority as Priority].color,
-                                                borderColor: `color-mix(in oklab, ${PRIORITIES[priority as Priority].color} 30%, transparent)`,
-                                                background: `color-mix(in oklab, ${PRIORITIES[priority as Priority].color} 10%, transparent)`,
-                                            }}
-                                        >
-                                            <span
-                                                style={{
-                                                    width: 5,
-                                                    height: 5,
-                                                    borderRadius: 99,
-                                                    background:
-                                                        PRIORITIES[priority as Priority].color,
-                                                }}
-                                            />
-                                            {PRIORITIES[priority as Priority].label}
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
-
-                            <OrbitField label="Name" required>
-                                <OrbitInput
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    maxLength={255}
-                                    required
-                                />
-                            </OrbitField>
-                            <OrbitField label="Priority" hint="Optional">
-                                <OrbitRadioRow
-                                    name="cat-edit-priority"
-                                    value={priority || "__unset"}
-                                    onChange={(v) =>
-                                        setPriority(
-                                            v === "__unset" ? "" : (v as Priority)
-                                        )
-                                    }
-                                    options={PRIORITY_OPTIONS.map((p) => ({
-                                        value: p.value,
-                                        label: p.label,
-                                        hint:
-                                            p.value === "essential"
-                                                ? "Must"
-                                                : p.value === "important"
-                                                  ? "Should"
-                                                  : p.value === "discretionary"
-                                                    ? "Want"
-                                                    : "Splurge",
-                                    }))}
-                                />
-                            </OrbitField>
-
-                            <OrbitField label="Style">
-                                <div className="cat-mod-style-row">
-                                    <ColorPickerButton
-                                        value={color}
-                                        onChange={setColor}
-                                    />
-                                    <IconPickerButton
-                                        value={icon}
-                                        onChange={setIcon}
-                                        color={color}
-                                    />
-                                </div>
-                            </OrbitField>
-                        </div>
-                    </div>
-                </OrbitModalShell>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-function ChangeParentDialog({
-    category,
-    allCategories,
-    open,
-    onOpenChange,
-}: {
-    category: CategoryUsage;
-    allCategories: CategoryUsage[];
-    open: boolean;
-    onOpenChange: (v: boolean) => void;
-}) {
-    const { space } = useCurrentSpace();
-    const [parentId, setParentId] = useState<string>(category.parent_id ?? "none");
-    const invalidate = useInvalidateAnalytics();
-    const mutate = trpc.expenseCategory.changeParent.useMutation({
-        onSuccess: async () => {
-            toast.success("Parent updated");
-            await invalidate(space.id);
-            onOpenChange(false);
-        },
-        onError: (e) => toast.error(e.message),
-    });
-
-    const invalidIds = useMemo(() => {
-        const children = new Map<string, string[]>();
-        for (const c of allCategories) {
-            if (c.parent_id) {
-                const arr = children.get(c.parent_id) ?? [];
-                arr.push(c.id);
-                children.set(c.parent_id, arr);
-            }
-        }
-        const forbidden = new Set<string>([category.id]);
-        const stack = [category.id];
-        while (stack.length) {
-            const id = stack.pop()!;
-            for (const c of children.get(id) ?? []) {
-                if (!forbidden.has(c)) {
-                    forbidden.add(c);
-                    stack.push(c);
-                }
-            }
-        }
-        return forbidden;
-    }, [allCategories, category.id]);
-
-    const candidates = allCategories.filter((c) => !invalidIds.has(c.id));
-    const candidate = candidates.find((c) => c.id === parentId);
-    const envelopeMismatch =
-        candidate != null &&
-        candidate.default_envelop_id !== category.default_envelop_id;
-    const unchanged = (category.parent_id ?? "none") === parentId;
-
-    return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                    <DialogTitle>Move "{category.name}" under a different parent</DialogTitle>
-                    <DialogDescription>
-                        Pick a new parent category, or "(top level)" to un-nest it. You
-                        can't pick the category itself or any of its descendants.
-                    </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-2">
-                    <Label>Parent</Label>
-                    <CategoryTreeSelect
-                        categories={candidates as never}
-                        value={parentId === "none" ? null : parentId}
-                        onChange={(v) => setParentId(v ?? "none")}
-                        placeholder="(top level — no parent)"
-                        allowAll={false}
-                    />
-                    {envelopeMismatch && (
-                        <p className="text-xs text-[color:var(--warning)]">
-                            Heads up: the new parent belongs to a different envelope.
-                        </p>
-                    )}
-                </div>
-                <DialogFooter className="gap-2">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => onOpenChange(false)}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="gradient"
-                        disabled={mutate.isPending || unchanged}
-                        onClick={() =>
-                            mutate.mutate({
-                                categoryId: category.id,
-                                parentId: parentId === "none" ? null : parentId,
-                            })
-                        }
-                    >
-                        {mutate.isPending ? "Saving…" : "Save"}
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-function MoveEnvelopDialog({
-    category,
-    envelopes,
-    open,
-    onOpenChange,
-}: {
-    category: CategoryUsage;
-    envelopes: EnvelopeLite[];
-    hasChildren: boolean;
-    open: boolean;
-    onOpenChange: (v: boolean) => void;
-}) {
-    const { space } = useCurrentSpace();
-    const [envelopId, setEnvelopId] = useState(category.default_envelop_id);
-    const invalidate = useInvalidateAnalytics();
-    const mutate = trpc.expenseCategory.update.useMutation({
-        onSuccess: async () => {
-            toast.success("Default envelope updated");
-            await invalidate(space.id);
-            onOpenChange(false);
-        },
-        onError: (e) => toast.error(e.message),
-    });
-    return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-md">
-                <DialogHeader>
-                    <DialogTitle>
-                        Change default envelope for "{category.name}"
-                    </DialogTitle>
-                    <DialogDescription>
-                        New transactions on this category will default to the
-                        chosen envelope. Past transactions keep their existing
-                        envelope assignment.
-                    </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-2">
-                    <Label>Default envelope</Label>
-                    <Select value={envelopId} onValueChange={setEnvelopId}>
-                        <SelectTrigger>
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {envelopes.map((e) => (
-                                <SelectItem key={e.id} value={e.id}>
-                                    {e.name}
-                                </SelectItem>
+            {/* Header — live preview of the category being built */}
+            <div className="ct-insp-head">
+                <EntityAvatar size="lg" color={color} icon={icon} />
+                <div className="ct-insp-head-text">
+                    {breadcrumb.length > 0 && (
+                        <span className="ct-insp-crumbs" aria-label="Will be nested under">
+                            {breadcrumb.map((a) => (
+                                <span key={a.id} className="ct-insp-crumb as-static">
+                                    {a.name}
+                                    <ChevronRight className="size-2.5" />
+                                </span>
                             ))}
-                        </SelectContent>
-                    </Select>
+                        </span>
+                    )}
+                    <span className="ct-insp-name">{name.trim() || "New category"}</span>
+                    <span className="ct-insp-usage">
+                        {parentCategory
+                            ? `Subcategory of ${parentCategory.name}`
+                            : "Top-level category"}
+                    </span>
                 </div>
-                <DialogFooter className="gap-2">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => onOpenChange(false)}
-                    >
-                        Cancel
-                    </Button>
-                    <Button
-                        variant="gradient"
-                        disabled={
-                            mutate.isPending ||
-                            envelopId === category.default_envelop_id
-                        }
-                        onClick={() =>
-                            mutate.mutate({
-                                categoryId: category.id,
-                                defaultEnvelopId: envelopId,
-                            })
-                        }
-                    >
-                        {mutate.isPending ? "Saving…" : "Save"}
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
+                <button
+                    type="button"
+                    className="ct-tool-btn ct-insp-close"
+                    onClick={onCancel}
+                    aria-label="Cancel and close"
+                >
+                    <X className="size-3.5" />
+                </button>
+            </div>
+
+            <div className="ct-insp-body">
+                <OrbitField label="Name" required>
+                    <OrbitInput
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Groceries, Restaurants…"
+                        required
+                        maxLength={255}
+                        autoFocus
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") submit();
+                        }}
+                    />
+                </OrbitField>
+
+                <OrbitField label="Parent" hint="Optional">
+                    <CategoryTreeSelect
+                        categories={allCategories}
+                        value={parentId}
+                        onChange={(v) => setParentId(v)}
+                        placeholder="(none — top level)"
+                        allowAll
+                    />
+                </OrbitField>
+
+                <OrbitField
+                    label="Envelope"
+                    hint={
+                        parentCategory
+                            ? parentEnvelope
+                                ? envelopId === parentEnvelope.id
+                                    ? "Parent's default"
+                                    : "Overriding parent's default"
+                                : "Parent's envelope is archived — pick another"
+                            : "Required"
+                    }
+                    required
+                >
+                    <OrbitSelect
+                        value={envelopId}
+                        onValueChange={setEnvelopId}
+                        items={activeEnvelopes.map((e) => ({
+                            value: e.id,
+                            label: e.name,
+                            leadIcon: <Layers className="size-3.5" />,
+                            leadColor: e.color || "var(--ent-2)",
+                        }))}
+                        placeholder="Choose envelope"
+                        leadIcon={<Layers className="size-3.5" />}
+                        leadColor="var(--ent-2)"
+                    />
+                </OrbitField>
+
+                <OrbitField
+                    label="Priority"
+                    interactiveHint
+                    hint={
+                        inheritedPriority
+                            ? `Unset inherits ${PRIORITIES[inheritedPriority].label}`
+                            : "Optional"
+                    }
+                >
+                    <div className="ct-pri-choices" role="group" aria-label="Priority">
+                        <button
+                            type="button"
+                            aria-pressed={priority === ""}
+                            className={`ct-pri-choice ${priority === "" ? "is-active" : ""}`}
+                            onClick={() => setPriority("")}
+                        >
+                            None
+                        </button>
+                        {PRIORITY_KEYS.map((p) => (
+                            <button
+                                key={p}
+                                type="button"
+                                aria-pressed={priority === p}
+                                className={`ct-pri-choice ${priority === p ? "is-active" : ""}`}
+                                style={
+                                    priority === p
+                                        ? {
+                                              color: PRIORITIES[p].color,
+                                              borderColor: `color-mix(in oklab, ${PRIORITIES[p].color} 45%, transparent)`,
+                                              background: `color-mix(in oklab, ${PRIORITIES[p].color} 10%, transparent)`,
+                                          }
+                                        : undefined
+                                }
+                                title={PRIORITIES[p].desc}
+                            >
+                                <span
+                                    className="ct-pri-dot"
+                                    style={{ background: PRIORITIES[p].color }}
+                                />
+                                {PRIORITIES[p].label}
+                            </button>
+                        ))}
+                    </div>
+                </OrbitField>
+
+                {/* interactiveHint renders a div, not a label — a <label> around a
+    button group forwards label-text clicks to the first button. */}
+                <OrbitField label="Style" interactiveHint>
+                    <div className="ct-insp-style-row">
+                        <ColorPickerButton value={color} onChange={setColor} />
+                        <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                    </div>
+                </OrbitField>
+            </div>
+
+            {/* Footer — always visible while creating */}
+            <div className="ct-savebar">
+                <span className="ct-savebar-label">New category</span>
+                <button
+                    type="button"
+                    className="od-btn od-btn-sm"
+                    onClick={onCancel}
+                    disabled={create.isPending}
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    className="od-btn od-btn-sm od-btn-primary"
+                    disabled={!name.trim() || !envelopId || create.isPending}
+                    onClick={submit}
+                >
+                    <Plus className="size-3" />
+                    {create.isPending ? "Creating…" : "Create"}
+                </button>
+            </div>
+        </div>
     );
 }
 
-const CA_STYLES = `
-.ca-root {
+/* ============================================================
+   Styles
+   ============================================================ */
+
+const CT_STYLES = `
+.ct-root {
     margin: -1.5rem -1rem;
-    min-height: 100vh;
+    height: calc(100dvh - 53px); /* mobile header above */
     display: flex;
     flex-direction: column;
     background: var(--bg);
+    overflow: hidden;
 }
 @media (min-width: 768px) {
-    .ca-root { margin: -2rem; }
+    .ct-root { margin: -2rem; height: 100dvh; }
 }
 
-.ca-topbar {
-    padding: 26px 32px 18px;
+/* ---------- top bar ---------- */
+.ct-topbar {
+    flex-shrink: 0;
+    padding: 18px 24px 14px;
     border-bottom: 1px solid var(--line-soft);
+}
+.ct-topbar-inner {
+    width: 100%;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 16px;
-    background: var(--bg);
-    flex-wrap: wrap;
+    gap: 12px;
 }
-.ca-topbar-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.ca-title {
-    font-size: 26px;
+.ct-topbar-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ct-topbar .od-btn { white-space: nowrap; flex-shrink: 0; }
+.ct-title {
+    font-size: 24px;
     font-weight: 500;
     letter-spacing: -0.02em;
     color: var(--fg);
     margin: 0;
 }
-.ca-sub { font-size: 13px; color: var(--fg-3); margin: 0; }
-.ca-topbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-@media (max-width: 720px) {
-    .ca-topbar { padding: 18px 18px 14px; }
+@media (max-width: 640px) {
+    .ct-topbar { padding: 12px 14px 10px; }
+    .ct-title { font-size: 20px; }
 }
 
-.ca-scroll {
+/* ---------- body ---------- */
+.ct-body {
     flex: 1;
-    padding: 22px 32px 36px;
+    min-height: 0;
     display: flex;
-    flex-direction: column;
     gap: 14px;
+    padding: 14px 24px 18px;
+    width: 100%;
 }
-@media (max-width: 720px) {
-    .ca-scroll { padding: 16px 18px 28px; }
+@media (max-width: 640px) {
+    .ct-body { padding: 10px 12px 12px; }
 }
 
-/* Priority legend */
-.orbit-design .od-card.ca-priorities {
-    padding: 14px 18px;
-    display: flex;
-    align-items: center;
-    gap: 22px;
-    flex-wrap: wrap;
-}
-.ca-priorities-head {
+/* ---------- tree pane ---------- */
+.orbit-design .od-card.ct-tree-pane {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    line-height: 1.2;
-}
-.ca-priorities-sub {
-    font-size: 11.5px;
-    color: var(--fg-3);
-    margin-top: 4px;
-}
-.ca-priorities-divider {
-    width: 1px;
-    height: 28px;
-    background: var(--line);
-}
-.ca-priority-legend-cell {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-}
-.ca-priority-desc {
-    font-size: 11px;
-    color: var(--fg-4);
-}
-.ca-priorities-inh {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11.5px;
-    color: var(--fg-3);
-}
-
-.ca-pri-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 18px;
-    padding: 0 7px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 500;
-    border: 1px solid;
-}
-.ca-pri-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 99px;
-    flex-shrink: 0;
-}
-.ca-pri-inh {
-    color: var(--fg-4);
-    font-style: normal;
-}
-
-/* Tree table */
-.orbit-design .od-card.ca-table-card {
     padding: 0;
     overflow: hidden;
 }
-.ca-th-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) 130px 1fr 1fr 160px;
-    gap: 12px;
-    padding: 13px 18px;
-    border-bottom: 1px solid var(--line);
-    background: var(--bg-elev-2);
-}
-.ca-th {
-    font-size: 10.5px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--fg-4);
-    font-weight: 500;
-}
-.ca-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1.6fr) 130px 1fr 1fr 160px;
-    gap: 12px;
-    padding: 11px 18px;
-    align-items: center;
-}
-.ca-row.is-root {
-    /* lighter elevated background already set inline */
-}
-.ca-cell-name {
+
+.ct-tree-toolbar {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 0;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg-elev-2);
 }
-.ca-cell-label {
+.ct-search {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 9px;
+    background: var(--bg-elev-1);
+    border: 1px solid var(--line);
+    transition: border-color 120ms, box-shadow 120ms;
+}
+.ct-search:focus-within {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.ct-search-icon { color: var(--fg-4); flex-shrink: 0; }
+.ct-search-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: var(--fg);
+    font-size: 13px;
+    font-family: inherit;
+}
+.ct-search-input::placeholder { color: var(--fg-3); }
+/* 16px on small screens — anything smaller makes iOS Safari zoom on focus. */
+@media (max-width: 640px) {
+    .ct-search { height: 40px; }
+    .ct-search-input { font-size: 16px; }
+}
+.ct-search-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-3);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.ct-search-clear:hover { background: var(--bg-elev-3); color: var(--fg); }
+
+.ct-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev-1);
+    color: var(--fg-3);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 140ms ease;
+}
+.ct-tool-btn:hover { background: var(--bg-elev-2); color: var(--fg); border-color: var(--line-strong); }
+.ct-tool-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.ct-search-meta {
+    flex-shrink: 0;
+    padding: 6px 14px;
+    font-size: 11px;
+    color: var(--fg-3);
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg-elev-1);
+}
+
+.ct-rootdrop {
+    flex-shrink: 0;
+    margin: 8px 10px 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1.5px dashed var(--line-strong);
+    color: var(--fg-3);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 140ms ease;
+}
+.ct-rootdrop.is-over {
+    border-color: var(--brand);
+    background: var(--brand-soft);
+    color: var(--fg);
+}
+
+.ct-tree-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding: 12px 12px 16px;
+}
+.ct-tree-scroll:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; border-radius: 8px; }
+
+/* ---------- masonry group grid ----------
+   Top-level categories flow into as many ~330px columns as fit, so wide
+   screens show the whole taxonomy side-by-side instead of one long list. */
+.ct-groups {
+    /* "At most 3 columns, each at least 260px": 260px flips to 2 columns
+       on ordinary 1280-1440 laptops (a lone full-width column strands the
+       row actions far from the name), while the 3 cap keeps rows from
+       getting confetti-narrow on big monitors. */
+    columns: 3 260px;
+    column-gap: 12px;
+}
+.ct-group {
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    display: flow-root;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: color-mix(in oklab, var(--bg-elev-2) 70%, transparent);
+    padding: 5px;
+    margin-bottom: 12px;
+}
+.ct-row.is-root {
+    font-weight: 500;
+    color: var(--fg);
+    font-size: 13.5px;
+}
+
+/* ---------- rows ---------- */
+.ct-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    padding: 3px 8px 3px 4px;
+    border-radius: 9px;
+    cursor: pointer;
+    color: var(--fg-2);
+    font-size: 13px;
+    border: 1px solid transparent;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.ct-row:hover { background: var(--bg-elev-3); color: var(--fg); }
+.ct-row.is-selected {
+    background: var(--brand-soft);
+    border-color: color-mix(in oklab, var(--brand) 35%, transparent);
+    color: var(--fg);
+}
+.ct-row.is-dragging { opacity: 0.4; }
+.ct-row.is-drop {
+    background: var(--brand-soft);
+    border-color: var(--brand);
+    box-shadow: 0 0 0 1px var(--brand) inset;
+}
+.ct-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+.ct-guide {
+    align-self: stretch;
+    flex-shrink: 0;
+    width: 14px;
+    margin-left: 8px;
+    border-left: 1px solid var(--line-soft);
+    pointer-events: none;
+}
+/* Narrow screens: tighter indent so deep nests keep a readable name. */
+@media (max-width: 640px) {
+    .ct-guide { width: 9px; margin-left: 4px; }
+}
+
+.ct-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-3);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+/* Stronger than the row's elev-3 hover so the chevron still reads as its
+   own click target inside an already-hovered row. */
+.ct-chevron:hover:not(:disabled):not(.ct-chevron-leaf) {
+    background: color-mix(in oklab, var(--fg-3) 28%, transparent);
+    color: var(--fg);
+}
+.ct-chevron:disabled { opacity: 0.4; cursor: default; }
+.ct-chevron:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ct-chevron-leaf { cursor: inherit; }
+.ct-leaf-dot { width: 4px; height: 4px; border-radius: 99px; opacity: 0.6; }
+
+.ct-row-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.ca-toggle {
-    width: 18px;
-    height: 18px;
-    border-radius: 4px;
-    background: transparent;
-    border: 0;
-    color: var(--fg-3);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
+.ct-mark {
+    background: color-mix(in oklab, var(--gold) 30%, transparent);
+    color: var(--fg);
+    border-radius: 3px;
+    padding: 0 1px;
+}
+.ct-count-chip {
     flex-shrink: 0;
-}
-.ca-toggle:hover { background: var(--bg-elev-2); color: var(--fg); }
-.ca-toggle-placeholder { cursor: default; }
-.ca-toggle-placeholder:hover { background: transparent; }
-.ca-tree-line {
-    width: 14px;
-    height: 14px;
-    border-bottom-left-radius: 4px;
-    margin-right: 2px;
-    margin-bottom: 2px;
-}
-.ca-count-chip {
     display: inline-flex;
     align-items: center;
-    height: 18px;
-    padding: 0 7px;
+    height: 17px;
+    padding: 0 6px;
     border-radius: 999px;
     font-size: 10px;
     color: var(--fg-3);
     border: 1px solid var(--line);
     background: var(--bg-elev-2);
 }
-.ca-tree-count {
-    font-size: 10px;
-    color: var(--fg-4);
+.ct-row-spacer { flex: 1; }
+
+.ct-pri-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 99px;
+    flex-shrink: 0;
 }
-.ca-cell-priority { display: inline-flex; align-items: center; }
-.ca-cell-amt {
-    text-align: left;
-    font-variant-numeric: tabular-nums;
-}
-.ca-cell-trend {
+.ct-pri-dot.is-inherited { opacity: 0.4; }
+.ct-legend-item .ct-pri-dot.is-inherited { background: var(--fg-3); }
+
+.ct-row-actions {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    justify-content: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+.ct-row:hover .ct-row-actions,
+.ct-row.is-selected .ct-row-actions,
+.ct-row:focus-within .ct-row-actions { opacity: 1; }
+.ct-row-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-3);
+    cursor: pointer;
+}
+.ct-row-btn:hover { background: var(--bg-elev-3); color: var(--fg); }
+.ct-row-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; opacity: 1; }
+.ct-row-grip {
+    display: inline-flex;
+    align-items: center;
+    color: var(--fg-4);
+    cursor: grab;
 }
 
-.ca-empty {
-    padding: 40px;
+/* Touch devices: hover-revealed actions don't exist — keep them visible,
+   and grow the most-tapped controls toward the 44px target. */
+@media (hover: none) {
+    .ct-row-actions { opacity: 1; }
+    .ct-row-grip { display: none; }
+    .ct-row { min-height: 44px; }
+    .ct-row-btn { width: 40px; height: 40px; }
+    .ct-chevron { width: 40px; height: 40px; }
+    .ct-tool-btn { width: 40px; height: 40px; }
+    .ct-insp-close.ct-tool-btn { width: 40px; height: 40px; }
+    .ct-savebar .od-btn-sm { height: 40px; }
+    .ct-child-row { min-height: 44px; }
+    .ct-children-add { min-height: 36px; padding: 0 10px; }
+    .ct-search-clear { width: 32px; height: 32px; }
+    .ct-danger-btn { height: 40px; }
+    .ct-pri-choice { min-height: 40px; }
+    .ct-insp-crumb { padding: 6px 4px; }
+    /* iOS zooms on focusing any input under 16px — the width-based 640px
+       rule misses landscape phones and tablets, so fix it by input type. */
+    .ct-search-input { font-size: 16px; }
+    .ct-search { height: 40px; }
+}
+
+/* ---------- tree footer / legend ---------- */
+.ct-tree-foot {
+    flex-shrink: 0;
     display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 8px 14px;
+    border-top: 1px solid var(--line-soft);
+    background: var(--bg-elev-2);
+}
+.ct-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    color: var(--fg-3);
+}
+.ct-legend-muted { color: var(--fg-3); }
+.ct-legend-hint {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--fg-3);
+}
+@media (max-width: 640px) {
+    .ct-legend-hint { display: none; }
+}
+
+/* ---------- empty / skeleton ---------- */
+.ct-empty {
+    padding: 44px 24px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    color: var(--fg-3);
-    font-size: 13px;
-}
-
-/* Sections */
-.ca-section { padding: 22px; }
-.ca-sect-head {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-}
-.ca-sect-text { display: flex; flex-direction: column; gap: 2px; }
-.ca-sect-title {
-    font-size: 16px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    color: var(--fg);
-    margin: 0;
-}
-.ca-sect-sub { font-size: 12px; color: var(--fg-3); }
-
-.ca-priority-bar {
-    height: 10px;
-    border-radius: 99px;
-    overflow: hidden;
-    display: flex;
-    background: var(--bg-elev-3);
-    margin-bottom: 14px;
-}
-.ca-priority-bar.empty {
-    height: 10px;
-}
-
-.ca-priority-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 16px;
-}
-@media (max-width: 720px) {
-    .ca-priority-grid { grid-template-columns: 1fr 1fr; }
-}
-.ca-priority-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px 12px;
-    background: var(--bg-elev-2);
-    border-radius: 8px;
-    border: 1px solid var(--line-soft);
-}
-.ca-priority-amt {
-    font-size: 20px;
-    font-weight: 500;
-    letter-spacing: -0.04em;
-}
-.ca-priority-pct {
-    font-size: 11px;
+    text-align: center;
     color: var(--fg-4);
 }
-
-.ca-popover-item {
-    width: 100%;
+.ct-empty-title { font-size: 13.5px; color: var(--fg-2); font-weight: 500; margin: 0; }
+.ct-empty-sub { font-size: 12px; color: var(--fg-3); max-width: 300px; margin: 0; }
+.ct-empty .od-btn { margin-top: 6px; }
+.ct-tips {
+    margin-top: 26px;
+    padding: 14px 16px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 9px;
     text-align: left;
-    padding: 8px 10px;
+    max-width: 300px;
+}
+.ct-tip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--fg-3);
+}
+.ct-tip svg { color: var(--fg-4); flex-shrink: 0; }
+
+/* No display:flex on .ct-skeleton — a flex container ignores 'columns',
+   which would collapse the skeleton to one column and pop on data load. */
+.ct-skel-row { display: flex; align-items: center; gap: 10px; height: 34px; margin: 3px 4px; }
+.ct-skel-dot, .ct-skel-bar {
+    background: var(--bg-elev-2);
     border-radius: 6px;
-    background: transparent;
+    animation: ct-pulse 1.4s ease-in-out infinite;
+}
+.ct-skel-dot { width: 26px; height: 26px; flex-shrink: 0; }
+.ct-skel-bar { height: 12px; }
+@keyframes ct-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+    .ct-skel-dot, .ct-skel-bar { animation: none; }
+}
+
+/* ---------- inspector ---------- */
+.orbit-design .od-card.ct-inspector {
+    width: 400px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+.ct-scrim { display: none; }
+
+@media (max-width: 1079px) {
+    /* Stay BELOW Radix portals (z-50): the create dialog opened from the
+       inspector must stack above this slide-over. */
+    .orbit-design .od-card.ct-inspector {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(400px, calc(100vw - 24px));
+        z-index: 40;
+        border-radius: 16px 0 0 16px;
+        transform: translateX(105%);
+        transition: transform 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
+        box-shadow: var(--shadow-3);
+    }
+    .orbit-design .od-card.ct-inspector.is-open { transform: none; }
+    .ct-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 39;
+        background: rgb(0 0 0 / 0.55);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 240ms ease;
+    }
+    .ct-scrim.is-open { opacity: 1; pointer-events: auto; }
+    .ct-inspector-empty { display: none; }
+    /* Fixed full-height panel: keep the header out of the status bar and
+       the action bar above the home indicator on notched phones. */
+    .ct-insp-head { padding-top: max(16px, env(safe-area-inset-top)); }
+    .ct-savebar { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .orbit-design .od-card.ct-inspector { transition: none; }
+    .ct-scrim { transition: none; }
+}
+
+.ct-insp {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+.ct-insp-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 16px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bg-elev-2);
+}
+.ct-insp-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ct-insp-crumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+.ct-insp-crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     border: 0;
-    font-size: 13px;
-    color: var(--fg-2);
+    background: transparent;
+    padding: 1px 2px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--fg-3);
     cursor: pointer;
     font-family: inherit;
+    /* One monster ancestor name must not blow out the 296px overlay panel. */
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ct-insp-crumb:hover { color: var(--fg-2); background: var(--bg-elev-3); }
+.ct-insp-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ct-insp-crumb.as-static { cursor: default; }
+.ct-insp-crumb.as-static:hover { color: var(--fg-3); background: transparent; }
+.ct-insp-name {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ct-insp-usage { font-size: 11px; color: var(--fg-3); }
+.ct-insp-close { width: 28px; height: 28px; border-radius: 8px; }
+
+.ct-insp-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.ct-insp-style-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* OrbitField's .oms-field classes are styled by OrbitModalShell, which
+   isn't mounted here — provide the same rules for the panel. */
+.ct-insp .oms-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ct-insp .oms-field-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.ct-insp .oms-field-label {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--fg-2);
+    letter-spacing: 0.02em;
+}
+.ct-insp .oms-field-required {
+    color: var(--brand);
+    margin-left: 4px;
+}
+.ct-insp .oms-field-hint {
+    font-size: 11px;
+    color: var(--fg-3);
+    text-align: right;
+}
+
+/* priority chips */
+.ct-pri-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.ct-pri-choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 11px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev-1);
+    color: var(--fg-3);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 140ms ease;
+}
+.ct-pri-choice:hover { border-color: var(--line-strong); color: var(--fg); }
+.ct-pri-choice.is-active { color: var(--fg); border-color: var(--line-strong); background: var(--bg-elev-3); }
+.ct-pri-choice:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ct-pri-choice .ct-pri-dot { width: 6px; height: 6px; }
+
+.ct-pri-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    border: 1px solid;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* read-only rows */
+.ct-ro-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--line-soft);
+}
+.ct-ro-label { font-size: 12px; color: var(--fg-3); }
+.ct-ro-value { font-size: 12.5px; color: var(--fg); display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.ct-ro-entity { display: inline-flex; align-items: center; gap: 8px; }
+.ct-dim { color: var(--fg-3); }
+
+/* children */
+.ct-children {
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: var(--bg-elev-2);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ct-children-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ct-children-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 0;
+    background: transparent;
+    color: var(--brand);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 6px;
+    font-family: inherit;
+}
+.ct-children-add:hover { background: var(--brand-soft); }
+.ct-children-add:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ct-children-empty { font-size: 11.5px; color: var(--fg-3); margin: 0; }
+.ct-children-list { display: flex; flex-direction: column; gap: 2px; }
+.ct-child-row {
     display: flex;
     align-items: center;
     gap: 8px;
+    padding: 5px 6px;
+    border-radius: 8px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-2);
+    font-size: 12.5px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    min-height: 34px;
 }
-.ca-popover-item:hover { background: var(--bg-elev-2); color: var(--fg); }
+.ct-child-row:hover { background: var(--bg-elev-3); color: var(--fg); }
+.ct-child-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.ct-child-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-child-arrow { color: var(--fg-4); flex-shrink: 0; }
 
-/* Phone (<720px) — collapse the 5-col tree table to name + amount only,
-   since the priority + trend columns crush below readability. */
-@media (max-width: 720px) {
-    .ca-th-row,
-    .ca-row {
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 8px;
-        padding: 11px 12px;
-    }
-    .ca-th-row > :nth-child(2),
-    .ca-th-row > :nth-child(4),
-    .ca-th-row > :nth-child(5),
-    .ca-row > :nth-child(2),
-    .ca-row > :nth-child(4),
-    .ca-row > :nth-child(5) {
-        display: none;
-    }
+/* danger zone */
+.ct-danger {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in oklab, var(--danger) 25%, transparent);
+    background: color-mix(in oklab, var(--danger) 5%, transparent);
+}
+.ct-danger-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ct-danger-title { font-size: 12.5px; font-weight: 500; color: var(--fg); }
+.ct-danger-sub { font-size: 11px; color: var(--fg-3); }
+.ct-danger-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 9px;
+    border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
+    background: transparent;
+    color: var(--danger);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-family: inherit;
+    transition: all 140ms ease;
+}
+.ct-danger-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--danger) 12%, transparent); }
+.ct-danger-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.ct-danger-btn:focus-visible { outline: 2px solid var(--danger); outline-offset: 2px; }
+
+/* save bar */
+.ct-savebar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-elev-2);
+    animation: orbit-rise 200ms ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+    .ct-savebar { animation: none; }
+}
+.ct-savebar-label {
+    flex: 1;
+    font-size: 11.5px;
+    color: var(--gold);
 }
 
-/* Phone (<640px) — section padding tightening. */
-@media (max-width: 640px) {
-    .ca-topbar { padding: 14px 14px 10px; }
-    .ca-title { font-size: 22px; }
-    .ca-scroll { padding: 12px 14px 22px; gap: 12px; }
-    .ca-section { padding: 16px; }
-    .ca-priority-amt { font-size: 18px; }
-    .ca-priority-cell { padding: 8px 10px; }
-    .orbit-design .od-card.ca-priorities {
-        padding: 12px 14px;
-        gap: 12px;
-    }
-    .ca-priorities-inh { margin-left: 0; }
-    .ca-priorities-divider { display: none; }
-    .ca-th-row { padding: 10px 12px; }
-}
-@media (max-width: 380px) {
-    .ca-priority-grid { grid-template-columns: 1fr; }
-}
 `;
