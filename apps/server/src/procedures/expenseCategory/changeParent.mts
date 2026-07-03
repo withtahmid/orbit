@@ -18,7 +18,6 @@ export const changeExpenseCategoryParent = authorizedProcedure
             id: z.string().uuid(),
             space_id: z.string().uuid(),
             parent_id: z.string().uuid().nullable(),
-            default_envelop_id: z.string().uuid(),
             name: z.string(),
             created_at: z.date(),
             updated_at: z.date().nullable(),
@@ -135,15 +134,7 @@ export const changeExpenseCategoryParent = authorizedProcedure
                         updated_at: new Date(),
                     })
                     .where("expense_categories.id", "=", input.categoryId)
-                    .returning([
-                        "id",
-                        "space_id",
-                        "parent_id",
-                        "default_envelop_id",
-                        "name",
-                        "created_at",
-                        "updated_at",
-                    ])
+                    .returning(["id", "space_id", "parent_id", "name", "created_at", "updated_at"])
                     .executeTakeFirstOrThrow();
             })
         );

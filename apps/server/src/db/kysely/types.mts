@@ -111,7 +111,6 @@ export interface Events {
 export interface ExpenseCategories {
   color: Generated<string>;
   created_at: Generated<Timestamp>;
-  default_envelop_id: string;
   icon: Generated<string>;
   id: Generated<string>;
   name: string;

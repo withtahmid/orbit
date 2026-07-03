@@ -265,30 +265,6 @@ function EditForm({
         [accountsQuery.data, sourceAccountId]
     );
 
-    // For edit flows: hide categories whose envelope is archived from the
-    // dropdown to discourage NEW selections of them — but always preserve
-    // the currently selected category so the user can save without
-    // rewriting an existing assignment.
-    const categoriesForEdit = useMemo(() => {
-        const cats = categoriesQuery.data ?? [];
-        const envs = envelopesQuery.data ?? [];
-        const archived = new Set(envs.filter((e) => e.archived).map((e) => e.id));
-        if (archived.size === 0) return cats;
-        const keep = new Set<string>();
-        if (categoryId) keep.add(categoryId);
-        return cats.filter((c) => !archived.has(c.default_envelop_id) || keep.has(c.id));
-    }, [categoriesQuery.data, envelopesQuery.data, categoryId]);
-
-    const selectedCategory = useMemo(
-        () => (categoryId ? (categoriesQuery.data ?? []).find((c) => c.id === categoryId) : null),
-        [categoriesQuery.data, categoryId]
-    );
-    const categoryDefaultEnvelopId = selectedCategory?.default_envelop_id ?? null;
-    const envelopeOverridden =
-        categoryDefaultEnvelopId !== null &&
-        envelopeId !== "" &&
-        envelopeId !== categoryDefaultEnvelopId;
-
     const selectedEnvelope = useMemo(
         () => (envelopeId ? (envelopesQuery.data ?? []).find((e) => e.id === envelopeId) : null),
         [envelopeId, envelopesQuery.data]
@@ -351,14 +327,11 @@ function EditForm({
        editable from this sheet, so they cancel out either way. */
     const newAmountForHint = Number(amount) || 0;
     const existingAmountForHint = Number(transaction.amount) || 0;
-    const sourceChangedForHint =
-        sourceAccountId !== (transaction.source_account_id ?? "");
+    const sourceChangedForHint = sourceAccountId !== (transaction.source_account_id ?? "");
     const editAdditionalDebit = sourceChangedForHint
         ? newAmountForHint
         : newAmountForHint - existingAmountForHint;
-    const sourceAccountForHint = (accountsQuery.data ?? []).find(
-        (a) => a.id === sourceAccountId
-    );
+    const sourceAccountForHint = (accountsQuery.data ?? []).find((a) => a.id === sourceAccountId);
 
     const submit = (e: FormEvent) => {
         e.preventDefault();
@@ -478,7 +451,7 @@ function EditForm({
                     )}
                     <OrbitField label="Category" hint="Tag for what the spend was" required>
                         <CategoryTreeSelect
-                            categories={categoriesForEdit as any}
+                            categories={categoriesQuery.data ?? []}
                             value={categoryId}
                             onChange={setCategoryId}
                             placeholder="Choose category"
@@ -486,28 +459,34 @@ function EditForm({
                         />
                     </OrbitField>
 
+                    {/* Empty envelope never collapses to the chip — show the
+                        labeled picker until a real envelope exists. */}
                     {categoryId &&
-                        (envelopePickerOpen ? (
-                            <div className="of-inline-picker-row">
-                                <OrbitSelect
-                                    value={envelopeId}
-                                    onValueChange={(v) => {
-                                        setEnvelopeId(v);
-                                        setEnvelopePickerOpen(false);
-                                    }}
-                                    items={envelopeItems}
-                                    placeholder="Choose envelope"
-                                    leadIcon={<Layers className="size-3.5" />}
-                                    leadColor="var(--ent-2)"
-                                />
-                                <button
-                                    type="button"
-                                    className="of-chip-btn"
-                                    onClick={() => setEnvelopePickerOpen(false)}
-                                >
-                                    Cancel
-                                </button>
-                            </div>
+                        (envelopePickerOpen || !envelopeId ? (
+                            <OrbitField label="Envelope" required>
+                                <div className="of-inline-picker-row">
+                                    <OrbitSelect
+                                        value={envelopeId}
+                                        onValueChange={(v) => {
+                                            setEnvelopeId(v);
+                                            setEnvelopePickerOpen(false);
+                                        }}
+                                        items={envelopeItems}
+                                        placeholder="Choose envelope"
+                                        leadIcon={<Layers className="size-3.5" />}
+                                        leadColor="var(--ent-2)"
+                                    />
+                                    {envelopeId && (
+                                        <button
+                                            type="button"
+                                            className="of-chip-btn"
+                                            onClick={() => setEnvelopePickerOpen(false)}
+                                        >
+                                            Cancel
+                                        </button>
+                                    )}
+                                </div>
+                            </OrbitField>
                         ) : (
                             <div className="of-chip-row">
                                 <div className="of-chip-row-content">
@@ -521,9 +500,6 @@ function EditForm({
                                     />
                                     <span className="of-chip-name">
                                         {selectedEnvelope?.name ?? "—"}
-                                    </span>
-                                    <span className="of-chip-meta">
-                                        · {envelopeOverridden ? "overridden" : "category default"}
                                     </span>
                                 </div>
                                 <button

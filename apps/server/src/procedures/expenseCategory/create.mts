@@ -14,12 +14,9 @@ export const createExpenseCategory = authorizedProcedure
             spaceId: z.string().uuid(),
             name: z.string().min(1).max(255),
             parentId: z.string().uuid().nullable().optional(),
-            envelopId: z.string().uuid(),
             color: z.string().regex(HEX).optional(),
             icon: z.string().min(1).max(48).optional(),
-            priority: z
-                .enum(["essential", "important", "discretionary", "luxury"])
-                .optional(),
+            priority: z.enum(["essential", "important", "discretionary", "luxury"]).optional(),
             idempotencyKey: z.string().uuid().optional(),
         })
     )
@@ -49,30 +46,9 @@ export const createExpenseCategory = authorizedProcedure
                             if (!parent || parent.space_id !== input.spaceId) {
                                 throw new TRPCError({
                                     code: "BAD_REQUEST",
-                                    message:
-                                        "Invalid parent category for this space",
+                                    message: "Invalid parent category for this space",
                                 });
                             }
-                        }
-
-                        const envelop = await trx
-                            .selectFrom("envelops")
-                            .select(["id", "space_id", "archived", "name"])
-                            .where("envelops.id", "=", input.envelopId)
-                            .executeTakeFirst();
-
-                        if (!envelop || envelop.space_id !== input.spaceId) {
-                            throw new TRPCError({
-                                code: "BAD_REQUEST",
-                                message: "Invalid envelop for this space",
-                            });
-                        }
-
-                        if (envelop.archived) {
-                            throw new TRPCError({
-                                code: "BAD_REQUEST",
-                                message: `Envelope "${envelop.name}" is archived. Unarchive it first to add categories.`,
-                            });
                         }
 
                         return trx
@@ -81,7 +57,6 @@ export const createExpenseCategory = authorizedProcedure
                                 space_id: input.spaceId,
                                 name: input.name,
                                 parent_id: input.parentId ?? null,
-                                default_envelop_id: input.envelopId,
                                 color: input.color,
                                 icon: input.icon,
                                 priority: input.priority ?? null,
@@ -90,7 +65,6 @@ export const createExpenseCategory = authorizedProcedure
                                 "id",
                                 "space_id",
                                 "parent_id",
-                                "default_envelop_id",
                                 "name",
                                 "color",
                                 "icon",

@@ -54,16 +54,8 @@ type Row = {
     name: string;
     color: string;
     icon: string;
-    envelopId: string;
     directTotal: number;
     subtreeTotal: number;
-};
-
-type EnvelopeMeta = {
-    id: string;
-    name: string;
-    color: string;
-    icon: string;
 };
 
 export default function CategoriesView() {
@@ -104,9 +96,7 @@ export default function CategoriesView() {
     // so "all-time" doesn't blow up the date range.
     const prevPeriod = useMemo(() => {
         const dur = Math.max(0, period.end.getTime() - period.start.getTime());
-        const start = new Date(
-            Math.max(0, period.start.getTime() - dur)
-        );
+        const start = new Date(Math.max(0, period.start.getTime() - dur));
         return { start, end: period.start };
     }, [period.start, period.end]);
 
@@ -160,41 +150,6 @@ export default function CategoriesView() {
         return m;
     }, [prevRows]);
 
-    // Envelope metadata — used only for contextual labels (the ranked-list
-    // subtitle + the leaf "Open envelope" shortcut). Envelopes are NOT a
-    // level in the drill hierarchy; the donut drills the category tree.
-    const envSpaceQ = trpc.envelop.listBySpace.useQuery(
-        { spaceId: space.id },
-        { enabled: !space.isPersonal }
-    );
-    const envPersonalQ = trpc.personal.envelopeUtilization.useQuery(
-        { periodStart: period.start, periodEnd: period.end },
-        { enabled: space.isPersonal }
-    );
-    const envelopeMeta = useMemo<Map<string, EnvelopeMeta>>(() => {
-        const m = new Map<string, EnvelopeMeta>();
-        if (space.isPersonal) {
-            for (const e of envPersonalQ.data ?? []) {
-                m.set(e.envelopId, {
-                    id: e.envelopId,
-                    name: e.name,
-                    color: e.color,
-                    icon: e.icon,
-                });
-            }
-        } else {
-            for (const e of envSpaceQ.data ?? []) {
-                m.set(e.id, {
-                    id: e.id,
-                    name: e.name,
-                    color: e.color,
-                    icon: e.icon,
-                });
-            }
-        }
-        return m;
-    }, [space.isPersonal, envSpaceQ.data, envPersonalQ.data]);
-
     const byId = useMemo(() => {
         const m = new Map<string, Row>();
         for (const r of rows) m.set(r.id, r);
@@ -211,7 +166,7 @@ export default function CategoriesView() {
         return m;
     }, [rows]);
 
-    const focus = focusId ? byId.get(focusId) ?? null : null;
+    const focus = focusId ? (byId.get(focusId) ?? null) : null;
 
     // Breadcrumb chain — category ancestors only (no envelope level).
     const ancestors = useMemo<Row[]>(() => {
@@ -227,24 +182,15 @@ export default function CategoriesView() {
     // The rows the donut + ranked list show, by mode:
     //   1. Category focus → children of that category
     //   2. No focus       → root categories (one slice per top-level category)
-    const rootRows = useMemo(
-        () => rows.filter((r) => r.parentId === null),
-        [rows]
-    );
+    const rootRows = useMemo(() => rows.filter((r) => r.parentId === null), [rows]);
     const focusChildren = useMemo(
-        () => (focus ? childrenByParent.get(focus.id) ?? [] : []),
+        () => (focus ? (childrenByParent.get(focus.id) ?? []) : []),
         [focus, childrenByParent]
     );
 
-    const rootTotal = useMemo(
-        () => rootRows.reduce((s, r) => s + r.subtreeTotal, 0),
-        [rootRows]
-    );
+    const rootTotal = useMemo(() => rootRows.reduce((s, r) => s + r.subtreeTotal, 0), [rootRows]);
     const prevRootTotal = useMemo(
-        () =>
-            prevRows
-                .filter((r) => r.parentId === null)
-                .reduce((s, r) => s + r.subtreeTotal, 0),
+        () => prevRows.filter((r) => r.parentId === null).reduce((s, r) => s + r.subtreeTotal, 0),
         [prevRows]
     );
 
@@ -318,7 +264,8 @@ export default function CategoriesView() {
         name: string;
         color: string;
         icon: string;
-        envelopeName?: string;
+        /** Muted context line under the name (flat mode: ancestor path). */
+        subtitle?: string;
         value: number;
         prevValue: number;
         drillable: boolean;
@@ -337,17 +284,13 @@ export default function CategoriesView() {
                     name: c.name,
                     color: c.color,
                     icon: c.icon,
-                    envelopeName: envelopeMeta.get(c.envelopId)?.name,
                     value: c.subtreeTotal,
                     prevValue: prevById.get(c.id)?.subtreeTotal ?? 0,
                     drillable,
                     childCount: children.length,
                     onClick: drillable
                         ? () => setFocus(c.id)
-                        : () =>
-                              navigate(
-                                  `${ROUTES.spaceTransactions(space.id)}?cat=${c.id}`
-                              ),
+                        : () => navigate(`${ROUTES.spaceTransactions(space.id)}?cat=${c.id}`),
                 };
             });
         if (focus && focus.directTotal > 0) {
@@ -356,32 +299,20 @@ export default function CategoriesView() {
                 name: `${focus.name} (direct)`,
                 color: focus.color,
                 icon: focus.icon,
-                envelopeName: envelopeMeta.get(focus.envelopId)?.name,
                 value: focus.directTotal,
                 prevValue: prevById.get(focus.id)?.directTotal ?? 0,
                 drillable: false,
-                onClick: () =>
-                    navigate(
-                        `${ROUTES.spaceTransactions(space.id)}?cat=${focus.id}`
-                    ),
+                onClick: () => navigate(`${ROUTES.spaceTransactions(space.id)}?cat=${focus.id}`),
             });
         }
         return list.sort((a, b) => b.value - a.value);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-        focus,
-        focusChildren,
-        rootRows,
-        prevById,
-        envelopeMeta,
-        childrenByParent,
-        space.id,
-    ]);
+    }, [focus, focusChildren, rootRows, prevById, childrenByParent, space.id]);
 
     /**
      * Flat mode rows — one per category with direct spend, at any depth
      * (parents-with-direct AND leaves). Ranked desc; the sum equals the
-     * grand total. The ancestor path rides in the `envelopeName` subtitle
+     * grand total. The ancestor path rides in the `subtitle`
      * slot so the existing row markup can render it as-is.
      */
     const flatRankRows: RankRow[] = useMemo(() => {
@@ -403,29 +334,24 @@ export default function CategoriesView() {
                 name: r.name,
                 color: r.color,
                 icon: r.icon,
-                envelopeName: pathOf(r.id),
+                subtitle: pathOf(r.id),
                 value: r.directTotal,
                 prevValue: prevById.get(r.id)?.directTotal ?? 0,
                 drillable: false,
-                onClick: () =>
-                    navigate(
-                        `${ROUTES.spaceTransactions(space.id)}?cat=${r.id}`
-                    ),
+                onClick: () => navigate(`${ROUTES.spaceTransactions(space.id)}?cat=${r.id}`),
             }))
             .sort((a, b) => b.value - a.value);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rows, byId, prevById, space.id]);
 
     const flatDonutData: DrillableDonutSlice[] = useMemo(() => {
-        const slices: DrillableDonutSlice[] = flatRankRows
-            .slice(0, FLAT_DONUT_TOP_N)
-            .map((r) => ({
-                id: r.id,
-                name: r.name,
-                value: r.value,
-                color: r.color,
-                drillable: false,
-            }));
+        const slices: DrillableDonutSlice[] = flatRankRows.slice(0, FLAT_DONUT_TOP_N).map((r) => ({
+            id: r.id,
+            name: r.name,
+            value: r.value,
+            color: r.color,
+            drillable: false,
+        }));
         /* Roll the long tail into one muted slice so the rendered arcs
            sum to the grand total printed in the donut center. */
         const rest = flatRankRows.slice(FLAT_DONUT_TOP_N);
@@ -433,9 +359,7 @@ export default function CategoriesView() {
         if (rest.length > 0 && otherValue > 0) {
             slices.push({
                 id: OTHER_SLICE_ID,
-                name: `Other (${rest.length} categor${
-                    rest.length === 1 ? "y" : "ies"
-                })`,
+                name: `Other (${rest.length} categor${rest.length === 1 ? "y" : "ies"})`,
                 value: otherValue,
                 color: "var(--muted-foreground)",
                 drillable: false,
@@ -459,13 +383,10 @@ export default function CategoriesView() {
      */
     const kpi = useMemo(() => {
         const total = activeRows.reduce((acc, r) => acc + r.value, 0);
-        const prevTotal = focus
-            ? prevById.get(focus.id)?.subtreeTotal ?? 0
-            : prevRootTotal;
+        const prevTotal = focus ? (prevById.get(focus.id)?.subtreeTotal ?? 0) : prevRootTotal;
         const top = activeRows[0];
         const largestPct = total > 0 && top ? (top.value / total) * 100 : 0;
-        const momDelta =
-            prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
+        const momDelta = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
         return {
             total,
             prevTotal,
@@ -482,10 +403,7 @@ export default function CategoriesView() {
             value: kpi.total,
             money: true,
             tone: "expense",
-            sub:
-                kpi.count > 0
-                    ? `Across ${kpi.count} categories`
-                    : "No spend in period",
+            sub: kpi.count > 0 ? `Across ${kpi.count} categories` : "No spend in period",
         },
         {
             label: "Largest share",
@@ -511,11 +429,7 @@ export default function CategoriesView() {
             label: "Categories",
             value: kpi.count,
             valueFormat: "integer",
-            sub: flat
-                ? "spending categories"
-                : focus
-                  ? "in this branch"
-                  : "top-level categories",
+            sub: flat ? "spending categories" : focus ? "in this branch" : "top-level categories",
         },
     ];
 
@@ -554,62 +468,62 @@ export default function CategoriesView() {
             {/* Breadcrumb in a thin pill row matching the design. Hidden in
                 flat mode — there's no hierarchy to navigate there. */}
             {!flat && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                <Folder className="size-3.5 text-muted-foreground" />
-                <BreadcrumbItem
-                    onClick={() => setFocus(null)}
-                    isLast={ancestors.length === 0}
-                    leading={<Home className="size-3" />}
-                    label="All categories"
-                />
-                {ancestors.map((a, i) => {
-                    const isLast = i === ancestors.length - 1;
-                    return (
-                        <span key={a.id} className="flex items-center gap-2">
-                            <ChevronRight className="size-3 text-muted-foreground/50" />
-                            <BreadcrumbItem
-                                onClick={() => setFocus(a.id)}
-                                isLast={isLast}
-                                leading={
-                                    <span
-                                        className="size-1.5 rounded-full"
-                                        style={{ backgroundColor: a.color }}
-                                    />
-                                }
-                                label={a.name}
-                            />
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                    <Folder className="size-3.5 text-muted-foreground" />
+                    <BreadcrumbItem
+                        onClick={() => setFocus(null)}
+                        isLast={ancestors.length === 0}
+                        leading={<Home className="size-3" />}
+                        label="All categories"
+                    />
+                    {ancestors.map((a, i) => {
+                        const isLast = i === ancestors.length - 1;
+                        return (
+                            <span key={a.id} className="flex items-center gap-2">
+                                <ChevronRight className="size-3 text-muted-foreground/50" />
+                                <BreadcrumbItem
+                                    onClick={() => setFocus(a.id)}
+                                    isLast={isLast}
+                                    leading={
+                                        <span
+                                            className="size-1.5 rounded-full"
+                                            style={{ backgroundColor: a.color }}
+                                        />
+                                    }
+                                    label={a.name}
+                                />
+                            </span>
+                        );
+                    })}
+                    <span className="ml-auto flex items-center gap-3">
+                        <span className="text-[11px] text-muted-foreground">
+                            {!focus
+                                ? `${kpi.count} categories`
+                                : isLeaf
+                                  ? "Leaf — no sub-categories"
+                                  : `${rankRows.length} sub-categories`}
                         </span>
-                    );
-                })}
-                <span className="ml-auto flex items-center gap-3">
-                    <span className="text-[11px] text-muted-foreground">
-                        {!focus
-                            ? `${kpi.count} categories`
-                            : isLeaf
-                              ? "Leaf — no sub-categories"
-                              : `${rankRows.length} sub-categories`}
+                        {ancestors.length > 0 && (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                    const parent = ancestors[ancestors.length - 2];
+                                    if (!parent) {
+                                        setFocus(null);
+                                        return;
+                                    }
+                                    setFocus(parent.id);
+                                }}
+                                className="h-7 gap-1 px-2 text-[11px]"
+                            >
+                                <CornerDownLeft className="size-3" />
+                                Up
+                            </Button>
+                        )}
                     </span>
-                    {ancestors.length > 0 && (
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                                const parent = ancestors[ancestors.length - 2];
-                                if (!parent) {
-                                    setFocus(null);
-                                    return;
-                                }
-                                setFocus(parent.id);
-                            }}
-                            className="h-7 gap-1 px-2 text-[11px]"
-                        >
-                            <CornerDownLeft className="size-3" />
-                            Up
-                        </Button>
-                    )}
-                </span>
-            </div>
+                </div>
             )}
 
             {/* Flat mode has no hierarchy to navigate, but keep a thin
@@ -617,9 +531,7 @@ export default function CategoriesView() {
             {flat && (
                 <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3.5 py-2.5">
                     <Rows3 className="size-3.5 text-muted-foreground" />
-                    <span className="text-sm font-semibold text-foreground">
-                        All categories
-                    </span>
+                    <span className="text-sm font-semibold text-foreground">All categories</span>
                     <span className="ml-auto text-[11px] text-muted-foreground">
                         {kpi.count} with direct spend
                     </span>
@@ -631,24 +543,18 @@ export default function CategoriesView() {
             {isLeaf ? (
                 <Card>
                     <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
-                        <EntityAvatar
-                            size="lg"
-                            color={focus!.color}
-                            icon={focus!.icon}
-                        />
+                        <EntityAvatar size="lg" color={focus!.color} icon={focus!.icon} />
                         <span className="text-base font-semibold">{focus!.name}</span>
                         <span className="max-w-md text-xs text-muted-foreground">
-                            This is a leaf category. Drilling stops here — see matching
-                            transactions below.
+                            This is a leaf category. Drilling stops here — see matching transactions
+                            below.
                         </span>
                         <div className="mt-1 flex flex-wrap justify-center gap-2">
                             <Button
                                 size="sm"
                                 onClick={() =>
                                     navigate(
-                                        `${ROUTES.spaceTransactions(space.id)}?cat=${
-                                            focus!.id
-                                        }`
+                                        `${ROUTES.spaceTransactions(space.id)}?cat=${focus!.id}`
                                     )
                                 }
                             >
@@ -663,9 +569,7 @@ export default function CategoriesView() {
                         <CardHeader>
                             <CardTitle>Distribution</CardTitle>
                             <p className="text-xs text-muted-foreground">
-                                {flat
-                                    ? "Top categories by spend."
-                                    : "Click a slice to drill in."}
+                                {flat ? "Top categories by spend." : "Click a slice to drill in."}
                             </p>
                         </CardHeader>
                         <CardContent>
@@ -681,8 +585,7 @@ export default function CategoriesView() {
                                 <DrillableDonut
                                     slices={activeDonut}
                                     centerLabel={
-                                        centerLabel === "Total spent" ||
-                                        !centerLabel
+                                        centerLabel === "Total spent" || !centerLabel
                                             ? "Total"
                                             : centerLabel
                                     }
@@ -721,8 +624,7 @@ export default function CategoriesView() {
                                     const pct = max > 0 ? (r.value / max) * 100 : 0;
                                     const delta =
                                         r.prevValue > 0
-                                            ? ((r.value - r.prevValue) / r.prevValue) *
-                                              100
+                                            ? ((r.value - r.prevValue) / r.prevValue) * 100
                                             : r.value > 0
                                               ? null
                                               : 0;
@@ -751,19 +653,26 @@ export default function CategoriesView() {
                                                     <span className="truncate text-[13px] font-medium">
                                                         {r.name}
                                                     </span>
-                                                    <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground">
-                                                        {r.envelopeName && (
-                                                            <span className="truncate">
-                                                                {r.envelopeName}
-                                                            </span>
-                                                        )}
-                                                        {r.drillable &&
-                                                            r.childCount !== undefined && (
-                                                                <span className="text-[color:var(--primary)]">
-                                                                    · {r.childCount} sub
+                                                    {/* Meta line only when it has content — an
+                                                        empty flex span still costs height and
+                                                        makes sibling rows ragged. */}
+                                                    {(r.subtitle ||
+                                                        (r.drillable &&
+                                                            r.childCount !== undefined)) && (
+                                                        <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                                                            {r.subtitle && (
+                                                                <span className="truncate">
+                                                                    {r.subtitle}
                                                                 </span>
                                                             )}
-                                                    </span>
+                                                            {r.drillable &&
+                                                                r.childCount !== undefined && (
+                                                                    <span className="text-[color:var(--primary)]">
+                                                                        · {r.childCount} sub
+                                                                    </span>
+                                                                )}
+                                                        </span>
+                                                    )}
                                                 </span>
                                             </span>
                                             {/* Inline bar */}
@@ -780,10 +689,7 @@ export default function CategoriesView() {
                                             </span>
                                             {/* Money */}
                                             <span className="hidden text-right sm:inline">
-                                                <MoneyDisplay
-                                                    amount={r.value}
-                                                    variant="neutral"
-                                                />
+                                                <MoneyDisplay amount={r.value} variant="neutral" />
                                             </span>
                                             {/* Delta */}
                                             <span className="hidden justify-end text-right sm:flex">
@@ -847,13 +753,7 @@ function BreadcrumbItem({
 
 /** Tree ⇄ Flat segmented toggle for the category view. Tree keeps the
  *  existing drill-down; Flat lists every direct-spend category at once. */
-function ViewModeToggle({
-    flat,
-    onChange,
-}: {
-    flat: boolean;
-    onChange: (flat: boolean) => void;
-}) {
+function ViewModeToggle({ flat, onChange }: { flat: boolean; onChange: (flat: boolean) => void }) {
     return (
         <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5">
             <button
@@ -915,11 +815,7 @@ function DeltaChip({ pct }: { pct: number | null }) {
                 up ? "text-[color:var(--expense)]" : "text-[color:var(--income)]"
             )}
         >
-            {up ? (
-                <ArrowUpRight className="size-3" />
-            ) : (
-                <ArrowDownRight className="size-3" />
-            )}
+            {up ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />}
             {up ? "+" : ""}
             {pct.toFixed(0)}%
         </span>

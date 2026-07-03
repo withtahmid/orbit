@@ -47,12 +47,7 @@ import { useInvalidateAnalytics } from "@/lib/invalidate";
 import { cn } from "@/lib/utils";
 import { useCurrentSpaceId } from "@/hooks/useCurrentSpace";
 import { useIdempotencyKey } from "@/hooks/useIdempotencyKey";
-import {
-    toInputDateTime,
-    fromInputDateTime,
-    startOfMonth,
-    endOfMonth,
-} from "@/lib/dates";
+import { toInputDateTime, fromInputDateTime, startOfMonth, endOfMonth } from "@/lib/dates";
 import { getIcon } from "@/lib/entityIcons";
 
 type SpaceAccount = RouterOutput["account"]["listBySpace"][number];
@@ -409,7 +404,7 @@ export const NT_STYLES = `
 /* On narrow phones, the envelope chip's content row (eyebrow + name +
    meta) competes with the actions cluster (Pin + Change). Forcing the
    row to wrap drops the actions below the content so the "pinned" /
-   "overridden" meta — the whole signal of this row — never truncates. */
+   "selected" meta — the whole signal of this row — never truncates. */
 @media (max-width: 480px) {
     .of-chip-row { flex-wrap: wrap; row-gap: 8px; }
     .of-chip-row-content { flex-basis: 100%; }
@@ -1142,7 +1137,6 @@ function EnvelopeStatusCard({
                             </div>
                         </div>
                     )}
-
                 </div>
             )}
         </div>
@@ -1173,9 +1167,7 @@ export function SourceOverspendHint({
                     Heads up — this will take <strong>{account.name}</strong> to{" "}
                     <span className="tabular">{resulting.toFixed(2)}</span>.
                 </span>
-                <span className="nt-source-warn-sub">
-                    Save anyway, or pick a different source.
-                </span>
+                <span className="nt-source-warn-sub">Save anyway, or pick a different source.</span>
             </div>
         </div>
     );
@@ -1284,8 +1276,7 @@ function IncomeForm({
                 event_id: variables.eventId ?? null,
                 parent_transfer_id: null,
                 created_by_first_name: authStore.user?.name?.split(" ")[0] ?? null,
-                created_by_last_name:
-                    authStore.user?.name?.split(" ").slice(1).join(" ") || null,
+                created_by_last_name: authStore.user?.name?.split(" ").slice(1).join(" ") || null,
                 created_by_avatar_file_id: authStore.user?.avatarFileId ?? null,
                 account_balances_after: {},
                 __pending: true,
@@ -1511,21 +1502,9 @@ function ExpenseForm({
         }
     }, [sourceAccountId, accountItems]);
 
-    // Post-decoupling (migration 041) the category's `default_envelop_id`
-    // is purely a UX hint — the envelope is now a separate field on the
-    // transaction itself. So even if a category's default envelope is
-    // archived, the category is still valid (the user can pick any
-    // active envelope on the form). We list every category and instead
-    // skip the auto-fill below when the default points at an archived
-    // envelope, so the user has to pick a live one explicitly.
-    const activeCategories = categoriesQuery.data ?? [];
-    const archivedEnvIds = useMemo(
-        () =>
-            new Set(
-                (envelopesQuery.data ?? []).filter((e) => e.archived).map((e) => e.id)
-            ),
-        [envelopesQuery.data]
-    );
+    // Categories are pure labels (migration 050 dropped their envelope
+    // link) — every category is always selectable.
+    const activeCategories = useMemo(() => categoriesQuery.data ?? [], [categoriesQuery.data]);
 
     const envelopeItems: OrbitSelectItem[] = useMemo(
         () =>
@@ -1540,34 +1519,12 @@ function ExpenseForm({
         [envelopesQuery.data]
     );
 
-    // When the user picks a category, default the envelope to that
-    // category's default and collapse the picker back to chip view.
-    // Stays editable — opening the chip and picking a different
-    // envelope sticks until the user changes category again.
-    //
-    // Exception: if the currently-selected envelope IS the user's
-    // pinned envelope, treat the pin as overriding the category
-    // default. Without this, the spec's "envelope pin" feature would
-    // be silently clobbered every time the user picks a category.
+    // Categories are pure labels (migration 050) — no envelope auto-fill.
+    // The envelope comes from the pin, the previous pick, or an explicit
+    // choice. While it's EMPTY the row renders as a labeled, required
+    // picker (never the collapsed chip), so the field can't be missed.
     const envelopePinnedAndActive =
         pinState.pins?.envelop?.id != null && pinState.pins.envelop.id === envelopeId;
-    useEffect(() => {
-        if (!categoryId) return;
-        if (envelopePinnedAndActive) return;
-        const cat = activeCategories.find((c) => c.id === categoryId);
-        if (!cat) return;
-        // If the category's default envelope is archived, leave the
-        // envelope unset and pop the picker open so the user picks a
-        // live one explicitly — auto-filling an archived id would just
-        // get rejected by the server on submit.
-        if (archivedEnvIds.has(cat.default_envelop_id)) {
-            setEnvelopeId("");
-            setEnvelopePickerOpen(true);
-            return;
-        }
-        setEnvelopeId(cat.default_envelop_id);
-        setEnvelopePickerOpen(false);
-    }, [categoryId, activeCategories, envelopePinnedAndActive, archivedEnvIds]);
 
     /* Hydrate pinned values once. The initializers above already seed
        account/envelope/event synchronously from pinState.pins when the
@@ -1580,12 +1537,7 @@ function ExpenseForm({
        pin's hydration on every "Save & add another" cycle. This effect
        is now only the fallback for a cold cache (the very first open
        after a page load), where the pins query is still in flight when
-       these fields first mount. Order matters slightly: setEnvelopeId
-       before setCategoryId would be wiped by the category-default effect
-       above; we set envelope AFTER the category effect's invariant
-       (envelopePinnedAndActive) is true, which happens naturally because
-       we set envelopeId here and the next render computes
-       envelopePinnedAndActive correctly. */
+       these fields first mount. */
     const hydratedRef = useRef(false);
     useEffect(() => {
         if (hydratedRef.current) return;
@@ -1600,15 +1552,6 @@ function ExpenseForm({
         () => (envelopeId ? (envelopesQuery.data ?? []).find((e) => e.id === envelopeId) : null),
         [envelopeId, envelopesQuery.data]
     );
-    const categoryDefaultEnvelopId = useMemo(() => {
-        const cat = activeCategories.find((c) => c.id === categoryId);
-        return cat?.default_envelop_id ?? null;
-    }, [activeCategories, categoryId]);
-    const envelopeOverridden =
-        categoryDefaultEnvelopId !== null &&
-        envelopeId !== "" &&
-        envelopeId !== categoryDefaultEnvelopId;
-
     const idem = useIdempotencyKey();
     const mutate = trpc.transaction.expense.useMutation({
         onMutate: async (variables) => {
@@ -1632,8 +1575,7 @@ function ExpenseForm({
                 event_id: variables.eventId ?? null,
                 parent_transfer_id: null,
                 created_by_first_name: authStore.user?.name?.split(" ")[0] ?? null,
-                created_by_last_name:
-                    authStore.user?.name?.split(" ").slice(1).join(" ") || null,
+                created_by_last_name: authStore.user?.name?.split(" ").slice(1).join(" ") || null,
                 created_by_avatar_file_id: authStore.user?.avatarFileId ?? null,
                 account_balances_after: {},
                 __pending: true,
@@ -1707,7 +1649,7 @@ function ExpenseForm({
 
             <OrbitField label="Category" required>
                 <CategoryTreeSelect
-                    categories={activeCategories as any}
+                    categories={activeCategories}
                     value={categoryId}
                     onChange={setCategoryId}
                     placeholder="Choose category"
@@ -1715,28 +1657,35 @@ function ExpenseForm({
                 />
             </OrbitField>
 
+            {/* Empty envelope NEVER collapses to the chip — a required field
+                must not read as "selected —". The picker stays mounted (with
+                label + asterisk) until a real envelope exists. */}
             {(categoryId || envelopeId) &&
-                (envelopePickerOpen ? (
-                    <div className="of-inline-picker-row">
-                        <OrbitSelect
-                            value={envelopeId}
-                            onValueChange={(v) => {
-                                setEnvelopeId(v);
-                                setEnvelopePickerOpen(false);
-                            }}
-                            items={envelopeItems}
-                            placeholder="Choose envelope"
-                            leadIcon={<Layers className="size-3.5" />}
-                            leadColor="var(--ent-2)"
-                        />
-                        <button
-                            type="button"
-                            className="of-chip-btn"
-                            onClick={() => setEnvelopePickerOpen(false)}
-                        >
-                            Cancel
-                        </button>
-                    </div>
+                (envelopePickerOpen || !envelopeId ? (
+                    <OrbitField label="Envelope" required>
+                        <div className="of-inline-picker-row">
+                            <OrbitSelect
+                                value={envelopeId}
+                                onValueChange={(v) => {
+                                    setEnvelopeId(v);
+                                    setEnvelopePickerOpen(false);
+                                }}
+                                items={envelopeItems}
+                                placeholder="Choose envelope"
+                                leadIcon={<Layers className="size-3.5" />}
+                                leadColor="var(--ent-2)"
+                            />
+                            {envelopeId && (
+                                <button
+                                    type="button"
+                                    className="of-chip-btn"
+                                    onClick={() => setEnvelopePickerOpen(false)}
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                        </div>
+                    </OrbitField>
                 ) : (
                     <div className="of-chip-row">
                         <div className="of-chip-row-content">
@@ -1749,14 +1698,7 @@ function ExpenseForm({
                             />
                             <span className="of-chip-name">{selectedEnvelope?.name ?? "—"}</span>
                             <span className="of-chip-meta">
-                                ·{" "}
-                                {envelopePinnedAndActive
-                                    ? "pinned"
-                                    : categoryId
-                                      ? envelopeOverridden
-                                          ? "overridden"
-                                          : "category default"
-                                      : "selected"}
+                                · {envelopePinnedAndActive ? "pinned" : "selected"}
                             </span>
                         </div>
                         <div className="of-chip-actions">
@@ -1885,13 +1827,20 @@ function TransferForm({
     const optimistic = useOptimisticTransactionCache();
     const { authStore } = useStore();
 
-    const activeFeeCategories = useMemo(() => {
-        const cats = categoriesQuery.data ?? [];
-        const envs = envelopesQuery.data ?? [];
-        const archived = new Set(envs.filter((e) => e.archived).map((e) => e.id));
-        if (archived.size === 0) return cats;
-        return cats.filter((c) => !archived.has(c.default_envelop_id));
-    }, [categoriesQuery.data, envelopesQuery.data]);
+    /* Categories are pure labels (migration 050) — the fee's envelope is
+       picked explicitly below, like any other expense. */
+    const feeEnvelopeItems: OrbitSelectItem[] = useMemo(
+        () =>
+            (envelopesQuery.data ?? [])
+                .filter((e) => !e.archived)
+                .map((e) => ({
+                    value: e.id,
+                    label: e.name,
+                    leadIcon: <Layers className="size-3.5" />,
+                    leadColor: e.color || "var(--ent-2)",
+                })),
+        [envelopesQuery.data]
+    );
 
     const lastSourceKey = `orbit:last-account:${spaceId}:transfer-source`;
     const [amount, setAmount] = useState("");
@@ -1911,6 +1860,7 @@ function TransferForm({
     const [feeEnabled, setFeeEnabled] = useState(false);
     const [feeAmount, setFeeAmount] = useState("");
     const [feeCategoryId, setFeeCategoryId] = useState<string | null>(null);
+    const [feeEnvelopeId, setFeeEnvelopeId] = useState("");
 
     const sourceItems = useMemo(
         () =>
@@ -1994,8 +1944,7 @@ function TransferForm({
                 event_id: variables.eventId ?? null,
                 parent_transfer_id: null,
                 created_by_first_name: authStore.user?.name?.split(" ")[0] ?? null,
-                created_by_last_name:
-                    authStore.user?.name?.split(" ").slice(1).join(" ") || null,
+                created_by_last_name: authStore.user?.name?.split(" ").slice(1).join(" ") || null,
                 created_by_avatar_file_id: authStore.user?.avatarFileId ?? null,
                 account_balances_after: {},
                 __pending: true,
@@ -2061,14 +2010,10 @@ function TransferForm({
                         toast.error("Pick a category for the fee");
                         return;
                     }
-                }
-                const feeCat =
-                    feeEnabled && feeCategoryId
-                        ? activeFeeCategories.find((c) => c.id === feeCategoryId)
-                        : null;
-                if (feeEnabled && !feeCat) {
-                    toast.error("Pick a valid fee category");
-                    return;
+                    if (!feeEnvelopeId) {
+                        toast.error("Pick an envelope for the fee");
+                        return;
+                    }
                 }
                 mutate.mutate({
                     spaceId,
@@ -2079,8 +2024,8 @@ function TransferForm({
                     eventId: eventId || undefined,
                     attachmentFileIds: attachmentFileIds.length > 0 ? attachmentFileIds : undefined,
                     feeAmount: feeEnabled ? feeNum : undefined,
-                    feeExpenseCategoryId: feeEnabled && feeCat ? feeCat.id : undefined,
-                    feeEnvelopId: feeEnabled && feeCat ? feeCat.default_envelop_id : undefined,
+                    feeExpenseCategoryId: feeEnabled && feeCategoryId ? feeCategoryId : undefined,
+                    feeEnvelopId: feeEnabled ? feeEnvelopeId : undefined,
                     idempotencyKey: idem.key,
                 });
                 idem.rotate();
@@ -2150,7 +2095,7 @@ function TransferForm({
 
             {feeEnabled && (
                 <OrbitFieldRow>
-                    <OrbitField label="Fee amount" hint="Charged by source">
+                    <OrbitField label="Fee amount" hint="Charged by source" required>
                         <OrbitInput
                             type="number"
                             inputMode="decimal"
@@ -2161,16 +2106,29 @@ function TransferForm({
                             placeholder="0.00"
                         />
                     </OrbitField>
-                    <OrbitField label="Fee category" hint="Where the fee is logged">
+                    <OrbitField label="Fee category" hint="Where the fee is logged" required>
                         <CategoryTreeSelect
-                            categories={activeFeeCategories as any}
+                            categories={categoriesQuery.data ?? []}
                             value={feeCategoryId}
                             onChange={setFeeCategoryId}
-                            placeholder="Pick category"
+                            placeholder="Choose category"
                             allowAll={false}
                         />
                     </OrbitField>
                 </OrbitFieldRow>
+            )}
+
+            {feeEnabled && (
+                <OrbitField label="Fee envelope" hint="The fee spends from here" required>
+                    <OrbitSelect
+                        value={feeEnvelopeId}
+                        onValueChange={setFeeEnvelopeId}
+                        items={feeEnvelopeItems}
+                        placeholder="Choose envelope"
+                        leadIcon={<Layers className="size-3.5" />}
+                        leadColor="var(--ent-2)"
+                    />
+                </OrbitField>
             )}
 
             {feeEnabled && amountNum > 0 && feeNum > 0 && (

@@ -36,9 +36,7 @@ export const categoryBreakdown = authorizedProcedure
                    isn't active so the unfiltered query reads cleanly.
                    The `t.` alias on `spending_rows.transactions` is what
                    lets the envelope/category fragments splice in. */
-                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [
-                    input.spaceId,
-                ]);
+                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [input.spaceId]);
                 const catWhere = categoryFilterWhere(input.categoryIds);
                 const envWhere = envelopeFilterWhere(input.envelopeIds);
                 const acctScope = scopeAccountsFilter(input.accountIds);
@@ -49,7 +47,6 @@ export const categoryBreakdown = authorizedProcedure
                     name: string;
                     color: string;
                     icon: string;
-                    default_envelop_id: string;
                     direct_total: string;
                     subtree_total: string;
                 }>`
@@ -92,7 +89,6 @@ export const categoryBreakdown = authorizedProcedure
                         ec.name,
                         ec.color,
                         ec.icon,
-                        ec.default_envelop_id::text,
                         COALESCE(s.total, 0)::text AS direct_total,
                         COALESCE((
                             SELECT SUM(ss.total)
@@ -112,7 +108,6 @@ export const categoryBreakdown = authorizedProcedure
                     name: r.name,
                     color: r.color,
                     icon: r.icon,
-                    envelopId: r.default_envelop_id,
                     directTotal: Number(r.direct_total),
                     subtreeTotal: Number(r.subtree_total),
                 }));

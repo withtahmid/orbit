@@ -26,24 +26,15 @@ export const personalCategoryBreakdown = authorizedProcedure
     .query(async ({ ctx, input }) => {
         const [error, result] = await safeAwait(
             (async () => {
-                const owned = await resolveOwnedAccountIds(
-                    ctx.services.qb,
-                    ctx.auth.user.id
-                );
-                const memberSpaces = await resolveMemberSpaceIds(
-                    ctx.services.qb,
-                    ctx.auth.user.id
-                );
+                const owned = await resolveOwnedAccountIds(ctx.services.qb, ctx.auth.user.id);
+                const memberSpaces = await resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id);
                 if (memberSpaces.length === 0) return [];
 
                 /* Narrow to the user-picked accounts (intersected with
                    owned). When the intersection is empty, `= ANY('{}')`
                    yields zero spend — categories still return with zero
                    totals, which is the correct "nothing matched" view. */
-                const scopedAccounts = intersectAccountIds(
-                    owned,
-                    input.accountIds
-                );
+                const scopedAccounts = intersectAccountIds(owned, input.accountIds);
 
                 const query = sql<{
                     id: string;
@@ -51,7 +42,6 @@ export const personalCategoryBreakdown = authorizedProcedure
                     name: string;
                     color: string;
                     icon: string;
-                    default_envelop_id: string;
                     space_id: string;
                     space_name: string;
                     direct_total: string;
@@ -88,7 +78,6 @@ export const personalCategoryBreakdown = authorizedProcedure
                         ec.name,
                         ec.color,
                         ec.icon,
-                        ec.default_envelop_id::text,
                         ec.space_id::text,
                         s.name AS space_name,
                         COALESCE(sp.total, 0)::text AS direct_total,
@@ -111,7 +100,6 @@ export const personalCategoryBreakdown = authorizedProcedure
                     name: r.name,
                     color: r.color,
                     icon: r.icon,
-                    envelopId: r.default_envelop_id,
                     spaceId: r.space_id,
                     spaceName: r.space_name,
                     directTotal: Number(r.direct_total),

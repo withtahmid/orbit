@@ -8,13 +8,7 @@ import { resolveSpaceMembership } from "../space/utils/resolveSpaceMembership.mj
 
 type Tier = "essential" | "important" | "discretionary" | "luxury" | "unclassified";
 
-const TIER_ORDER: Tier[] = [
-    "essential",
-    "important",
-    "discretionary",
-    "luxury",
-    "unclassified",
-];
+const TIER_ORDER: Tier[] = ["essential", "important", "discretionary", "luxury", "unclassified"];
 
 const TIER_LABEL: Record<Tier, string> = {
     essential: "Essential",
@@ -78,14 +72,13 @@ export const priorityBreakdown = authorizedProcedure
                     ancestry AS (
                         -- depth 0: each category is its own starting point.
                         SELECT id, parent_id, priority,
-                               default_envelop_id AS envelop_id,
                                id AS origin
                         FROM expense_categories
                         WHERE space_id = ${input.spaceId}
                         UNION ALL
                         -- Walk up through any NULL-priority ancestors.
                         SELECT parent.id, parent.parent_id, parent.priority,
-                               parent.default_envelop_id, a.origin
+                               a.origin
                         FROM ancestry a
                         JOIN expense_categories parent ON parent.id = a.parent_id
                         WHERE a.priority IS NULL
@@ -94,18 +87,17 @@ export const priorityBreakdown = authorizedProcedure
                         SELECT origin AS id,
                                (ARRAY_AGG(priority)
                                 FILTER (WHERE priority IS NOT NULL))[1]
-                               AS effective_priority,
-                               -- Origin's own envelop_id is what counts —
-                               -- envelopes attach at the leaf, and the
-                               -- recursive walk stops at the first ancestor
-                               -- with a priority anyway.
-                               (ARRAY_AGG(envelop_id ORDER BY id = origin DESC))[1]
-                               AS envelop_id
+                               AS effective_priority
                         FROM ancestry
                         GROUP BY origin
                     ),
                     entries AS (
-                        SELECT t.expense_category_id AS ec_id, t.amount AS amount
+                        -- Envelope attribution comes from the transaction's
+                        -- own envelop_id (source of truth since migration
+                        -- 041); categories carry no envelope link anymore.
+                        SELECT t.expense_category_id AS ec_id,
+                               t.envelop_id,
+                               t.amount AS amount
                         FROM transactions t
                         WHERE t.type = 'expense'
                           AND t.source_account_id IN (SELECT account_id FROM scope_accounts)
@@ -121,14 +113,12 @@ export const priorityBreakdown = authorizedProcedure
                         COALESCE(SUM(e.amount), 0)::text AS total
                     FROM entries e
                     LEFT JOIN resolved r ON r.id = e.ec_id
-                    LEFT JOIN envelops env ON env.id = r.envelop_id
+                    LEFT JOIN envelops env ON env.id = e.envelop_id
                     GROUP BY r.effective_priority, env.id, env.name, env.color, env.icon
                 `;
                 const res = await query.execute(trx);
 
-                const totals = new Map<Tier, number>(
-                    TIER_ORDER.map((t) => [t, 0])
-                );
+                const totals = new Map<Tier, number>(TIER_ORDER.map((t) => [t, 0]));
                 const envelopesByTier = new Map<
                     Tier,
                     Map<
@@ -144,8 +134,7 @@ export const priorityBreakdown = authorizedProcedure
                 >(TIER_ORDER.map((t) => [t, new Map()]));
                 for (const row of res.rows) {
                     const key: Tier =
-                        row.priority &&
-                        TIER_ORDER.includes(row.priority as Tier)
+                        row.priority && TIER_ORDER.includes(row.priority as Tier)
                             ? (row.priority as Tier)
                             : "unclassified";
                     const total = Number(row.total);
@@ -172,9 +161,9 @@ export const priorityBreakdown = authorizedProcedure
                     label: TIER_LABEL[tier],
                     color: TIER_COLOR[tier],
                     total: totals.get(tier) ?? 0,
-                    envelopes: Array.from(
-                        (envelopesByTier.get(tier) ?? new Map()).values()
-                    ).sort((a, b) => b.total - a.total),
+                    envelopes: Array.from((envelopesByTier.get(tier) ?? new Map()).values()).sort(
+                        (a, b) => b.total - a.total
+                    ),
                 }));
             })
         );
