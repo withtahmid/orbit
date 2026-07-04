@@ -2,7 +2,6 @@ import { Link } from "react-router-dom";
 import {
     TrendingUp,
     PieChart as PieIcon,
-    Wallet,
     Layers as LayersIcon,
     Flame,
     Network,
@@ -70,14 +69,6 @@ const ENTRIES: Entry[] = [
             "Where each envelope's budget is committed — your space-wide spending intent.",
         icon: Network,
         color: "var(--ent-4)",
-    },
-    {
-        view: "accounts",
-        title: "Account distribution",
-        description:
-            "Where your money lives across assets, liabilities, and locked accounts.",
-        icon: Wallet,
-        color: "var(--ent-7)",
     },
     {
         view: "balance",

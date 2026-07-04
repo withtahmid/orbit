@@ -1,3 +1,4 @@
 - [Budgeting model invariants (migration 048)](budgeting-model.md) — one-row-per-(envelope,period); held=GREATEST(0,alloc−consumed); spendable−Σheld=unallocated.
 - [Analytics category-breakdown invariants](analytics-category-breakdown-invariants.md) — Σdirect==Σroot-subtree identity; trends filter zeroes transfers; empty-intersection behavior.
 - [Categories delete-gating tx_count divergence](categories-delete-gating-txcount.md) — client gates on expense-only tx_count; server delete guard counts ALL types. Known-latent, graceful.
+- [Accounts net-worth sign convention](accounts-networth-sign.md) — liabilities stored positive; net=assets+locked−Σliability(signed). Math.abs-of-sum is the pitfall.

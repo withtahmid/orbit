@@ -976,7 +976,7 @@ and registered in [`routers/analytics.mts`](../apps/server/src/routers/analytics
 | `envelopeRecentAverages` | trailing-N-period averages used by the envelope card "typical month" line |
 | `unbudgetedTrend` | 90-day breakdown of what drained the unbudgeted pool — income, allocations, **silent overspend absorption** (the surprising one) |
 | `allocations` | flat list of allocations for the AllocationsView |
-| `accountDistribution` | per-account balance with color/icon for the assets donut |
+| `accountDistribution` | per-account balance with color/icon (powers the Overview; the Accounts page derives its own distribution bar from the account list) |
 
 **Events**
 

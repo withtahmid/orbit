@@ -1,0 +1,1 @@
+- [Accounts summary consolidation](accounts_summary_consolidation.md) — 2026-07-04: analytics AccountsView folded into /accounts; two-tier net-worth+distribution card; watch net-worth-vs-holdings two-totals dissonance.

@@ -40,7 +40,7 @@ One file per page module under `apps/web/src/pages/space/<name>/`.
 | [envelopes](web/envelopes.md) | `BudgetsPage` + `BudgetDetailPage` + `BudgetMonthPage` (under `pages/space/budgets/`) — period state, overspend, space-wide allocations. |
 | [categories](web/categories.md) | `CategoriesPage` — category tree pinned to envelopes, tree CRUD. |
 | [events](web/events.md) | `EventsPage` + `EventDetailPage` + supporting (`CreateOrEditEventDialog`, `DeleteEventDialog`, `EventStatusButton`, `eventUI.tsx`). Recently rewritten — segmented Active/Closed/All filter, estimate progress bar, detail page. |
-| [analytics](web/analytics.md) | `AnalyticsPage` + ten explicit child view routes. **Two views lack personal twins** (`AllocationsView`, `PriorityView`) — they break on `/s/me`. Adding a view requires both an `ENTRIES` tile and a route entry. |
+| [analytics](web/analytics.md) | `AnalyticsPage` + nine explicit child view routes (account distribution was removed and folded into the Accounts page). **Two views lack personal twins** (`AllocationsView`, `PriorityView`) — they break on `/s/me`. Adding a view requires both an `ENTRIES` tile and a route entry. |
 | [year-report](web/year-report.md) | `YearReportPage` — annual summary. |
 | [settings](web/settings.md) | `SpaceSettingsPage` — space-level config (rename, members, danger zone). Still uses shadcn `Card`/`Tabs`. |
 
