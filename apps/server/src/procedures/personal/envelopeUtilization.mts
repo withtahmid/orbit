@@ -101,8 +101,8 @@ export const personalEnvelopeUtilization = authorizedProcedure
                                   (e.cadence = 'none' AND a.period_start IS NULL)
                                   OR (
                                       e.cadence <> 'none'
-                                      AND a.period_start >= ${periodStart}::date
-                                      AND a.period_start < ${periodEnd}::date
+                                      AND a.period_start >= ${periodStart}::timestamptz::date
+                                      AND a.period_start < ${periodEnd}::timestamptz::date
                                   )
                               )
                         ), 0)::text AS allocated,

@@ -139,12 +139,26 @@ export const personalSummary = authorizedProcedure
                             e.cadence,
                             CASE e.cadence
                                 WHEN 'none' THEN DATE '1970-01-01'
-                                WHEN 'monthly' THEN ${input.periodStart}::date
+                                WHEN 'monthly' THEN ${input.periodStart}::timestamptz::date
                             END AS p_start,
                             CASE e.cadence
                                 WHEN 'none' THEN DATE '9999-12-31'
-                                WHEN 'monthly' THEN ${input.periodEnd}::date
-                            END AS p_end
+                                WHEN 'monthly' THEN ${input.periodEnd}::timestamptz::date
+                            END AS p_end,
+                            -- Raw-instant twins for the transaction filters:
+                            -- the date-typed bounds above serve the date-column
+                            -- allocation match; against timestamptz
+                            -- transaction_datetime they'd round the window to
+                            -- APP_TZ midnights (lossless only for midnight-
+                            -- aligned callers). Mirrors analytics.spaceSummary.
+                            CASE e.cadence
+                                WHEN 'none' THEN TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                                WHEN 'monthly' THEN ${input.periodStart}::timestamptz
+                            END AS p_start_ts,
+                            CASE e.cadence
+                                WHEN 'none' THEN TIMESTAMPTZ '9999-12-31 00:00:00+00'
+                                WHEN 'monthly' THEN ${input.periodEnd}::timestamptz
+                            END AS p_end_ts
                         FROM envelops e
                         WHERE e.space_id = ANY(${memberSpaces})
                     ),
@@ -172,8 +186,8 @@ export const personalSummary = authorizedProcedure
                                 WHERE t.envelop_id = p.envelop_id
                                   AND t.type = 'expense'
                                   AND t.source_account_id = ANY(${owned})
-                                  AND t.transaction_datetime >= p.p_start
-                                  AND t.transaction_datetime < p.p_end
+                                  AND t.transaction_datetime >= p.p_start_ts
+                                  AND t.transaction_datetime < p.p_end_ts
                             ), 0) AS p_consumed_owned,
                             -- Space-wide spend on the envelope (any account) —
                             -- drives held, matching analytics.spaceSummary.
@@ -182,8 +196,8 @@ export const personalSummary = authorizedProcedure
                                 FROM transactions t
                                 WHERE t.envelop_id = p.envelop_id
                                   AND t.type = 'expense'
-                                  AND t.transaction_datetime >= p.p_start
-                                  AND t.transaction_datetime < p.p_end
+                                  AND t.transaction_datetime >= p.p_start_ts
+                                  AND t.transaction_datetime < p.p_end_ts
                             ), 0) AS p_consumed_all
                         FROM period p
                     )

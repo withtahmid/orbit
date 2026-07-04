@@ -42,6 +42,7 @@ import {
     OrbitFieldRow,
 } from "@/components/orbit/OrbitForm";
 import { getIcon } from "@/lib/entityIcons";
+import { compactMoney } from "@/lib/chartBucket";
 import { EnvelopeAllocateDialog } from "@/features/allocations/EnvelopeAllocateDialog";
 import { EnvelopeMoveDialog } from "@/features/allocations/EnvelopeMoveDialog";
 import { EnvelopeTopUpDialog } from "@/features/allocations/EnvelopeTopUpDialog";
@@ -604,84 +605,142 @@ export default function BudgetsPage() {
                             </div>
                         )}
                     </div>
-                    {/* Distribution bar — every envelope's allocation as a
-                        colored segment against the "cash you have" tick,
-                        same visual as the month planning page but thinner
-                        and caption-free (the banner below already carries
-                        the unbudgeted / over-budgeted verdict in words).
-                        Current month only — "funded" means nothing for a
-                        past month's view. aria-hidden: every number here
-                        is already text in the strip and banner. */}
+                    {/* Distribution bar — every envelope's *remaining* (left)
+                        balance as a colored segment against the "cash you have"
+                        tick. Segments show held cash, not the original plan:
+                        spent money has already left the envelope, so drawing
+                        `allocated` would overstate the bar and paint a false
+                        over-allocation hatch whenever you'd spent anything.
+                        (The month-plan page's sibling bar deliberately shows
+                        the *plan* — each bar's caption names its quantity.)
+                        Held sums over ALL envelopes — archived ones keep their
+                        allocation rows and still tie up cash — with each
+                        clamped at 0, matching the server's envelopeRemaining
+                        (GREATEST(0, …)) that drives `unallocated`/
+                        `isOverAllocated`. So the gap between the segments' end
+                        and the cash tick *is* the banner's unbudgeted cash.
+                        (It is NOT the REMAINING headline, which is active
+                        envelopes only and unclamped.) Current month only —
+                        "funded" means nothing for a past month's view. The bar
+                        is aria-hidden: every number is already text in the
+                        strip, caption, and banner. The gate spans ALL
+                        envelopes for the same reason held does: a space whose
+                        only current-month budget sits in archived envelopes
+                        still has cash tied up, and the banner below reflects
+                        it — hiding the bar there would drop the visual while
+                        keeping the verdict. */}
                     {monthOffset === 0 &&
-                        envelopes.length > 0 &&
-                        totals.allocated > 0 &&
+                        allEnvelopes.some((e) => e.allocated > 0) &&
                         (() => {
                             const funded = Math.max(0, summaryQuery.data?.spendableBalance ?? 0);
-                            const scale = Math.max(funded, totals.allocated, 1);
+                            const held = allEnvelopes.reduce(
+                                (s, e) => s + Math.max(0, e.remaining),
+                                0
+                            );
+                            const scale = Math.max(funded, held, 1);
                             let acc = 0;
-                            const segs = envelopes
+                            const segs = allEnvelopes
                                 .map((e) => {
+                                    const value = Math.max(0, e.remaining);
                                     const seg = {
                                         id: e.envelopId,
                                         left: (acc / scale) * 100,
-                                        width: (e.allocated / scale) * 100,
+                                        width: (value / scale) * 100,
                                         color: e.color,
                                         name: e.name,
-                                        value: e.allocated,
+                                        value,
+                                        archived: e.archived,
                                     };
-                                    acc += e.allocated;
+                                    acc += value;
                                     return seg;
                                 })
                                 .filter((s) => s.width > 0);
+                            // Fully spent AND no spendable cash: nothing to
+                            // draw — a bare empty track reads as a rendering
+                            // bug, not as data.
+                            if (segs.length === 0 && funded <= 0) return null;
+                            // Same sub-cent epsilon as the server's
+                            // isOverAllocated guard: two PG-rounded sums can
+                            // differ by a residue, and a hairline hatch here
+                            // would contradict the banner saying "balanced".
+                            // No `funded > 0` gate: with zero/negative
+                            // spendable cash and envelopes still holding
+                            // budget, the whole bar hatches — agreeing with
+                            // the banner's "over-budgeted" verdict.
+                            const overHeld = held > funded + 0.005;
                             return (
-                                <div className="env-dist-bar" aria-hidden>
-                                    {segs.map((s, i) => (
-                                        <span
-                                            key={s.id}
-                                            className="env-dist-seg"
-                                            style={{
-                                                left: `${s.left}%`,
-                                                width: `${s.width}%`,
-                                                background: s.color,
-                                                // Inline, not :last-child — the
-                                                // overlay/tick spans render after
-                                                // the segments in this parent.
-                                                ...(i === segs.length - 1 && {
-                                                    borderTopRightRadius: 5,
-                                                    borderBottomRightRadius: 5,
-                                                    borderRight: "none",
-                                                }),
-                                            }}
-                                            title={`${s.name}: ${s.value.toLocaleString("en-US", {
-                                                minimumFractionDigits: 2,
-                                                maximumFractionDigits: 2,
-                                            })}`}
-                                        />
-                                    ))}
-                                    {funded > 0 && totals.allocated > funded && (
-                                        <span
-                                            className="env-dist-over"
-                                            style={{
-                                                left: `${(funded / scale) * 100}%`,
-                                                width: `${((totals.allocated - funded) / scale) * 100}%`,
-                                            }}
-                                        />
-                                    )}
-                                    {funded > 0 && (
-                                        <span
-                                            className="env-dist-tick"
-                                            style={{
-                                                left: `${(funded / scale) * 100}%`,
-                                            }}
-                                            title={`Cash you have: ${funded.toLocaleString(
-                                                "en-US",
-                                                {
-                                                    minimumFractionDigits: 2,
-                                                    maximumFractionDigits: 2,
-                                                }
-                                            )}`}
-                                        />
-                                    )}
+                                <div className="env-dist">
+                                    <div className="env-dist-bar" aria-hidden>
+                                        {segs.map((s, i) => (
+                                            <span
+                                                key={s.id}
+                                                className="env-dist-seg"
+                                                style={{
+                                                    left: `${s.left}%`,
+                                                    width: `${s.width}%`,
+                                                    background: s.color,
+                                                    // Inline, not :last-child — the
+                                                    // overlay/tick spans render after
+                                                    // the segments in this parent.
+                                                    ...(i === segs.length - 1 && {
+                                                        borderTopRightRadius: 5,
+                                                        borderBottomRightRadius: 5,
+                                                        borderRight: "none",
+                                                    }),
+                                                }}
+                                                // Archived envelopes still hold
+                                                // cash (their allocation rows
+                                                // stay put) but are hidden from
+                                                // the default list below — the
+                                                // suffix is the one channel that
+                                                // identifies such a segment.
+                                                title={`${s.name}: ${s.value.toLocaleString(
+                                                    "en-US",
+                                                    {
+                                                        minimumFractionDigits: 2,
+                                                        maximumFractionDigits: 2,
+                                                    }
+                                                )} left${s.archived ? " · archived" : ""}`}
+                                            />
+                                        ))}
+                                        {overHeld && (
+                                            <span
+                                                className="env-dist-over"
+                                                style={{
+                                                    left: `${(funded / scale) * 100}%`,
+                                                    width: `${((held - funded) / scale) * 100}%`,
+                                                }}
+                                            />
+                                        )}
+                                        {funded > 0 && (
+                                            <span
+                                                className="env-dist-tick"
+                                                style={{
+                                                    left: `${(funded / scale) * 100}%`,
+                                                }}
+                                                title={`Cash you have: ${funded.toLocaleString(
+                                                    "en-US",
+                                                    {
+                                                        minimumFractionDigits: 2,
+                                                        maximumFractionDigits: 2,
+                                                    }
+                                                )}`}
+                                            />
+                                        )}
+                                    </div>
+                                    {/* One caption line — names the quantity so
+                                        this bar can't be misread as the month
+                                        page's plan bar. A legend, not a number:
+                                        the figures live in the strip/banner. */}
+                                    <div className="env-dist-caption">
+                                        <span>Each segment is cash still in its envelope</span>
+                                        {funded > 0 && (
+                                            <span className="env-dist-caption-tick">
+                                                <i aria-hidden /> cash you have (
+                                                {compactMoney(funded)})
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                             );
                         })()}
@@ -2203,10 +2262,15 @@ const ENV_STYLES = `
     font-weight: 400;
 }
 
-/* Distribution bar — the month-plan page's allocation bar, thinner and
-   caption-free. Segments = each envelope's allocation, tick = cash you
-   have, red overlay = allocation past your cash. Not overflow-clipped so
-   the tick survives sitting at 100%. */
+/* Distribution bar — the month-plan page's bar, thinner. Segments = each
+   envelope's clamped remaining (held cash), tick = cash you have, red
+   overlay = held past your cash. Not overflow-clipped so the tick
+   survives sitting at 100%. */
+.env-dist {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
 .env-dist-bar {
     position: relative;
     height: 9px;
@@ -2243,6 +2307,28 @@ const ENV_STYLES = `
     bottom: -3px;
     width: 2.5px;
     transform: translateX(-50%);
+    background: var(--fg);
+    border-radius: 2px;
+}
+/* Caption — same pattern as the month page's plan-dist-caption, so the
+   two sibling bars are explicitly-different rather than silently so. */
+.env-dist-caption {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--fg-3); /* fg-4 fails AA at this size */
+}
+.env-dist-caption-tick {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg-3);
+}
+.env-dist-caption-tick i {
+    width: 2.5px;
+    height: 12px;
     background: var(--fg);
     border-radius: 2px;
 }
