@@ -1,6 +1,13 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
-import { Plus, Share2, ChevronRight } from "lucide-react";
+import {
+    Plus,
+    Share2,
+    ChevronRight,
+    Sparkles,
+    TrendingDown,
+    Lock,
+} from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
@@ -10,6 +17,10 @@ import { AddExistingAccountDialog } from "@/features/accounts/AddExistingAccount
 import { PermissionGate } from "@/components/shared/PermissionGate";
 import { UserAvatar } from "@/components/shared/UserAvatar";
 import { ROUTES } from "@/router/routes";
+import {
+    AccountDistributionBar,
+    type AccountSlice,
+} from "./AccountDistributionBar";
 
 type NormalizedOwner = {
     id: string;
@@ -32,9 +43,36 @@ type NormalizedAccount = {
 
 const UNASSIGNED_OWNER_ID = "__unassigned__";
 
+/** Slice id for the rolled-up tail of the distribution bar — not a real account. */
+const OTHER_SLICE_ID = "__other__";
+
+/**
+ * Where clicking an account (card, bar segment, or chip) goes.
+ * Personal-space accounts open inside their first real space when they
+ * belong to one; otherwise there's no detail page to open, so stay put.
+ */
+function hrefForAccount(
+    a: NormalizedAccount,
+    isPersonal: boolean,
+    spaceId: string
+): string {
+    if (!isPersonal) return ROUTES.spaceAccountDetail(spaceId, a.id);
+    if (a._spaces && a._spaces.length > 0)
+        return ROUTES.spaceAccountDetail(a._spaces[0].spaceId, a.id);
+    return ROUTES.myAccounts;
+}
+
+function fmt2(n: number): string {
+    return n.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
 const AccountsPage = observer(function AccountsPage() {
     const { space } = useCurrentSpace();
     const { authStore } = useStore();
+    const navigate = useNavigate();
     const isPersonal = space.isPersonal;
     const currentUserId = authStore.user?.id ?? null;
 
@@ -91,17 +129,76 @@ const AccountsPage = observer(function AccountsPage() {
 
     const totals = useMemo(() => {
         let assets = 0;
+        // Signed sum. Liabilities store amount-owed as a positive number;
+        // an overpaid liability goes negative (a net credit — effectively
+        // an asset), so no abs() here — it must ADD to net worth, matching
+        // the per-card sign flip in AccountCard.
         let liabilities = 0;
         let locked = 0;
+        let assetCount = 0;
+        let liabilityCount = 0;
+        let lockedCount = 0;
         for (const a of accounts) {
             const v = Number(a.balance);
-            if (a.account_type === "asset") assets += v;
-            else if (a.account_type === "locked") locked += v;
-            else if (a.account_type === "liability") liabilities += v;
+            if (a.account_type === "asset") {
+                assets += v;
+                assetCount++;
+            } else if (a.account_type === "locked") {
+                locked += v;
+                lockedCount++;
+            } else if (a.account_type === "liability") {
+                liabilities += v;
+                liabilityCount++;
+            }
         }
-        const net = assets + locked - Math.abs(liabilities);
-        return { assets, liabilities: Math.abs(liabilities), locked, net };
+        const net = assets + locked - liabilities;
+        return {
+            assets,
+            liabilities,
+            locked,
+            net,
+            assetCount,
+            liabilityCount,
+            lockedCount,
+        };
     }, [accounts]);
+
+    // Distribution bar — where wealth sits. Positive asset + locked
+    // balances only: liabilities are debt (a "negative segment" can't be
+    // drawn) and overdrawn accounts can't either, so both stay in the
+    // stats instead. Past ~8 segments the chips get noisy, so the tail
+    // rolls up into "Other".
+    const distSlices = useMemo<AccountSlice[]>(() => {
+        const positive = accounts
+            .filter(
+                (a) => a.account_type !== "liability" && Number(a.balance) > 0
+            )
+            .sort((a, b) => Number(b.balance) - Number(a.balance))
+            .map((a) => ({
+                id: a.id,
+                name: a.name,
+                value: Number(a.balance),
+                color: a.color,
+            }));
+        const TOP = 8;
+        if (positive.length <= TOP + 1) return positive;
+        const top = positive.slice(0, TOP);
+        const restTotal = positive.slice(TOP).reduce((s, d) => s + d.value, 0);
+        return [
+            ...top,
+            {
+                id: OTHER_SLICE_ID,
+                name: `Other · ${positive.length - TOP} accounts`,
+                value: restTotal,
+                color: "var(--fg-4)",
+            },
+        ];
+    }, [accounts]);
+
+    const holdingsTotal = useMemo(
+        () => distSlices.reduce((s, d) => s + d.value, 0),
+        [distSlices]
+    );
 
     const groupedByUser = useMemo(() => {
         const byOwner = new Map<
@@ -132,6 +229,7 @@ const AccountsPage = observer(function AccountsPage() {
 
     const memberCount = membersQuery.data?.length ?? 0;
     const accountCount = accounts.length;
+    const owesNothing = totals.liabilityCount === 0;
 
     return (
         <div className="orbit-design ac-root">
@@ -144,7 +242,6 @@ const AccountsPage = observer(function AccountsPage() {
                         {!isPersonal && memberCount > 0
                             ? ` · ${memberCount} member${memberCount === 1 ? "" : "s"}`
                             : ""}
-                        {!isPersonal ? " · 1 space" : ""}
                     </span>
                     <h1 className="display ac-title">Accounts</h1>
                     <p className="ac-sub">
@@ -179,68 +276,139 @@ const AccountsPage = observer(function AccountsPage() {
             </header>
 
             <div className="ac-scroll">
-                {/* Hero — net worth with assets/locked/liabilities */}
-                <div className="od-card vignette ac-hero">
-                    <div className="ac-hero-cell">
-                        <span className="eyebrow">Net worth</span>
-                        <span className="ac-hero-net">
-                            {totals.net.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                            })}
-                        </span>
-                    </div>
-                    <div className="ac-hero-cell">
-                        <span className="eyebrow">Assets</span>
-                        <span className="ac-hero-stat" style={{ color: "var(--income)" }}>
-                            {totals.assets.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                            })}
-                        </span>
-                    </div>
-                    <div className="ac-hero-cell">
-                        <span className="eyebrow">Locked</span>
-                        <span className="ac-hero-stat" style={{ color: "var(--gold)" }}>
-                            {totals.locked.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                            })}
-                        </span>
-                    </div>
-                    <div className="ac-hero-cell">
-                        <span className="eyebrow">Liabilities</span>
-                        <span className="ac-hero-stat" style={{ color: "var(--expense)" }}>
-                            −
-                            {totals.liabilities.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                            })}
-                        </span>
-                    </div>
-                </div>
+                {/* ---- Summary: ledger header (net worth hero · composition
+                     stats) over a full-width distribution bar ---- */}
+                {accountsQuery.isLoading ? (
+                    <Skeleton height={210} />
+                ) : accounts.length > 0 ? (
+                    <section className="od-card vignette ac-summary">
+                        {/* Ledger header: net worth is the sole hero on the
+                            left; the composition (assets / locked / debt)
+                            groups to the right as subordinate figures. */}
+                        <div className="ac-ledger">
+                            <div className="ac-networth">
+                                <span className="eyebrow">Net worth</span>
+                                <span
+                                    className="tabular ac-networth-val"
+                                    style={{
+                                        color:
+                                            totals.net < 0
+                                                ? "var(--expense)"
+                                                : "var(--fg)",
+                                    }}
+                                >
+                                    {totals.net < 0 ? "−" : ""}
+                                    {fmt2(Math.abs(totals.net))}
+                                </span>
+                                <span className="ac-networth-sub">
+                                    {/* Don't name a term the ledger doesn't
+                                        show — Locked hides at 0 accounts. */}
+                                    {totals.lockedCount > 0
+                                        ? "assets + locked − liabilities"
+                                        : "assets − liabilities"}
+                                </span>
+                            </div>
+                            <div className="ac-tstats">
+                                <TypeStat
+                                    label="Assets"
+                                    value={totals.assets}
+                                    color={
+                                        totals.assets < 0
+                                            ? "var(--expense)"
+                                            : totals.assets > 0
+                                              ? "var(--income)"
+                                              : "var(--fg-3)"
+                                    }
+                                    count={totals.assetCount}
+                                />
+                                {/* A space with no locked accounts skips the
+                                    column instead of showing a hollow 0.00. */}
+                                {totals.lockedCount > 0 && (
+                                    <TypeStat
+                                        label="Locked"
+                                        value={totals.locked}
+                                        color={
+                                            totals.locked < 0
+                                                ? "var(--expense)"
+                                                : totals.locked > 0
+                                                  ? "var(--gold)"
+                                                  : "var(--fg-3)"
+                                        }
+                                        count={totals.lockedCount}
+                                    />
+                                )}
+                                <TypeStat
+                                    label="Liabilities"
+                                    // Debt reduces net worth → shown negative.
+                                    // An overpaid liability flips to a credit
+                                    // and renders as a plus, in green.
+                                    value={-totals.liabilities}
+                                    signed
+                                    color={
+                                        totals.liabilities > 0
+                                            ? "var(--expense)"
+                                            : totals.liabilities < 0
+                                              ? "var(--income)"
+                                              : "var(--fg-3)"
+                                    }
+                                    count={totals.liabilityCount}
+                                    emptyNote={
+                                        owesNothing ? "no debt" : undefined
+                                    }
+                                />
+                            </div>
+                        </div>
 
+                        <div className="ac-sum-bar">
+                            <AccountDistributionBar
+                                data={distSlices}
+                                onSelect={(s) => {
+                                    if (s.id === OTHER_SLICE_ID) return;
+                                    const account = accounts.find(
+                                        (a) => a.id === s.id
+                                    );
+                                    if (!account) return;
+                                    navigate(
+                                        hrefForAccount(
+                                            account,
+                                            isPersonal,
+                                            space.id
+                                        )
+                                    );
+                                }}
+                            />
+                        </div>
+
+                    </section>
+                ) : null}
+
+                {/* ---- Accounts, grouped by owner ---- */}
                 {accountsQuery.isLoading ? (
                     <div className="ac-grid">
                         {[0, 1, 2, 3, 4, 5].map((i) => (
-                            <Skeleton key={i} height={130} />
+                            <Skeleton key={i} height={132} />
                         ))}
                     </div>
                 ) : accounts.length === 0 ? (
                     <div className="od-card ac-empty">
                         <div
-                            style={{ fontSize: 14, color: "var(--fg-2)", fontWeight: 500 }}
+                            style={{
+                                fontSize: 14,
+                                color: "var(--fg-2)",
+                                fontWeight: 500,
+                            }}
                         >
                             No accounts yet
                         </div>
-                        <div style={{ fontSize: 12.5, color: "var(--fg-4)" }}>
+                        <div style={{ fontSize: 12.5, color: "var(--fg-3)" }}>
                             Create your first account to start tracking money.
                         </div>
                         <PermissionGate roles={["owner"]}>
                             <CreateAccountDialog
                                 trigger={
                                     <button className="od-btn od-btn-primary">
-                                        <Plus className="size-3.5" /> New account
+                                        <Plus className="size-3.5" /> New
+                                        account
                                     </button>
                                 }
                             />
@@ -257,11 +425,19 @@ const AccountsPage = observer(function AccountsPage() {
                                   : (owner?.first_name ?? "Unknown").toUpperCase();
                         const isUnassigned = key === UNASSIGNED_OWNER_ID;
                         const total = group.reduce(
-                            (acc, a) => acc + Number(a.balance),
+                            (acc, a) =>
+                                acc +
+                                (a.account_type === "liability"
+                                    ? -Number(a.balance)
+                                    : Number(a.balance)),
                             0
                         );
                         return (
                             <div key={key} className="ac-group">
+                                {/* In /s/me every account is yours — a
+                                    "YOU · N accounts" header just restates
+                                    the page subtitle, so skip it. */}
+                                {!isPersonal && (
                                 <div className="ac-group-head">
                                     <span className="ac-group-name">
                                         {isUnassigned ? (
@@ -300,36 +476,24 @@ const AccountsPage = observer(function AccountsPage() {
                                                     : "var(--fg)",
                                         }}
                                     >
-                                        {total.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                        })}
+                                        {total < 0 ? "−" : ""}
+                                        {fmt2(Math.abs(total))}
                                     </span>
                                 </div>
+                                )}
                                 <div className="ac-grid">
-                                    {group.map((a) => {
-                                        const href =
-                                            isPersonal &&
-                                            a._spaces &&
-                                            a._spaces.length > 0
-                                                ? ROUTES.spaceAccountDetail(
-                                                      a._spaces[0].spaceId,
-                                                      a.id
-                                                  )
-                                                : isPersonal
-                                                  ? ROUTES.myAccounts
-                                                  : ROUTES.spaceAccountDetail(
-                                                        space.id,
-                                                        a.id
-                                                    );
-                                        return (
-                                            <AccountCard
-                                                key={a.id}
-                                                account={a}
-                                                href={href}
-                                            />
-                                        );
-                                    })}
+                                    {group.map((a) => (
+                                        <AccountCard
+                                            key={a.id}
+                                            account={a}
+                                            href={hrefForAccount(
+                                                a,
+                                                isPersonal,
+                                                space.id
+                                            )}
+                                            holdingsTotal={holdingsTotal}
+                                        />
+                                    ))}
                                 </div>
                             </div>
                         );
@@ -342,58 +506,103 @@ const AccountsPage = observer(function AccountsPage() {
 
 export default AccountsPage;
 
+function TypeStat({
+    label,
+    value,
+    color,
+    count,
+    signed = false,
+    emptyNote,
+}: {
+    label: string;
+    value: number;
+    color: string;
+    count: number;
+    /** Render a leading +/− (used for liabilities shown as their net-worth effect). */
+    signed?: boolean;
+    emptyNote?: string;
+}) {
+    const sign = !signed
+        ? value < 0
+            ? "−"
+            : ""
+        : value < 0
+          ? "−"
+          : value > 0
+            ? "+"
+            : "";
+    return (
+        <div className="ac-tstat">
+            <span className="eyebrow">{label}</span>
+            <span className="tabular ac-tstat-val" style={{ color }}>
+                {sign}
+                {fmt2(Math.abs(value))}
+            </span>
+            <span className="ac-tstat-sub">
+                {emptyNote ?? `${count} account${count === 1 ? "" : "s"}`}
+            </span>
+        </div>
+    );
+}
+
 function AccountCard({
     account,
     href,
+    holdingsTotal,
 }: {
     account: NormalizedAccount;
     href: string;
+    /** Sum of all positive asset+locked balances — for the "% of holdings" foot. */
+    holdingsTotal: number;
 }) {
     const typeChip =
         account.account_type === "liability"
-            ? { label: "↑ Liability", color: "var(--expense)" }
+            ? {
+                  label: "Liability",
+                  color: "var(--expense)",
+                  Icon: TrendingDown,
+              }
             : account.account_type === "locked"
-              ? { label: "🔒 Locked", color: "var(--gold)" }
-              : { label: "↓ Asset", color: "var(--income)" };
+              ? { label: "Locked", color: "var(--gold)", Icon: Lock }
+              : { label: "Asset", color: "var(--income)", Icon: Sparkles };
     const otherOwnersCount = account.owners.length - 1;
-    // Liabilities store the amount owed as a positive number (negative net worth),
-    // so flip them; assets/locked keep their sign. A negative signed value means
-    // money owed or an overspent (overdrawn) account.
+    // Liabilities store the amount owed as a positive number (negative net
+    // worth), so flip them; assets/locked keep their sign. A negative signed
+    // value means money owed or an overdrawn account.
     const signedBalance =
         account.account_type === "liability"
             ? -Number(account.balance)
             : Number(account.balance);
+    const showPct =
+        account.account_type !== "liability" &&
+        Number(account.balance) > 0 &&
+        holdingsTotal > 0;
+    const pct = showPct ? (Number(account.balance) / holdingsTotal) * 100 : 0;
     return (
-        <Link
-            to={href}
-            className="od-card ac-card"
-            style={{ borderTop: `2px solid ${account.color}` }}
-        >
+        <Link to={href} className="od-card ac-card">
+            <span
+                className="ac-card-glow"
+                aria-hidden
+                style={{
+                    background: `radial-gradient(120% 70% at 0% 0%, color-mix(in oklab, ${account.color} 10%, transparent), transparent 70%)`,
+                }}
+            />
             <div className="ac-card-head">
                 <span className="ac-card-name">
-                    <Avatar
-                        icon={account.icon}
-                        color={account.color}
-                        size={32}
-                    />
+                    <Avatar icon={account.icon} color={account.color} size={34} />
                     <span className="ac-card-text">
-                        <span className="ac-card-title">
-                            {account.name}{" "}
-                            <span
-                                className="ac-card-type"
-                                style={{
-                                    color: typeChip.color,
-                                    borderColor: `color-mix(in oklab, ${typeChip.color} 30%, transparent)`,
-                                    background: `color-mix(in oklab, ${typeChip.color} 10%, transparent)`,
-                                }}
-                            >
-                                {typeChip.label}
-                            </span>
+                        <span className="ac-card-title">{account.name}</span>
+                        <span
+                            className="ac-card-type"
+                            style={{ color: typeChip.color }}
+                        >
+                            <typeChip.Icon className="ac-card-type-icon" />
+                            {typeChip.label}
                         </span>
                     </span>
                 </span>
                 <ChevronRight
-                    className="size-3.5"
+                    className="size-3.5 ac-card-chevron"
                     style={{ color: "var(--fg-4)" }}
                 />
             </div>
@@ -404,10 +613,7 @@ function AccountCard({
                 }}
             >
                 {signedBalance < 0 ? "−" : ""}
-                {Math.abs(signedBalance).toLocaleString("en-US", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                })}
+                {fmt2(Math.abs(signedBalance))}
             </div>
             <div className="ac-card-foot">
                 {account._spaces && account._spaces.length > 0 ? (
@@ -425,11 +631,15 @@ function AccountCard({
                     </span>
                 ) : otherOwnersCount > 0 ? (
                     <span className="ac-card-shared">
-                        Shared · {account.owners.length} member
-                        {account.owners.length === 1 ? "" : "s"}
+                        Shared · {account.owners.length} members
                     </span>
                 ) : (
                     <span className="ac-card-shared">Solo</span>
+                )}
+                {showPct && (
+                    <span className="tabular ac-card-pct">
+                        {pct < 1 ? "<1" : pct.toFixed(0)}% of holdings
+                    </span>
                 )}
             </div>
         </Link>
@@ -450,7 +660,7 @@ function Avatar({
             style={{
                 width: size,
                 height: size,
-                borderRadius: 8,
+                borderRadius: 9,
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -555,52 +765,182 @@ const AC_STYLES = `
 }
 .ac-sub { font-size: 13px; color: var(--fg-3); margin: 0; }
 .ac-topbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-@media (max-width: 720px) {
-    .ac-topbar { padding: 18px 18px 14px; }
-}
 
 .ac-scroll {
     flex: 1;
     padding: 22px 32px 36px;
     display: flex;
     flex-direction: column;
+    gap: 22px;
+}
+
+/* ---- Summary card: ledger header (net worth hero · composition stats)
+   over a full-width distribution bar ---- */
+.orbit-design .od-card.ac-summary {
+    padding: 22px 26px;
+    display: flex;
+    flex-direction: column;
     gap: 20px;
 }
-@media (max-width: 720px) {
-    .ac-scroll { padding: 16px 18px 28px; }
+.ac-ledger {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 18px 28px;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+}
+.ac-networth {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+.ac-networth-val {
+    /* Clamp so billions-scale balances shrink instead of blowing the
+       header open — tabular digits never wrap. */
+    font-size: clamp(30px, 3.4vw, 40px);
+    font-weight: 500;
+    letter-spacing: -0.04em;
+    line-height: 1.02;
+    overflow-wrap: anywhere;
+}
+.ac-networth-sub { font-size: 11.5px; color: var(--fg-4); }
+
+/* Composition stats, grouped and right-aligned beside the hero. Dividers
+   are border-left on the tile (not floating spans) so a wrapped tile
+   brings its divider along instead of orphaning a hairline. */
+.ac-tstats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 14px 0;
+    min-width: 0;
+}
+.ac-tstat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding: 0 22px;
+    text-align: right;
+    align-items: flex-end;
+    border-left: 1px solid var(--line-soft);
+}
+.ac-tstat:first-child { padding-left: 0; border-left: none; }
+.ac-tstat:last-child { padding-right: 0; }
+.ac-tstat-val {
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+}
+.ac-tstat-sub { font-size: 11px; color: var(--fg-4); white-space: nowrap; }
+
+/* Full-width distribution bar band under the ledger header. */
+.ac-sum-bar {
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 20px;
 }
 
-/* Hero */
-.orbit-design .od-card.ac-hero {
-    padding: 28px;
-    display: grid;
-    grid-template-columns: 1.4fr 1fr 1fr 1fr;
-    gap: 22px;
+.ac-dist { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ac-dist-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+.ac-dist-readout {
+    font-size: 12px;
+    color: var(--fg-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.ac-dist-track {
+    display: flex;
+    gap: 2px;
+    height: 26px;
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--bg-elev-3);
+}
+.ac-dist-seg {
+    min-width: 3px;
+    flex-basis: 0;
+    transition: opacity 140ms ease;
+}
+.ac-dist-chips { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.ac-dist-chip {
+    display: inline-flex;
     align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    background: none;
+    font-family: inherit;
+    font-size: 11.5px;
+    color: var(--fg-3);
+    cursor: pointer;
+    transition: color 120ms ease;
+    min-width: 0;
 }
-@media (max-width: 1100px) {
-    .orbit-design .od-card.ac-hero { grid-template-columns: repeat(2, 1fr); }
+.ac-dist-chip:hover,
+.ac-dist-chip[data-active] { color: var(--fg); }
+.ac-dist-chip:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 4px;
 }
-@media (max-width: 600px) {
-    .orbit-design .od-card.ac-hero { grid-template-columns: 1fr; }
+.ac-dist-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
 }
-.ac-hero-cell { display: flex; flex-direction: column; gap: 6px; }
-.ac-hero-net {
-    font-size: 48px;
-    font-weight: 500;
-    color: var(--fg);
-    letter-spacing: -0.04em;
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
+.ac-dist-chip-pct { color: var(--fg-4); font-size: 10.5px; }
+.ac-dist-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
 }
-.ac-hero-stat {
-    font-size: 26px;
-    font-weight: 500;
-    letter-spacing: -0.04em;
-    font-variant-numeric: tabular-nums;
+.ac-dist-empty { font-size: 12.5px; color: var(--fg-3); }
+
+/* Summary responsive. Below the sidebar+tablet squeeze band the ledger
+   wraps, and border-left dividers would dangle at wrapped line-starts —
+   so swap them for a real column gap once we drop under desktop width. */
+@media (max-width: 1024px) {
+    .ac-tstats { gap: 14px 24px; }
+    .ac-tstat {
+        border-left: none;
+        padding: 0;
+    }
+}
+@media (max-width: 720px) {
+    .ac-ledger {
+        align-items: stretch;
+        justify-content: flex-start;
+    }
+    .ac-tstats { justify-content: flex-start; }
+    .ac-tstat { text-align: left; align-items: flex-start; }
+}
+@media (max-width: 620px) {
+    .orbit-design .od-card.ac-summary { padding: 18px; gap: 16px; }
+    .ac-tstats { gap: 12px 20px; width: 100%; }
 }
 
-/* Owner group */
+/* ---- Owner group ---- */
 .ac-group { display: flex; flex-direction: column; gap: 12px; }
 .ac-group-head {
     display: flex;
@@ -613,6 +953,7 @@ const AC_STYLES = `
     display: inline-flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
 }
 .ac-owner-bubble {
     width: 24px;
@@ -631,28 +972,27 @@ const AC_STYLES = `
     color: var(--fg-3);
     letter-spacing: 0.1em;
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .ac-owner-count {
     font-size: 11px;
     color: var(--fg-4);
     text-transform: lowercase;
+    white-space: nowrap;
 }
 .ac-group-total {
     font-size: 14px;
     font-weight: 500;
+    white-space: nowrap;
 }
 
-/* Card grid */
+/* ---- Card grid ---- */
 .ac-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
     gap: 12px;
-}
-@media (max-width: 1100px) {
-    .ac-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 640px) {
-    .ac-grid { grid-template-columns: 1fr; }
 }
 
 .orbit-design .od-card.ac-card {
@@ -662,17 +1002,25 @@ const AC_STYLES = `
     gap: 14px;
     text-decoration: none;
     color: inherit;
-    transition: border-color 140ms ease, background 140ms ease;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 140ms ease, transform 140ms ease;
 }
 .orbit-design .od-card.ac-card:hover {
     border-color: var(--line-strong);
-    background: var(--bg-elev-2);
+    transform: translateY(-1px);
 }
+.orbit-design .od-card.ac-card:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+}
+.ac-card-glow { position: absolute; inset: 0; pointer-events: none; }
 .ac-card-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
+    position: relative;
 }
 .ac-card-name {
     display: inline-flex;
@@ -683,6 +1031,7 @@ const AC_STYLES = `
 .ac-card-text {
     display: flex;
     flex-direction: column;
+    gap: 2px;
     line-height: 1.2;
     min-width: 0;
 }
@@ -693,32 +1042,38 @@ const AC_STYLES = `
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
 }
 .ac-card-type {
     display: inline-flex;
     align-items: center;
-    height: 18px;
-    padding: 0 7px;
-    border-radius: 999px;
-    border: 1px solid;
-    font-size: 9.5px;
+    gap: 4px;
+    font-size: 10px;
     font-weight: 500;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
+.ac-card-type-icon { width: 11px; height: 11px; }
+.ac-card-chevron { margin-top: 2px; flex-shrink: 0; }
 .ac-card-balance {
     font-size: 24px;
     font-weight: 500;
     letter-spacing: -0.04em;
     line-height: 1;
+    position: relative;
 }
-.ac-card-foot { display: flex; align-items: center; }
+.ac-card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    position: relative;
+    min-height: 22px;
+}
 .ac-card-spaces {
     display: inline-flex;
     flex-wrap: wrap;
     gap: 4px;
+    min-width: 0;
 }
 .ac-space-chip {
     display: inline-flex;
@@ -730,6 +1085,7 @@ const AC_STYLES = `
     color: var(--fg-3);
     background: transparent;
     border: 1px solid var(--line-soft);
+    white-space: nowrap;
 }
 .ac-card-shared {
     font-size: 11px;
@@ -738,8 +1094,9 @@ const AC_STYLES = `
     align-items: center;
     gap: 6px;
 }
+.ac-card-pct { font-size: 11px; color: var(--fg-4); white-space: nowrap; }
 
-/* Empty */
+/* ---- Empty ---- */
 .orbit-design .od-card.ac-empty {
     padding: 40px;
     display: flex;
@@ -749,16 +1106,18 @@ const AC_STYLES = `
     text-align: center;
 }
 
-/* Phone (<640px) — tighten hero, paddings, headlines. */
+/* ---- Phone (<640px) ---- */
+@media (max-width: 720px) {
+    .ac-topbar { padding: 18px 18px 14px; }
+    .ac-scroll { padding: 16px 18px 28px; gap: 16px; }
+}
 @media (max-width: 640px) {
     .ac-topbar { padding: 14px 14px 10px; }
     .ac-title { font-size: 22px; }
     .ac-scroll { padding: 12px 14px 22px; gap: 14px; }
-    .orbit-design .od-card.ac-hero { padding: 18px; gap: 14px; }
-    .ac-hero-net { font-size: 32px; }
-    .ac-hero-stat { font-size: 18px; }
     .orbit-design .od-card.ac-card { padding: 14px; }
     .ac-card-balance { font-size: 20px; }
     .orbit-design .od-card.ac-empty { padding: 24px; }
+    .ac-grid { grid-template-columns: 1fr; }
 }
 `;

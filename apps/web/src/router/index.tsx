@@ -47,9 +47,6 @@ const AnalyticsEnvelopesView = lazy(
 const AnalyticsBalanceView = lazy(
     () => import("@/pages/space/analytics/views/BalanceHistoryView")
 );
-const AnalyticsAccountsView = lazy(
-    () => import("@/pages/space/analytics/views/AccountsView")
-);
 const AnalyticsHeatmapView = lazy(
     () => import("@/pages/space/analytics/views/HeatmapView")
 );
@@ -207,10 +204,6 @@ export const router = createBrowserRouter([
                                     {
                                         path: "analytics/balance",
                                         element: withSuspense(<AnalyticsBalanceView />),
-                                    },
-                                    {
-                                        path: "analytics/accounts",
-                                        element: withSuspense(<AnalyticsAccountsView />),
                                     },
                                     {
                                         path: "analytics/heatmap",

@@ -530,8 +530,9 @@ function Accounts() {
                     My Accounts
                 </Link>{" "}
                 page shows every account you can access across every space you&apos;re in, grouped
-                by asset / liability / locked with links straight into each space&apos;s detail
-                view.
+                by owner, with links straight into each space&apos;s detail view. Its summary strip
+                carries your net worth, per-type totals, and a distribution bar showing where
+                your holdings sit.
             </Paragraph>
         </section>
     );
@@ -823,7 +824,7 @@ function Analytics() {
     return (
         <section className="od-section">
             <SectionHeader id="analytics" title="Analytics" icon={BarChart3} />
-            <Paragraph>Ten dedicated analytics views, all period-filterable:</Paragraph>
+            <Paragraph>Nine dedicated analytics views, all period-filterable:</Paragraph>
             <ul className="od-list">
                 <li>
                     <strong>Cash flow</strong> — income vs expense by day / week / month
@@ -836,9 +837,6 @@ function Analytics() {
                 </li>
                 <li>
                     <strong>Balance</strong> — running total balance over time
-                </li>
-                <li>
-                    <strong>Accounts</strong> — distribution donut across accounts
                 </li>
                 <li>
                     <strong>Heatmap</strong> — daily expense calendar

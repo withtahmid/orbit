@@ -5,3 +5,4 @@
 - [Category lifecycle gaps](project_category_lifecycle_gaps.md) — no archive; used categories can't be deleted (FK RESTRICT); merge/reassign is the missing affordance; delete-affordance defect
 - [Statement-mode balance prominence](anomaly_statement_balance_prominence.md) — RESOLVED: neutral/headline in statement mode, muted in multi-account; canonical context-vs-headline pattern
 - [Read-only copy leaks](anomaly_readonly_copy_leaks.md) — isOwner gating covers buttons but descriptive strings naming edit verbs are the missed leak; audit empty-state/helper copy for non-owners
+- [Account distribution relocation](project_account_distribution_relocation.md) — donut moved from analytics (now 9 views) onto /accounts hero; server twins still feed Overview; docs went stale
