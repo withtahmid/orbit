@@ -100,14 +100,39 @@ export const spaceSummary = authorizedProcedure
                         SELECT
                             e.id AS envelop_id,
                             e.cadence,
+                            -- ::timestamptz::date, NOT bare ::date: pg serializes a JS
+                            -- Date param as text ("2026-06-30 18:00:00+00"), and PG's
+                            -- text→date cast truncates the literal's date part with NO
+                            -- tz conversion — an APP_TZ month-start instant (July 1
+                            -- 00:00 +06 = …-06-30T18:00Z) lands on June 30, silently
+                            -- widening the window by a day. Going via timestamptz makes
+                            -- the date cast honor the session zone (APP_TZ, pinned in
+                            -- db/index.mts), yielding the intended wall-clock date.
                             CASE e.cadence
                                 WHEN 'none' THEN DATE '1970-01-01'
-                                WHEN 'monthly' THEN ${input.periodStart}::date
+                                WHEN 'monthly' THEN ${input.periodStart}::timestamptz::date
                             END AS p_start,
                             CASE e.cadence
                                 WHEN 'none' THEN DATE '9999-12-31'
-                                WHEN 'monthly' THEN ${input.periodEnd}::date
-                            END AS p_end
+                                WHEN 'monthly' THEN ${input.periodEnd}::timestamptz::date
+                            END AS p_end,
+                            -- Raw-instant twins of p_start/p_end for the
+                            -- transaction filter. The date-typed bounds above
+                            -- exist for the date-column allocation match; using
+                            -- them against timestamptz transaction_datetime
+                            -- would round the window to APP_TZ midnights,
+                            -- lossless only while callers pass midnight-aligned
+                            -- ends. Raw instants mirror envelopeUtilization
+                            -- and the income/expense block below, so the two
+                            -- procedures can never disagree on consumed.
+                            CASE e.cadence
+                                WHEN 'none' THEN TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                                WHEN 'monthly' THEN ${input.periodStart}::timestamptz
+                            END AS p_start_ts,
+                            CASE e.cadence
+                                WHEN 'none' THEN TIMESTAMPTZ '9999-12-31 00:00:00+00'
+                                WHEN 'monthly' THEN ${input.periodEnd}::timestamptz
+                            END AS p_end_ts
                         FROM envelops e
                         WHERE e.space_id = ${input.spaceId}
                     ),
@@ -133,8 +158,8 @@ export const spaceSummary = authorizedProcedure
                                 FROM transactions t
                                 WHERE t.envelop_id = p.envelop_id
                                   AND t.type = 'expense'
-                                  AND t.transaction_datetime >= p.p_start
-                                  AND t.transaction_datetime < p.p_end
+                                  AND t.transaction_datetime >= p.p_start_ts
+                                  AND t.transaction_datetime < p.p_end_ts
                             ), 0) AS p_consumed
                         FROM period p
                     )

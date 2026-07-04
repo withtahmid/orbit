@@ -84,5 +84,11 @@ function allocationPeriodMatch(cadence: Cadence, start: Date) {
     if (cadence === "none") {
         return sql`a.period_start IS NULL`;
     }
-    return sql`a.period_start = ${start}::date`;
+    // ::timestamptz::date, NOT bare ::date: `start` is an APP_TZ month-start
+    // instant (July 1 00:00 +06 = …-06-30T18:00Z) and pg serializes it as
+    // text; text→date truncates the literal's date part with NO tz
+    // conversion, landing on the previous month's last day — which matches
+    // no allocation row (they sit on the 1st), so `allocated` silently read
+    // 0. timestamptz→date converts in the session zone (APP_TZ).
+    return sql`a.period_start = ${start}::timestamptz::date`;
 }

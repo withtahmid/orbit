@@ -86,11 +86,11 @@ export const personalYearReport = authorizedProcedure
                       AND COALESCE(
                             a.period_start,
                             DATE_TRUNC('month', a.created_at)::date
-                          ) >= ${yearStart}::date
+                          ) >= ${yearStart}::timestamptz::date
                       AND COALESCE(
                             a.period_start,
                             DATE_TRUNC('month', a.created_at)::date
-                          ) < ${yearEnd}::date
+                          ) < ${yearEnd}::timestamptz::date
                     GROUP BY a.envelop_id, month_idx
                 `
                     .execute(trx)
