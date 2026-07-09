@@ -2,3 +2,4 @@
 - [Budget tz & ledger traps](budget_tz_and_ledger_traps.md) — Browser-local period math + stale delta-ledger SUMs over the new absolute-amount allocation rows.
 - [Analytics filter traps](analytics_filter_traps.md) — Shared analytics filter bar + trends SQL helpers: empty-set ANY semantics, WITH RECURSIVE empty CTE, what NOT to "fix".
 - [Categories tree traps](categories_tree_traps.md) — No server cycle guard on changeParent, tree helpers lack visited-guards, Inspector derived-dirty phantom.
+- [Event detail charts traps](event_detail_charts_traps.md) — Timeline 2000-day cap drops folded spend; hero Spent (eventTotals) vs cumulative (eventDailySpend) are separate procedures.

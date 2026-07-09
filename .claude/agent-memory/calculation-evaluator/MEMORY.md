@@ -27,3 +27,4 @@
 - [Running balance helpers](running_balance_helpers.md) — accountRunningBalance.mts signed effects match trigger 018 (adjustment src XOR dst); ordering consistent; acctScope safe; latent space-scope divergence for cross-space accounts.
 - [envelopeRecentAverages month offset](envelope_recent_averages_month_offset.md) — CONFIRMED BUG: native getUTCMonth() on APP_TZ instant shifts "Last month" KPI 1 full month early, every load. Also no cadence filter → rolling last_month_planned garbage.
 - [Budget footnote YTD vs full-year](budget_footnote_ytd_vs_fullyear.md) — CONFIRMED BUG: "Monthly spend" footnote divides YTD spent by full-12-month allocated → inverts/misstates over/under for the current in-progress year.
+- [Event detail dashboard math](event_detail_dashboard_math.md) — feat/enevt/details invariants: day-span partition, timeline conservation (widen/fold/2000-cap safe), pace formula, category-tree conservation. Audited CLEAN.

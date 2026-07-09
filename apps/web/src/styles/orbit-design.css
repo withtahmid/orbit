@@ -147,6 +147,10 @@
     border-color: var(--line-strong);
 }
 .orbit-design .od-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.orbit-design .od-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand);
+}
 .orbit-design .od-btn-primary {
     background: var(--brand);
     color: var(--brand-fg);
@@ -202,6 +206,15 @@
 }
 
 @keyframes orbit-blink { 50% { opacity: 0; } }
+/* Shared skeleton shimmer — hoisted global so the reusable Skeleton animates
+   on every page (page-level inline @keyframes vanish when that page unmounts). */
+@keyframes ov-shimmer {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .orbit-design [style*="ov-shimmer"] { animation: none !important; }
+}
 @keyframes orbit-rise {
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: translateY(0); }
