@@ -18,3 +18,6 @@
 - [Envelope color contrast / custom hex](envelope_color_contrast_custom_hex.md) — envelope.color themes chart marks; palette + free custom-hex input means dark colors can drop marks below 3:1, but value labels carry the data so not a WCAG 1.4.1 fail.
 - [Vignette layering](vignette-layering.md) — .vignette `::before` (z-index:0) paints over non-positioned content; card children need position:relative + z-index:1.
 - [SpaceLayout full-bleed pattern](spacelayout-bleed-pattern.md) — space-page negative margins must match `.sl-main` padding (1.5rem/1rem <768, 2rem ≥768); 53px mobile header; sidebar sits outside page inert scope so in-page slide-overs can leak focus.
+- [orbit-design token contrast](orbit_design_tokens.md) — dark-only surface; fg-3≈4.4-5.2 / fg-4≈2.7-3.2 contrast ratios; recurring fg-4-on-meaningful-text AA fail; 4px focus-ring not clipped by od-card.
+- [ov-shimmer keyframe scoping](ov_shimmer_keyframe_scoping.md) — Skeleton shimmer keyframe lives only in OverviewPage inline <style>; every other page's skeleton is static (React unmounts the style).
+- [Event detail page](event_detail_page.md) — Full-bleed ev-root; KPI flex-band stray-rule-on-wrap trap (721-1250px); 30px hero action targets incl. Delete; search input has no accessible name.

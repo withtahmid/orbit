@@ -15,6 +15,8 @@ import { envelopeMonthlyAllocations } from "../procedures/analytics/envelopeMont
 import { envelopeRecentAverages } from "../procedures/analytics/envelopeRecentAverages.mjs";
 import { envelopeUtilization } from "../procedures/analytics/envelopeUtilization.mjs";
 import { eventCategoryBreakdown } from "../procedures/analytics/eventCategoryBreakdown.mjs";
+import { eventDailySpend } from "../procedures/analytics/eventDailySpend.mjs";
+import { eventTopLocations } from "../procedures/analytics/eventTopLocations.mjs";
 import { eventTotals } from "../procedures/analytics/eventTotals.mjs";
 import { incomeBreakdown } from "../procedures/analytics/incomeBreakdown.mjs";
 import { netWorthHistory } from "../procedures/analytics/netWorthHistory.mjs";
@@ -42,6 +44,8 @@ export const analyticsRouter = router({
     envelopeMonthlyAllocations,
     eventTotals,
     eventCategoryBreakdown,
+    eventDailySpend,
+    eventTopLocations,
     priorityBreakdown,
     topCategories,
     topCategoriesByBucket,

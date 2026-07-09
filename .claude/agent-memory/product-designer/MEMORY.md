@@ -1,4 +1,5 @@
 - [Events domain shape](events_domain_shape.md) — Events table/procedures/UI as of 2026-05-11; no personal-space twin for eventTotals.
+- [Event Detail dashboard](../../apps/web/.claude/agent-memory/product-designer/event_detail_dashboard.md) — 2026-07-09: redesign fixed timeline/income-gating/copy-leaks; open: short-event tile redundancy, density, EventsPage term drift.
 - [Envelope/category coupling decision](envelope_category_coupling_decision.md) — Strict N:1 conflicts with spec's orthogonality; recommend soft-decouple via transactions.envelop_id.
 - [Transaction-entry Pins spec](transaction_entry_pins_spec.md) — v3: Account per-user-per-space, Envelope/Event space-wide; two-table schema; editor+ sets space pins; silent on cross-user changes.
 - [Carry-both Absorb gap anomaly](carry_both_absorb_gap_anomaly.md) — `carry='both'` + reckoning `absorbed` are non-canceling; produces invisible carried-debt gap between net worth and envelope remaining.
