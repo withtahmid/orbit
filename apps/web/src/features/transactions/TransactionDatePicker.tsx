@@ -31,9 +31,12 @@ import { cn } from "@/lib/utils";
  *     calendar and a native time input — covers 95%+ of transaction
  *     date scenarios in two clicks or less.
  *
- * Stays in datetime-local string format at the boundary so the existing
- * form `mutate({ datetime: fromInputDateTime(value) })` plumbing is
- * unchanged.
+ * Every edit (calendar day, preset, time stepper) commits to the parent's
+ * `onChange` immediately — there's no separate Apply step to miss, so
+ * closing the popover any way (Done, outside click, Escape) keeps
+ * whatever was last selected. Stays in datetime-local string format at
+ * the boundary so the existing form `mutate({ datetime:
+ * fromInputDateTime(value) })` plumbing is unchanged.
  */
 export function TransactionDatePicker({
     value,
@@ -77,11 +80,8 @@ export function TransactionDatePicker({
                 {open && (
                     <TransactionDatePickerInner
                         value={value}
-                        onCancel={() => setOpen(false)}
-                        onApply={(next) => {
-                            onChange(next);
-                            setOpen(false);
-                        }}
+                        onChange={onChange}
+                        onDone={() => setOpen(false)}
                     />
                 )}
             </PopoverContent>
@@ -91,20 +91,30 @@ export function TransactionDatePicker({
 
 function TransactionDatePickerInner({
     value,
-    onCancel,
-    onApply,
+    onChange,
+    onDone,
 }: {
     value: string;
-    onCancel: () => void;
-    onApply: (next: string) => void;
+    onChange: (next: string) => void;
+    onDone: () => void;
 }) {
-    /* Seed draft state from the value once on mount; subsequent edits
-       stay local until the user hits Apply. Cancel discards. */
+    /* Seed draft state from the value once on mount. Every subsequent
+       edit commits immediately via `commitDraft` — there's no separate
+       Apply step, so nothing is lost if the user closes the popover by
+       clicking outside or pressing Escape instead of pressing a button. */
     const [draft, setDraft] = useState(() => {
         const parsed = fromInputDateTime(value);
         return Number.isFinite(parsed.getTime()) ? parsed : new Date();
     });
     const [viewMonth, setViewMonth] = useState(() => startOfMonth(draft));
+
+    /* Every edit goes through here: updates the local draft (so the
+       calendar/time UI reflects it immediately) and pushes it up to the
+       form in the same tick. Replaces the old draft-then-Apply flow. */
+    const commitDraft = (next: Date) => {
+        setDraft(next);
+        onChange(toInputDateTime(next));
+    };
 
     const today = useMemo(() => startOfDay(new Date()), []);
     const draftDay = useMemo(() => startOfDay(draft), [draft]);
@@ -123,7 +133,7 @@ function TransactionDatePickerInner({
         const now = new Date();
         /* Strip seconds + ms — tz-agnostic so safe in any browser. */
         now.setSeconds(0, 0);
-        setDraft(now);
+        commitDraft(now);
         setViewMonth(startOfMonth(now));
         /* Re-snap the baseline so the chip re-activates and stays active
            until the user changes the draft again. */
@@ -142,7 +152,7 @@ function TransactionDatePickerInner({
             draftHours24,
             draftMinutes
         );
-        setDraft(y);
+        commitDraft(y);
         setViewMonth(startOfMonth(y));
     };
     /* `nowBaseline` is the most recent "now" snapshot — set on mount
@@ -181,7 +191,7 @@ function TransactionDatePickerInner({
             draftHours24,
             draftMinutes
         );
-        setDraft(next);
+        commitDraft(next);
         /* When arrow-key nav (or any selection) crosses into a different
            month, keep the calendar showing the new selection so the user
            never loses sight of the focused cell. */
@@ -201,7 +211,7 @@ function TransactionDatePickerInner({
             safe,
             draftMinutes
         );
-        setDraft(next);
+        commitDraft(next);
     };
     const setMinutes = (m: number) => {
         const safe = Math.max(0, Math.min(59, m));
@@ -212,7 +222,7 @@ function TransactionDatePickerInner({
             draftHours24,
             safe
         );
-        setDraft(next);
+        commitDraft(next);
     };
     const togglePeriod = () => {
         setHours24(draftHours24 < 12 ? draftHours24 + 12 : draftHours24 - 12);
@@ -234,7 +244,7 @@ function TransactionDatePickerInner({
             nextH,
             nextM
         );
-        setDraft(next);
+        commitDraft(next);
     };
 
     return (
@@ -306,15 +316,8 @@ function TransactionDatePickerInner({
             </div>
 
             <div className="tdp-foot">
-                <button type="button" className="tdp-btn" onClick={onCancel}>
-                    Cancel
-                </button>
-                <button
-                    type="button"
-                    className="tdp-btn tdp-btn-primary"
-                    onClick={() => onApply(toInputDateTime(draft))}
-                >
-                    Apply
+                <button type="button" className="tdp-btn" onClick={onDone}>
+                    Done
                 </button>
             </div>
         </div>
@@ -786,11 +789,18 @@ export const TDP_POPOVER_STYLES = `
     padding: 0 !important;
     box-shadow: none !important;
     width: min(340px, calc(100vw - 28px));
-    /* Cap height so the popover always fits within the viewport even on
-       small phones. Radix's collision detection can flip the side, but
-       when content > viewport height, flipping isn't enough — we have
-       to scroll the body of the popover internally. */
-    max-height: calc(100dvh - 32px);
+    /* Cap height to whichever is smaller: the viewport, or the space
+       Radix actually measured as available on the side it chose to open
+       (--radix-popover-content-available-height). Radix's collision
+       detection only flips sides — it never shrinks the panel — so when
+       the trigger sits low in a form/sheet, the "available" space can be
+       far less than the viewport-relative calc alone would allow, and
+       without this the footer renders below the fold with no way to
+       scroll to it. */
+    max-height: min(
+        calc(100dvh - 32px),
+        var(--radix-popover-content-available-height, 600px)
+    );
 }
 .tdp-pop-inner {
     background: var(--bg-elev-1);
@@ -803,7 +813,10 @@ export const TDP_POPOVER_STYLES = `
     gap: 10px;
     font-family: inherit;
     color: var(--fg);
-    max-height: calc(100dvh - 32px);
+    max-height: min(
+        calc(100dvh - 32px),
+        var(--radix-popover-content-available-height, 600px)
+    );
     /* Body scrolls inside .tdp-pop-scroll so the header and footer
        (Cancel / Apply) stay pinned at the edges. On short viewports
        (landscape phones), this is the only way to keep Apply reachable
@@ -1073,29 +1086,30 @@ export const TDP_POPOVER_STYLES = `
 .tdp-foot {
     display: flex;
     justify-content: flex-end;
-    gap: 6px;
     margin-top: 2px;
 }
 .tdp-btn {
-    height: 30px;
-    padding: 0 14px;
+    /* Compact, right-aligned, secondary-styled — matching
+       EnvelopeTargetDatePicker's Done. It just closes (everything else
+       already committed live), so it should read as a calm dismiss, not
+       compete with the form's actual primary CTA ("Save transaction")
+       sitting right next to this popover. DateRangePicker's own Done
+       stays brand-filled: it opens from a standalone filter chip with no
+       competing form CTA nearby, so there's nothing for it to compete
+       with. */
+    height: 34px;
+    padding: 0 16px;
     border-radius: 8px;
     border: 1px solid var(--line);
     background: transparent;
     color: var(--fg-2);
     font-family: inherit;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 .tdp-btn:hover { color: var(--fg); border-color: var(--line-strong); }
-.tdp-btn-primary {
-    background: var(--brand);
-    color: var(--bg);
-    border-color: var(--brand);
-}
-.tdp-btn-primary:hover { background: var(--brand); opacity: 0.92; }
 `;
 
 /* TDP_POPOVER_STYLES is exported at the const declaration above (around

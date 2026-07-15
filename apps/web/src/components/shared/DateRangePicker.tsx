@@ -15,11 +15,27 @@ import {
  *
  * Layout: presets sidebar on the left, two side-by-side month calendars on
  * the right with selection-range highlighting, From/To inputs at the top,
- * apply/cancel buttons at the bottom.
+ * a single Done button at the bottom.
  *
- * Stateless: receives `start` / `end` and emits `onChange(start, end)`.
- * Designed to be embedded inside a Popover; render a footer bar with
- * Apply / Cancel buttons via the parent so the popover can close on commit.
+ * Stateless: receives `start` / `end` and emits `onChange(start, end)` on
+ * every edit (picking one day, typing a From/To value). `onApply` fires
+ * automatically — not from a button — at the moments a selection reads as
+ * complete: clicking a preset, or picking the second day of a range. The
+ * parent uses that as the cue to close the popover, so users who "just
+ * select a date and do things" never have to notice or press an Apply
+ * button. `onCancel` backs the one footer button ("Done"), which only
+ * closes — everything is already committed via onChange/onApply. It's
+ * required (not optional) because it's the component's only built-in
+ * close affordance: without it the footer has nothing to render and a
+ * caller wiring only `onChange` would ship a popover with no visible way
+ * to dismiss it.
+ *
+ * A lone first click of a fresh range (`picking === "to"`, no second click
+ * yet) never reaches onChange/onApply on its own — see onPickDay — but it
+ * DOES update the highlighted day and the "Select end date" footer/header
+ * text, so Done treats that visible-but-uncommitted pick as a single-day
+ * range rather than silently discarding something the UI just showed as
+ * selected.
  */
 export function DateRangePicker({
     start,
@@ -32,9 +48,11 @@ export function DateRangePicker({
     start: Date;
     end: Date;
     onChange: (start: Date, end: Date) => void;
-    /** Optional commit handler — typically closes the parent popover. */
+    /** Optional auto-commit-and-close hook — fires on preset click or on
+     *  completing a 2-day range. Omit to require the user to close via
+     *  `onCancel` explicitly even after a complete selection. */
     onApply?: (start: Date, end: Date) => void;
-    onCancel?: () => void;
+    onCancel: () => void;
     className?: string;
 }) {
     /* "to" is the inclusive last day; usePeriod stores `end` as exclusive
@@ -74,7 +92,16 @@ export function DateRangePicker({
     const cellState = (d: Date): "out" | "in" | "start" | "end" | "single" => {
         const t = d.getTime();
         const fT = from.getTime();
-        const tT = to.getTime();
+        /* While awaiting the second click, `to` is still whatever was
+           left over from before this gesture started (see onPickDay) —
+           painting the full stale span would show a confirmed-looking
+           range that Done doesn't actually commit (it only commits
+           `from` as a single day; see the Done handler below).
+           Collapsing to just the start day here keeps the highlight,
+           the "Pick an end date" header, and what Done actually does
+           all telling the same story. The hover branch further down
+           still previews the tentative end on mouseover. */
+        const tT = picking === "to" ? fT : to.getTime();
         const lo = Math.min(fT, tT);
         const hi = Math.max(fT, tT);
         if (lo === hi && t === lo) return "single";
@@ -93,10 +120,17 @@ export function DateRangePicker({
 
     const onPickDay = (d: Date) => {
         if (picking === "from") {
+            /* First click of a fresh range only starts the selection —
+               it pairs the new start with whatever `to` happened to be
+               left over, which isn't a range the user asked for. Update
+               local state (drives the calendar highlight) without
+               notifying the parent; only a complete range (the second
+               click, below) or a preset commits externally. Otherwise
+               clicking once and walking away silently overwrote whatever
+               filter was active before the popover opened. */
             setFrom(d);
             if (d > to) setTo(d);
             setPicking("to");
-            onChange(d, endOfDayExclusive(d > to ? d : to));
         } else {
             const next = d < from ? from : d;
             const newFrom = d < from ? d : from;
@@ -104,6 +138,14 @@ export function DateRangePicker({
             setTo(next);
             setPicking("from");
             onChange(newFrom, endOfDayExclusive(next));
+            /* Picking the second day completes a range — that's the
+               natural "I'm done" signal, so commit and let the parent
+               close the popover instead of waiting on an Apply click the
+               user has no reason to expect at this point. Trade-off:
+               there's no longer a way to correct a bad pick within the
+               same session (the old flow let you keep clicking freely
+               before Apply) — reopening the picker is the recovery path. */
+            onApply?.(newFrom, endOfDayExclusive(next));
         }
     };
 
@@ -250,6 +292,13 @@ export function DateRangePicker({
                         onCommit={(d) => {
                             setFrom(d);
                             if (d > to) setTo(d);
+                            /* A typed field is a complete edit of a real
+                               range (unlike a lone calendar click, which
+                               leaves `to` as a stale leftover) — clear
+                               "awaiting second click" so Done's pending-
+                               pick commit (below) doesn't later collapse
+                               this range back down to a single day. */
+                            setPicking("from");
                             onChange(d, endOfDayExclusive(d > to ? d : to));
                         }}
                     />
@@ -259,11 +308,19 @@ export function DateRangePicker({
                     <DateInput
                         label="To"
                         value={to}
+                        /* Same stale-leftover problem as the calendar
+                           highlight above: while awaiting the second
+                           click, `to` isn't a real bound yet, so showing
+                           it here would contradict the "Select end date"
+                           header/footer right below. */
+                        pending={picking === "to"}
                         onCommit={(d) => {
                             const next = d < from ? from : d;
                             const newFrom = d < from ? d : from;
                             setFrom(newFrom);
                             setTo(next);
+                            /* Same reasoning as the From input above. */
+                            setPicking("from");
                             onChange(newFrom, endOfDayExclusive(next));
                         }}
                     />
@@ -289,6 +346,10 @@ export function DateRangePicker({
                                     setPicking("from");
                                     setLeftMonth(startOfMonth(s));
                                     onChange(s, endOfDayExclusive(e));
+                                    /* A preset click is a single, complete
+                                       action — commit and close instead of
+                                       leaving an Apply click behind. */
+                                    onApply?.(s, endOfDayExclusive(e));
                                 }}
                             >
                                 {p.label}
@@ -308,9 +369,11 @@ export function DateRangePicker({
                             <ChevronLeft className="size-3.5" />
                         </button>
                         <span className="op-date-cal-range">
-                            {dayCount > 0
-                                ? `${dayCount} day${dayCount === 1 ? "" : "s"} selected`
-                                : "Pick a range"}
+                            {picking === "to"
+                                ? "Pick an end date"
+                                : dayCount > 0
+                                  ? `${dayCount} day${dayCount === 1 ? "" : "s"} selected`
+                                  : "Pick a range"}
                         </span>
                         <button
                             type="button"
@@ -340,27 +403,32 @@ export function DateRangePicker({
 
             <div className="op-date-foot">
                 <span className="op-date-foot-summary">
-                    {fmt(from, "MMM d")} → {fmt(to, "MMM d, yyyy")}
+                    {picking === "to"
+                        ? `${fmt(from, "MMM d")} → Select end date`
+                        : `${fmt(from, "MMM d")} → ${fmt(to, "MMM d, yyyy")}`}
                 </span>
                 <div className="op-date-foot-actions">
-                    {onCancel && (
-                        <button
-                            type="button"
-                            className="op-date-btn"
-                            onClick={onCancel}
-                        >
-                            Cancel
-                        </button>
-                    )}
-                    {onApply && (
-                        <button
-                            type="button"
-                            className="op-date-btn op-date-btn-primary"
-                            onClick={() => onApply(from, endOfDayExclusive(to))}
-                        >
-                            Apply range
-                        </button>
-                    )}
+                    <button
+                        type="button"
+                        className="op-date-btn op-date-btn-primary"
+                        onClick={() => {
+                            /* A lone first click (picking flips to "to"
+                               and stays there until a second click)
+                               highlights as "selected" and now reads as
+                               "Select end date" above — closing without
+                               committing it would silently throw away a
+                               date the UI just told the user it took. Read
+                               it as "just that one day" instead, the same
+                               way a text-input edit or a same-day double-
+                               click already would. */
+                            if (picking === "to") {
+                                onApply?.(from, endOfDayExclusive(from));
+                            }
+                            onCancel();
+                        }}
+                    >
+                        Done
+                    </button>
                 </div>
             </div>
         </div>
@@ -444,27 +512,50 @@ function DateInput({
     label,
     value,
     onCommit,
+    pending,
 }: {
     label: string;
     value: Date;
     onCommit: (d: Date) => void;
+    /** True when `value` is a stale leftover rather than a real bound —
+     *  the "To" field while a range is awaiting its second click. Shows
+     *  a placeholder instead of the misleading date; typing still commits
+     *  normally. */
+    pending?: boolean;
 }) {
-    const [text, setText] = useState(() => fmt(value, "MMM d, yyyy"));
-    /* Keep the text in sync when value changes externally. */
+    const [text, setText] = useState(() =>
+        pending ? "" : fmt(value, "MMM d, yyyy")
+    );
+    /* Re-sync display text when the real value changes, or when a
+       gesture starts/stops being pending — but NOT on every keystroke,
+       since neither dep changes while the user is actively typing. */
     useEffect(() => {
-        setText(fmt(value, "MMM d, yyyy"));
-    }, [value]);
+        setText(pending ? "" : fmt(value, "MMM d, yyyy"));
+    }, [value, pending]);
     return (
         <label className="op-date-input-wrap">
             <span className="op-date-input-label">{label}</span>
             <input
                 type="text"
                 value={text}
+                placeholder={pending ? "Select end date" : undefined}
                 onChange={(e) => setText(e.target.value)}
                 onBlur={() => {
+                    /* Radix auto-focuses this field when the popover
+                       opens (it's the first focusable child), so clicking
+                       a calendar day fires a blur here before the click's
+                       own handler runs. Without this guard that blur
+                       would still call onCommit/onChange with the field's
+                       unchanged text — enough to flip a named preset into
+                       an explicit "custom" URL range, whose prop-sync
+                       effect then wins a race against the click and
+                       silently reverts the day the user just picked. Any
+                       other stray, non-editing blur is covered too. */
+                    const canonical = pending ? "" : fmt(value, "MMM d, yyyy");
+                    if (text === canonical) return;
                     const parsed = new Date(text);
                     if (Number.isNaN(parsed.getTime())) {
-                        setText(fmt(value, "MMM d, yyyy"));
+                        setText(canonical);
                     } else {
                         onCommit(startOfDay(parsed));
                     }
@@ -541,6 +632,17 @@ const DATE_PICKER_STYLES = `
     font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
     display: flex;
     flex-direction: column;
+    /* Radix only flips which side the popover opens on — it never shrinks
+       the panel to fit, so without a real cap this can render taller than
+       the trigger has room for and push the whole page into a confusing
+       scroll instead of scrolling internally. --radix-popover-content-
+       available-height is Radix's own measurement of the space actually
+       available on the chosen side; falling back to the viewport-relative
+       calc covers non-Radix embeddings. */
+    max-height: min(
+        calc(100dvh - 32px),
+        var(--radix-popover-content-available-height, 600px)
+    );
 }
 
 .op-date-head {
@@ -607,6 +709,10 @@ const DATE_PICKER_STYLES = `
     display: flex;
     min-height: 0;
     flex: 1;
+    /* Scrolls internally, independent of .op-date-picker's own max-height
+       cap above — keeps the From/To head and Done footer pinned in view
+       instead of the whole page taking over the scroll. */
+    overflow-y: auto;
 }
 @media (max-width: 720px) {
     .op-date-body { flex-direction: column; }

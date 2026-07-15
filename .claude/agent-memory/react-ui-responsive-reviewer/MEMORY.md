@@ -1,6 +1,7 @@
 - [Orbit design token scoping](orbit-design-scoping.md) — `--bg/--fg/--brand/...` only resolve inside `.orbit-design`; new pages using these tokens must wrap their root.
 - [Tap target sizes in Orbit](tap-target-sizes.md) — default button heights (shadcn `h-9` 36px, `.od-btn` 36px, `.od-btn-sm` 30px, `.ai-btn` 40px) are below 44px. Flag only in sticky bars, destructive controls, or dense rows.
 - [Transaction sheet architecture](transaction-sheet-architecture.md) — How New/Edit tx sheets, OrbitDrawerShell, NT_STYLES sharing, TransactionDatePicker popover styles, and FieldPin compose.
+- [Date-picker popovers](date_picker_popovers.md) — The 3 date pickers (tdp/op-date/etp): pinned-header/scroll/pinned-footer pattern, dvh+radix-available-height cap, live-commit + single Done; TDP full-width green Done sits beside form's green Save.
 - [Money variant="muted" contrast trap](money-variant-muted-contrast.md) — `variant="muted"` uses Tailwind `text-muted-foreground` (global theme), not orbit-design tokens — fails on brand/light surfaces.
 - [Envelope UI terminology (Position vs Remaining)](project_envelope_ui_terminology.md) — Hero stat label renamed for cumulative-vs-period clarity; don't revert without checking semantics.
 - [Envelope lifetime-overrun surfaces](project_envelope_lifetime_overrun_surfaces.md) — Four UI sites display rolling-envelope lifetime overspend; keep them in sync.

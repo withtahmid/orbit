@@ -8,3 +8,4 @@
 - [Accounts UI conventions](project_accounts_ui_conventions.md) — round-5 ledger-over-bar (.ac-strip/facts GONE); dividers now unreachable-to-dangle; single-tap segments; bar/chip <44px (cards=fallback)
 - [Event Detail UI conventions](project_event_detail_ui_conventions.md) — round-3: single ComposedChart + fg-4/focus/reduced-motion FIXED; remaining=2-tile stat stretch, un-stacked vol bars dodge, "No description" fg-4
 - [Transactions table UI conventions](project_transactions_table_ui_conventions.md) — dual desktop-grid/mobile-flex lists; balance-cell empty fallback asymmetry ("—" desktop vs blank mobile); optimistic pending→confirmed key remount + empty balance until refetch
+- [DateRangePicker conventions](project_daterangepicker_conventions.md) — pending/collapse fix works from custom entry; but Radix autofocuses From input → first calendar click blurs+re-commits stale preset value → first click SWALLOWED when opened from a named preset
