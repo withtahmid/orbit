@@ -78,10 +78,17 @@ export function PeriodChip({
                 <DateRangePicker
                     start={period.start}
                     end={period.end}
-                    // The DateRangePicker emits onChange continuously while
-                    // the user clicks around the calendars; we wait until
-                    // they hit Apply before committing back to the URL.
-                    onChange={() => {}}
+                    // Commits to the URL on edits that are already
+                    // complete on their own (typing a From/To value). The
+                    // first click of a fresh calendar range deliberately
+                    // does NOT call this — see DateRangePicker's onPickDay
+                    // — since a lone first click is a half-finished
+                    // selection, not something that should overwrite the
+                    // active filter if the user walks away.
+                    onChange={(s, e) => setCustom(s, e)}
+                    // Fires automatically once a selection reads as done
+                    // (preset click, second day of a range) — closes the
+                    // popover so there's no separate Apply step to miss.
                     onApply={(s, e) => {
                         setCustom(s, e);
                         setOpen(false);

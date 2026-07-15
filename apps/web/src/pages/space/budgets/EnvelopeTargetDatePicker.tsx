@@ -36,9 +36,15 @@ import { cn } from "@/lib/utils";
  * APP_TZ-aware month grid) but drops the time row, AM/PM, and Now/Yesterday
  * presets — none of which make sense for a future goal date.
  *
- * Stays on `YYYY-MM-DD` strings at the boundary so the envelope form's
- * existing parse path (`makeAppTzDate(y, m-1, d)` in BudgetsPage submit)
- * is unchanged. Empty string means "no target date".
+ * Every day pick commits to `onChange` immediately and closes the popover
+ * — unlike the transaction date/time picker, a single click here fully
+ * specifies the value (no time-of-day to also choose), so there's no
+ * reason to keep the popover open after it. Arrow-key navigation is
+ * exempt (see MonthGrid's `onDayClick`) so keyboard users can browse
+ * without the popover closing on the first arrow press. Stays on
+ * `YYYY-MM-DD` strings at the boundary so the envelope form's existing
+ * parse path (`makeAppTzDate(y, m-1, d)` in BudgetsPage submit) is
+ * unchanged. Empty string means "no target date".
  */
 export function EnvelopeTargetDatePicker({
     value,
@@ -86,11 +92,8 @@ export function EnvelopeTargetDatePicker({
                 {open && (
                     <EnvelopeTargetDatePickerInner
                         value={value}
-                        onCancel={() => setOpen(false)}
-                        onApply={(next) => {
-                            onChange(next);
-                            setOpen(false);
-                        }}
+                        onChange={onChange}
+                        onDone={() => setOpen(false)}
                         onClear={() => {
                             onChange("");
                             setOpen(false);
@@ -104,18 +107,19 @@ export function EnvelopeTargetDatePicker({
 
 function EnvelopeTargetDatePickerInner({
     value,
-    onCancel,
-    onApply,
+    onChange,
+    onDone,
     onClear,
 }: {
     value: string;
-    onCancel: () => void;
-    onApply: (next: string) => void;
+    onChange: (next: string) => void;
+    onDone: () => void;
     onClear: () => void;
 }) {
     /* Seed draft from the committed value once. If empty, default to today
-       so the calendar has a focused cell from the start. Subsequent edits
-       stay local until the user hits Apply. */
+       so the calendar has a focused cell from the start. Every subsequent
+       pick commits immediately via `commitDraft` — no separate Apply step
+       to miss. */
     const [draft, setDraft] = useState<Date>(() => {
         const parsed = value ? fromInputDate(value) : null;
         return parsed && Number.isFinite(parsed.getTime()) ? parsed : startOfDay(new Date());
@@ -125,9 +129,14 @@ function EnvelopeTargetDatePickerInner({
     const today = useMemo(() => startOfDay(new Date()), []);
     const draftDay = useMemo(() => startOfDay(draft), [draft]);
 
+    const commitDraft = (next: Date) => {
+        setDraft(next);
+        onChange(toInputDate(next));
+    };
+
     const pickDate = (d: Date) => {
         const next = makeAppTzDate(getAppTzYear(d), getAppTzMonth(d), getAppTzDate(d));
-        setDraft(next);
+        commitDraft(next);
         /* Keep the calendar showing the new selection when arrow-key nav
            crosses month boundaries. */
         if (
@@ -176,15 +185,15 @@ function EnvelopeTargetDatePickerInner({
                         today={today}
                         selected={draftDay}
                         onPick={pickDate}
+                        onDayClick={onDone}
                     />
                 </div>
             </div>
 
             <div className="etp-foot">
-                {/* Clear sits on the left so destructive-ish actions stay
-                   away from the primary CTA. Only show it when the form
-                   has a committed value — pre-clearing an unset field has
-                   no effect and would look like a no-op button. */}
+                {/* Only show Clear when the form has a committed value —
+                   pre-clearing an unset field has no effect and would
+                   look like a no-op button. */}
                 {value ? (
                     <button
                         type="button"
@@ -199,15 +208,8 @@ function EnvelopeTargetDatePickerInner({
                     <span aria-hidden />
                 )}
                 <div className="etp-foot-actions">
-                    <button type="button" className="etp-btn" onClick={onCancel}>
-                        Cancel
-                    </button>
-                    <button
-                        type="button"
-                        className="etp-btn etp-btn-primary"
-                        onClick={() => onApply(toInputDate(draft))}
-                    >
-                        Apply
+                    <button type="button" className="etp-btn" onClick={onDone}>
+                        Done
                     </button>
                 </div>
             </div>
@@ -230,11 +232,18 @@ function MonthGrid({
     today,
     selected,
     onPick,
+    onDayClick,
 }: {
     month: Date;
     today: Date;
     selected: Date;
     onPick: (d: Date) => void;
+    /** Fires only on a deliberate click/activation of a day cell — not
+     *  on arrow-key navigation, which just moves the roving selection
+     *  and must not close the popover mid-browse. This is the one
+     *  calendar in the app where a single day fully specifies the value
+     *  (no time-of-day to also pick), so a click reads as "I'm done". */
+    onDayClick?: () => void;
 }) {
     /* APP_TZ-aware grid build — native `new Date(y, m, d)` uses the
        browser's local tz which silently shifts the grid by a day for
@@ -348,7 +357,10 @@ function MonthGrid({
                                 isSelected && "is-selected",
                                 isToday && "is-today"
                             )}
-                            onClick={() => onPick(c.d)}
+                            onClick={() => {
+                                onPick(c.d);
+                                onDayClick?.();
+                            }}
                         >
                             {getAppTzDate(c.d)}
                         </button>
@@ -440,7 +452,14 @@ const ETP_POPOVER_STYLES = `
     padding: 0 !important;
     box-shadow: none !important;
     width: min(320px, calc(100vw - 28px));
-    max-height: calc(100dvh - 32px);
+    /* Radix only flips which side the popover opens on, it never shrinks
+       the panel — cap to whichever is smaller of the viewport or the
+       space Radix actually measured as available, or the footer can
+       render below the fold with no way to reach it. */
+    max-height: min(
+        calc(100dvh - 32px),
+        var(--radix-popover-content-available-height, 600px)
+    );
 }
 .etp-pop-inner {
     background: var(--bg-elev-1);
@@ -453,7 +472,10 @@ const ETP_POPOVER_STYLES = `
     gap: 10px;
     font-family: inherit;
     color: var(--fg);
-    max-height: calc(100dvh - 32px);
+    max-height: min(
+        calc(100dvh - 32px),
+        var(--radix-popover-content-available-height, 600px)
+    );
     overflow: hidden;
 }
 .etp-pop-scroll {
@@ -583,10 +605,4 @@ const ETP_POPOVER_STYLES = `
 .etp-btn:hover { color: var(--fg); border-color: var(--line-strong); }
 .etp-btn-ghost { border-color: transparent; color: var(--fg-3); padding: 0 8px; }
 .etp-btn-ghost:hover { color: var(--fg); border-color: var(--line); }
-.etp-btn-primary {
-    background: var(--brand);
-    color: var(--bg);
-    border-color: var(--brand);
-}
-.etp-btn-primary:hover { background: var(--brand); opacity: 0.92; }
 `;
