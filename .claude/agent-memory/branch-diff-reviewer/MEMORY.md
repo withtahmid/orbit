@@ -4,3 +4,4 @@
 - [Consumption inconsistency](inconsistency_transfer_fee_consumption.md) — Some queries count transfer fees as envelope consumption, others don't. Pick one and check on each review.
 - [Idempotency wrapper](pattern_idempotency_wrapper.md) — `withIdempotency` uses `{v: result}` sentinel; ON CONFLICT DO NOTHING (not catch 23505).
 - [Borrow pair invariant](invariant_borrow_pair.md) — `borrowed_link_id` UUID groups two rows: +X current period, -X next period. Excluded from listBorrows when both halves are past.
+- [Heatmap day-placement tz](gotcha_heatmap_day_placement_tz.md) — Overview DailyHeatmap scopes month via browser-local getMonth; HeatmapView uses app-tz. Diverges off Asia/Dhaka.

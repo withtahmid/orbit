@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MoneyDisplay } from "@/components/shared/MoneyDisplay";
@@ -8,10 +9,25 @@ import { AnalyticsFilterBar } from "../components/AnalyticsFilterBar";
 import { useAnalyticsFilters } from "../components/useAnalyticsFilters";
 import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
-import { addMonths, startOfMonth } from "@/lib/dates";
+import {
+    addMonths,
+    getAppTzDate,
+    getAppTzMonth,
+    getAppTzYear,
+    startOfDay,
+    startOfMonth,
+} from "@/lib/dates";
 import { formatInAppTz } from "@/lib/formatDate";
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
+import { ROUTES } from "@/router/routes";
+import {
+    AMBER,
+    computeQuantileEdges,
+    bucketize,
+    ramp,
+    formatCompact,
+} from "@/lib/spendHeatmapColor";
 
 const MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -23,8 +39,11 @@ const WEEKDAY_FULL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /**
  * Spending calendar — twelve-month grid where every day is a real calendar
  * cell with intensity, dot markers for cadence-detected recurring charges,
- * a per-day sparkline, and a relative-month progress bar. The "year peak"
- * day gets a gold ring so the eye lands on it instantly.
+ * a per-day sparkline, and a relative-month progress bar. The year's peak
+ * day gets a neutral halo ring so the eye lands on it regardless of what
+ * color the cell itself happens to be. Active days link straight through
+ * to the filtered transaction list — a heatmap you can't interrogate is
+ * just decoration.
  *
  * Layout mirrors the design canvas: 4-column × 3-row grid of month tiles.
  * Daily totals come from `spendingHeatmap`; recurring-charge dots come
@@ -45,6 +64,37 @@ export default function HeatmapView() {
     );
     const periodStart = useMemo(
         () => addMonths(periodEnd, -12),
+        [periodEnd]
+    );
+    /** `periodStart` is a true absolute instant (app-tz midnight). The
+     *  `heaviestWeeks` start dates below are native `new Date(y, m, d)`
+     *  values that *represent* an app-tz calendar date but are stored at
+     *  browser-local midnight — comparing or reading them against a raw
+     *  instant with native getters silently drifts by a day for any
+     *  browser timezone that isn't Asia/Dhaka. Re-expressing `periodStart`
+     *  in that same "native Date standing in for an app-tz calendar date"
+     *  frame keeps the comparison and the later `ymd(...)` field reads
+     *  self-consistent regardless of the viewer's timezone. */
+    const periodStartLocal = useMemo(
+        () =>
+            new Date(
+                getAppTzYear(periodStart),
+                getAppTzMonth(periodStart),
+                getAppTzDate(periodStart)
+            ),
+        [periodStart]
+    );
+    /** Same local-frame conversion for the window's other edge — the most
+     *  recent week in `heaviestWeeks` can run past `periodEnd` just as the
+     *  earliest can run before `periodStart`; both drill-down boundaries
+     *  need clamping in the same timezone frame as `w.start`/`end`. */
+    const periodEndLocal = useMemo(
+        () =>
+            new Date(
+                getAppTzYear(periodEnd),
+                getAppTzMonth(periodEnd),
+                getAppTzDate(periodEnd)
+            ),
         [periodEnd]
     );
 
@@ -131,6 +181,41 @@ export default function HeatmapView() {
         return m;
     }, [q.data]);
 
+    /** Quantile edges (20/40/60/80th percentile of active days) driving cell
+     *  intensity. Computed from this space's own twelve months so the ramp
+     *  self-scales to whatever currency/amount range the user actually
+     *  spends in, instead of fixed dollar-scale breakpoints. */
+    const edges = useMemo(
+        () => computeQuantileEdges(Array.from(byDay.values())),
+        [byDay]
+    );
+
+    /** Median (typical) active day — a plain, absolute reference point to
+     *  sit next to the average, since the calendar's own intensity scale
+     *  is relative and can't answer "what does a normal day cost me?" on
+     *  its own. */
+    const medianActiveDay = useMemo(() => {
+        const nz = Array.from(byDay.values())
+            .filter((v) => v > 0)
+            .sort((a, b) => a - b);
+        if (nz.length === 0) return 0;
+        const mid = Math.floor(nz.length / 2);
+        return nz.length % 2 === 1 ? nz[mid] : (nz[mid - 1] + nz[mid]) / 2;
+    }, [byDay]);
+
+    /** Earliest day with any recorded spend in this window — used to tell
+     *  "no data yet because history doesn't reach back that far" apart
+     *  from "genuinely zero spend that month" on the collapsed tiles. Keys
+     *  are `yyyy-MM-dd` strings, which sort lexicographically the same as
+     *  chronologically, so plain string comparison is enough. */
+    const earliestActiveKey = useMemo(() => {
+        let min: string | null = null;
+        byDay.forEach((v, key) => {
+            if (v > 0 && (min === null || key < min)) min = key;
+        });
+        return min;
+    }, [byDay]);
+
     /** The 12 (year, month) pairs we render, oldest → newest.
      *  Year/month are read in app timezone — `addMonths(periodStart, i)`
      *  returns a BST-aligned moment, but its UTC fields are 6 hours
@@ -148,7 +233,14 @@ export default function HeatmapView() {
     }, [periodStart]);
 
     /** Per-month totals + grand stats used in the header KPIs. */
-    const stats = useMemo(() => {
+    const stats = useMemo((): {
+        monthTotals: Array<{ y: number; m: number; total: number }>;
+        yearTotal: number;
+        activeDays: number;
+        peak: number;
+        peakDate: Date | null;
+        maxMonth: number;
+    } => {
         let yearTotal = 0;
         let activeDays = 0;
         let peak = 0;
@@ -199,6 +291,22 @@ export default function HeatmapView() {
         return sums.map((s, i) => (counts[i] > 0 ? s / counts[i] : 0));
     }, [byDay]);
 
+    /** Index of the actual heaviest weekday — drives which bar gets the
+     *  accent highlight. This used to be hardcoded to Friday, which
+     *  silently disagreed with the (correctly computed) caption underneath
+     *  whenever Friday wasn't really the heaviest day. */
+    const heaviestWeekdayIdx = useMemo(() => {
+        let bestIdx = -1;
+        let best = 0;
+        byWeekday.forEach((v, i) => {
+            if (v > best) {
+                best = v;
+                bestIdx = i;
+            }
+        });
+        return bestIdx;
+    }, [byWeekday]);
+
     /** Find the top 5 calendar weeks (Sun-Sat) by total spend. */
     const heaviestWeeks = useMemo(() => {
         const buckets = new Map<string, { start: Date; total: number }>();
@@ -227,12 +335,57 @@ export default function HeatmapView() {
     }, [byDay]);
 
     const isLoading = q.isLoading;
-    const peakDateLabel = stats.peakDate
-        ? formatInAppTz(stats.peakDate, "MMM d")
+    /* `stats.peakDate` is built with the native `new Date(y, m, d)` (see
+     * the `stats` useMemo above) — a browser-local calendar date, not an
+     * absolute instant. Formatting it with `formatInAppTz` would
+     * re-project it through Asia/Dhaka and could drift the displayed day
+     * by one for any browser timezone east of +6 (the ring on the day
+     * cell, which reads the same Date via native getters, would then
+     * silently disagree with this label). Read the same native fields
+     * back out instead of round-tripping through an app-tz formatter. */
+    const peakDate = stats.peakDate;
+    const peakDateLabel = peakDate
+        ? `${MONTH_NAMES[peakDate.getMonth()]} ${peakDate.getDate()}`
         : "—";
-    const totalDaysInWindow = Math.round(
-        (periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24)
+
+    /** Only count days that have actually elapsed. `periodEnd` is always
+     *  the start of *next* month (a fixed 12-month window), so counting
+     *  all the way to it would treat days later this month that haven't
+     *  happened yet as "no spending" — inflating that stat every month,
+     *  worst mid-month. */
+    const elapsedEnd = useMemo(() => {
+        const now = new Date();
+        return now < periodEnd ? now : periodEnd;
+    }, [periodEnd]);
+    /** Inclusive count of elapsed calendar days (the window's first day
+     *  through today, today included) — the same day-slot convention
+     *  `stats.activeDays` counts over (it iterates whole calendar days,
+     *  not a raw duration). A plain `(elapsedEnd - periodStart) / day-ms`
+     *  duration drifts by one depending on time-of-day (rounding flips
+     *  right at local noon) and can undercount relative to `activeDays`,
+     *  so anchor both ends at local midnight before differencing. */
+    const totalDaysInWindow = Math.max(
+        0,
+        Math.round(
+            (startOfDay(elapsedEnd).getTime() - periodStart.getTime()) /
+                (1000 * 60 * 60 * 24)
+        ) + 1
     );
+
+    /** Carries the active Envelope/Account/Category filters into a
+     *  Transactions deep link, using the same `env`/`acc`/`cat` URL keys
+     *  `useAnalyticsFilters` reads — a filtered day cell should drill into
+     *  the same filtered slice of transactions, not the whole space. */
+    const txHref = (fromKey: string, toKey: string): string => {
+        const params = new URLSearchParams();
+        for (const id of f.envelopeIds) params.append("env", id);
+        for (const id of f.accountIds) params.append("acc", id);
+        for (const id of f.categoryIds) params.append("cat", id);
+        params.set("period", "custom");
+        params.set("from", fromKey);
+        params.set("to", toKey);
+        return `${ROUTES.spaceTransactions(space.id)}?${params.toString()}`;
+    };
 
     const kpiItems: KpiItem[] = [
         {
@@ -247,9 +400,9 @@ export default function HeatmapView() {
             valueFormat: "integer",
             sub:
                 totalDaysInWindow > 0
-                    ? `of ${totalDaysInWindow} · ${(
-                          (stats.activeDays / totalDaysInWindow) *
-                          100
+                    ? `of ${totalDaysInWindow} · ${Math.min(
+                          100,
+                          (stats.activeDays / totalDaysInWindow) * 100
                       ).toFixed(0)}% had any expense`
                     : "—",
         },
@@ -265,13 +418,17 @@ export default function HeatmapView() {
             value:
                 stats.activeDays > 0 ? stats.yearTotal / stats.activeDays : 0,
             money: true,
+            sub:
+                stats.activeDays > 0
+                    ? `Typical day ~${formatCompact(medianActiveDay)}`
+                    : undefined,
         },
     ];
 
     return (
         <AnalyticsDetailLayout
             title="Spending calendar"
-            description="Every day of the last twelve months. Cell intensity shows daily spend; small dots mark detected recurring monthly charges; the gold cell is the year's peak day."
+            description="Every day of the last twelve months, shaded by how it compares to your own spending — not a fixed amount. Small dots mark detected recurring monthly charges; the ringed cell is the year's peak day. Click any day to see what happened."
         >
             <AnalyticsFilterBar
                 spaceId={space.id}
@@ -291,8 +448,9 @@ export default function HeatmapView() {
                     <div>
                         <CardTitle>Twelve months at a glance</CardTitle>
                         <p className="text-xs text-muted-foreground">
-                            Each tile is one month · cell intensity = daily expense
-                            · gold ring = year peak.
+                            Each tile is one month · intensity = how heavy that day
+                            was for you (percentile, not a fixed amount) · ring =
+                            year peak. Click a day to open its transactions.
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
@@ -303,14 +461,14 @@ export default function HeatmapView() {
                                 label={`Top ${recurringByDay.size} recurring bill${recurringByDay.size === 1 ? "" : "s"}`}
                             />
                         ) : null}
-                        <Legend color="var(--warning)" label="Peak" ring />
+                        <Legend color={AMBER.b5} label="Peak" ring />
                     </div>
                 </CardHeader>
                 <CardContent>
                     {isLoading ? (
                         <Skeleton className="h-[640px] w-full" />
                     ) : (
-                        <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+                        <div className="grid items-start gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
                             {months.map(({ y, m }, i) => {
                                 const monthTotal =
                                     stats.monthTotals[i]?.total ?? 0;
@@ -324,10 +482,13 @@ export default function HeatmapView() {
                                         year={y}
                                         month={m}
                                         byDay={byDay}
+                                        edges={edges}
                                         monthTotal={monthTotal}
                                         relativeFraction={rel}
                                         peakDate={stats.peakDate}
                                         recurringByDay={recurringByDay}
+                                        earliestActiveKey={earliestActiveKey}
+                                        txHref={txHref}
                                     />
                                 );
                             })}
@@ -337,32 +498,52 @@ export default function HeatmapView() {
                     {!isLoading && (
                         <div className="mt-4 flex flex-col gap-2 border-t border-border/40 pt-3 sm:flex-row sm:items-center sm:justify-between">
                             <span className="text-[11px] text-muted-foreground">
-                                <span className="text-foreground/85">
-                                    {totalDaysInWindow - stats.activeDays} days
-                                </span>{" "}
-                                with no spending
+                                {stats.activeDays > 0 ? (
+                                    <>
+                                        <span className="text-foreground/85">
+                                            {/* Defensive floor: a future-dated
+                                                transaction (the date picker
+                                                allows "Tomorrow") counts toward
+                                                activeDays but not toward this
+                                                elapsed-day window, which could
+                                                otherwise show a negative count. */}
+                                            {Math.max(
+                                                0,
+                                                totalDaysInWindow - stats.activeDays
+                                            )}{" "}
+                                            days
+                                        </span>{" "}
+                                        with no spending
+                                    </>
+                                ) : (
+                                    "No spending recorded yet"
+                                )}
                             </span>
-                            <span className="inline-flex items-center gap-2 text-[11px] text-muted-foreground">
-                                <span>0</span>
-                                {[0, 1, 2, 3, 4, 5].map((b) => {
-                                    const r = ramp(b);
-                                    return (
-                                        <span
-                                            key={b}
-                                            className="inline-block size-4 rounded"
-                                            style={{
-                                                background: r.bg,
-                                                border: `1px solid ${
-                                                    r.border === "transparent"
-                                                        ? "transparent"
-                                                        : r.border
-                                                }`,
-                                            }}
-                                        />
-                                    );
-                                })}
-                                <span>600+</span>
-                            </span>
+                            {stats.activeDays > 0 && (
+                                <span className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                    <span>No spend</span>
+                                    {[0, 1, 2, 3, 4, 5].map((b) => {
+                                        const r = ramp(b);
+                                        return (
+                                            <span
+                                                key={b}
+                                                className="inline-block size-4 rounded"
+                                                style={{
+                                                    background: r.bg,
+                                                    border: `1px solid ${
+                                                        r.border === "transparent"
+                                                            ? "transparent"
+                                                            : r.border
+                                                    }`,
+                                                }}
+                                            />
+                                        );
+                                    })}
+                                    <span>
+                                        Heavy day ({formatCompact(edges[3])}+)
+                                    </span>
+                                </span>
+                            )}
                         </div>
                     )}
                 </CardContent>
@@ -384,7 +565,7 @@ export default function HeatmapView() {
                                 {WEEKDAY_FULL.map((d, i) => {
                                     const max = Math.max(...byWeekday, 1);
                                     const v = byWeekday[i];
-                                    const isFriday = i === 5;
+                                    const isHeaviest = i === heaviestWeekdayIdx;
                                     return (
                                         <div
                                             key={d}
@@ -404,8 +585,8 @@ export default function HeatmapView() {
                                                         width: `${
                                                             (v / max) * 100
                                                         }%`,
-                                                        backgroundColor: isFriday
-                                                            ? "var(--warning)"
+                                                        backgroundColor: isHeaviest
+                                                            ? AMBER.b5
                                                             : "var(--primary)",
                                                     }}
                                                 />
@@ -420,7 +601,7 @@ export default function HeatmapView() {
                                 })}
                                 {byWeekday.length > 0 && (
                                     <p className="mt-1 text-[11px] text-muted-foreground">
-                                        {findHeaviestWeekdayLabel(byWeekday)}
+                                        {findHeaviestWeekdayLabel(byWeekday, heaviestWeekdayIdx)}
                                     </p>
                                 )}
                             </div>
@@ -433,7 +614,7 @@ export default function HeatmapView() {
                         <CardTitle>Heaviest weeks</CardTitle>
                         <p className="text-xs text-muted-foreground">
                             Top {heaviestWeeks.length || 5} spending weeks of the
-                            year.
+                            year. Click a week to see its transactions.
                         </p>
                     </CardHeader>
                     <CardContent>
@@ -449,18 +630,69 @@ export default function HeatmapView() {
                                     const max = heaviestWeeks[0]?.total ?? 1;
                                     const end = new Date(w.start);
                                     end.setDate(w.start.getDate() + 6);
+                                    /* The Sun-start week for the earliest
+                                       weeks in the window can begin up to 6
+                                       days before `periodStart` (the week's
+                                       total is already summed only from
+                                       in-window days, via `byDay`) — clamp
+                                       the drill-down link's start to the
+                                       window boundary too, or it would pull
+                                       in out-of-window transactions the
+                                       displayed total never counted. */
+                                    const clampedStart =
+                                        w.start < periodStartLocal
+                                            ? periodStartLocal
+                                            : w.start;
+                                    const fromKey = ymd(
+                                        clampedStart.getFullYear(),
+                                        clampedStart.getMonth(),
+                                        clampedStart.getDate()
+                                    );
+                                    /* usePeriod's `to` is an EXCLUSIVE
+                                       boundary (confirmed by
+                                       DateRangePicker's `endOfDayExclusive`
+                                       helper — the real picker always sends
+                                       "the day after the last included
+                                       day"). Saturday + 1 day, not Saturday
+                                       itself, or the week's own last day
+                                       gets silently dropped from the
+                                       filtered results. */
+                                    const rawExclusiveEnd = new Date(w.start);
+                                    rawExclusiveEnd.setDate(
+                                        w.start.getDate() + 7
+                                    );
+                                    /* Mirrors the `clampedStart` clamp above:
+                                       the most recent week can run past
+                                       `periodEnd`, which would otherwise let
+                                       the link pull in transactions newer
+                                       than the analyzed window. */
+                                    const exclusiveEnd =
+                                        rawExclusiveEnd > periodEndLocal
+                                            ? periodEndLocal
+                                            : rawExclusiveEnd;
+                                    const toKey = ymd(
+                                        exclusiveEnd.getFullYear(),
+                                        exclusiveEnd.getMonth(),
+                                        exclusiveEnd.getDate()
+                                    );
                                     return (
-                                        <div
+                                        <Link
                                             key={i}
-                                            className="grid items-center gap-3"
+                                            to={txHref(fromKey, toKey)}
+                                            className="grid items-center gap-3 rounded-md px-1.5 -mx-1.5 py-0.5 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                                             style={{
                                                 gridTemplateColumns:
                                                     "minmax(110px, auto) minmax(0, 1fr) 90px",
                                             }}
                                         >
                                             <span className="text-[12.5px] text-foreground/85">
-                                                {formatInAppTz(w.start, "MMM d")}–
-                                                {formatInAppTz(end, "d")}
+                                                {/* `w.start`/`end` are native-constructed
+                                                    calendar dates (see the `heaviestWeeks`
+                                                    useMemo), not absolute instants — same
+                                                    tz-drift hazard as `peakDateLabel` above,
+                                                    fixed the same way. */}
+                                                {MONTH_NAMES[w.start.getMonth()]}{" "}
+                                                {w.start.getDate()}–{end.getDate()}
                                             </span>
                                             <span className="relative block h-1.5 overflow-hidden rounded-full bg-muted/40">
                                                 <span
@@ -469,8 +701,7 @@ export default function HeatmapView() {
                                                         width: `${
                                                             (w.total / max) * 100
                                                         }%`,
-                                                        backgroundColor:
-                                                            "var(--warning)",
+                                                        backgroundColor: AMBER.b5,
                                                     }}
                                                 />
                                             </span>
@@ -479,7 +710,7 @@ export default function HeatmapView() {
                                                 variant="neutral"
                                                 className="text-right text-[12.5px] font-semibold"
                                             />
-                                        </div>
+                                        </Link>
                                     );
                                 })}
                             </div>
@@ -499,14 +730,18 @@ function MonthTile({
     year,
     month,
     byDay,
+    edges,
     monthTotal,
     relativeFraction,
     peakDate,
     recurringByDay,
+    earliestActiveKey,
+    txHref,
 }: {
     year: number;
     month: number;
     byDay: Map<string, number>;
+    edges: number[];
     monthTotal: number;
     relativeFraction: number;
     peakDate: Date | null;
@@ -514,6 +749,8 @@ function MonthTile({
         number,
         { color: string; label: string; amount: number }
     >;
+    earliestActiveKey: string | null;
+    txHref: (fromKey: string, toKey: string) => string;
 }) {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const startCol = new Date(year, month, 1).getDay();
@@ -550,8 +787,36 @@ function MonthTile({
         );
     };
 
+    /* Months with zero activity collapse to a slim placeholder instead of
+       a full 6-row grid of empty cells — a 12-tile wall where 8 tiles are
+       all-empty reads as broken/boring rather than "the whole year". */
+    if (monthTotal <= 0) {
+        const lastDayKey = ymd(year, month, daysInMonth);
+        /* Distinguish "this month is before any spending we've observed"
+           (likely: the space/account didn't exist yet) from "genuinely
+           zero spend that month" — asserting "no spending" for the former
+           would overclaim knowledge we don't have. */
+        const predatesHistory =
+            earliestActiveKey !== null && lastDayKey < earliestActiveKey;
+        return (
+            <div className="flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border/30 bg-card/40 px-3 py-6">
+                <span className="inline-flex items-baseline gap-1.5">
+                    <span className="text-[13px] font-medium tracking-wide text-muted-foreground/70">
+                        {MONTH_NAMES[month]}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/50 tabular-nums">
+                        {year}
+                    </span>
+                </span>
+                <span className="text-[10.5px] text-muted-foreground/50">
+                    {predatesHistory ? "No data yet" : "No spending"}
+                </span>
+            </div>
+        );
+    }
+
     return (
-        <div className="flex flex-col gap-2 rounded-xl border border-border/40 bg-card p-3">
+        <div className="flex flex-col gap-2 rounded-xl border border-border/40 bg-card p-3 shadow-sm">
             {/* Header */}
             <div className="flex items-baseline justify-between">
                 <span className="inline-flex items-baseline gap-1.5">
@@ -592,41 +857,74 @@ function MonthTile({
                             if (d === null) {
                                 return <span key={di} className="aspect-square" />;
                             }
-                            const v = byDay.get(ymd(year, month, d)) ?? 0;
-                            const b = bucketize(v);
+                            const key = ymd(year, month, d);
+                            /* usePeriod's `to` is an EXCLUSIVE boundary
+                               (see the `endOfDayExclusive` note on the
+                               "Heaviest weeks" links below) — a single-day
+                               link needs `to` = the *next* day, or the day
+                               being clicked resolves to a zero-width range
+                               and shows "0 transactions". `new Date`
+                               normalizes the day+1 rollover across month
+                               boundaries automatically. */
+                            const nextDay = new Date(year, month, d + 1);
+                            const nextDayKey = ymd(
+                                nextDay.getFullYear(),
+                                nextDay.getMonth(),
+                                nextDay.getDate()
+                            );
+                            const v = byDay.get(key) ?? 0;
+                            const b = bucketize(v, edges);
                             const r = ramp(b);
                             const recurring = recurringByDay.get(d);
                             const peak = isPeakDay(d);
                             const baseTitle = `${MONTH_NAMES[month]} ${d} · ${formatMoney(v)}`;
                             const title = recurring
                                 ? `${baseTitle} · ${recurring.label} (${formatMoney(recurring.amount)}/mo)`
-                                : baseTitle;
-                            return (
+                                : v > 0
+                                  ? `${baseTitle} · click to view transactions`
+                                  : baseTitle;
+                            const cellStyle = {
+                                background: r.bg,
+                                border: `1px solid ${peak ? "var(--bg)" : r.border}`,
+                                boxShadow: peak
+                                    ? "0 0 0 1.5px var(--fg)"
+                                    : undefined,
+                                color: r.fg,
+                            };
+                            const cellClassName = cn(
+                                "relative grid aspect-square place-items-center rounded text-[8.5px] font-medium tabular-nums",
+                                v > 0 &&
+                                    "cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1"
+                            );
+                            const dot = recurring && (
+                                <span
+                                    className="absolute left-1/2 -translate-x-1/2 size-[3px] rounded-full"
+                                    style={{
+                                        bottom: "1.5px",
+                                        background: recurring.color,
+                                    }}
+                                />
+                            );
+                            return v > 0 ? (
+                                <Link
+                                    key={di}
+                                    to={txHref(key, nextDayKey)}
+                                    title={title}
+                                    className={cellClassName}
+                                    style={cellStyle}
+                                >
+                                    {d}
+                                    {dot}
+                                </Link>
+                            ) : (
                                 <span
                                     key={di}
                                     title={title}
-                                    className="relative grid aspect-square place-items-center rounded text-[8.5px] font-medium tabular-nums"
-                                    style={{
-                                        background: r.bg,
-                                        border: `1px solid ${
-                                            peak ? "var(--warning)" : r.border
-                                        }`,
-                                        boxShadow: peak
-                                            ? "0 0 0 1px color-mix(in oklab, var(--warning) 30%, transparent)"
-                                            : undefined,
-                                        color: r.fg,
-                                    }}
+                                    className={cellClassName}
+                                    style={cellStyle}
                                 >
                                     {d}
-                                    {recurring && (
-                                        <span
-                                            className="absolute left-1/2 -translate-x-1/2 size-[3px] rounded-full"
-                                            style={{
-                                                bottom: "1.5px",
-                                                background: recurring.color,
-                                            }}
-                                        />
-                                    )}
+                                    {dot}
                                 </span>
                             );
                         })}
@@ -646,10 +944,10 @@ function MonthTile({
                             }%`,
                             background:
                                 v === 0
-                                    ? "var(--muted)"
-                                    : `color-mix(in oklab, var(--warning) ${
+                                    ? "var(--bg-elev-2)"
+                                    : `color-mix(in oklab, ${AMBER.b5} ${
                                           20 + (v / maxDaily) * 70
-                                      }%, var(--muted))`,
+                                      }%, var(--bg-elev-2))`,
                             opacity: v === 0 ? 0.4 : 1,
                         }}
                     />
@@ -663,7 +961,7 @@ function MonthTile({
                         className="absolute inset-y-0 left-0 rounded-full"
                         style={{
                             width: `${Math.round(relativeFraction * 100)}%`,
-                            backgroundColor: "var(--warning)",
+                            backgroundColor: AMBER.b5,
                         }}
                     />
                 </span>
@@ -673,67 +971,6 @@ function MonthTile({
             </div>
         </div>
     );
-}
-
-/* ============================================================
-   COLOR / BUCKET HELPERS
-   ============================================================ */
-
-/** Map a daily expense to one of 6 intensity buckets. */
-function bucketize(v: number): number {
-    if (v <= 0) return 0;
-    if (v < 50) return 1;
-    if (v < 150) return 2;
-    if (v < 300) return 3;
-    if (v < 600) return 4;
-    return 5;
-}
-
-/**
- * Premium graphite → gold ramp. Index 0 is the empty cell, 5 is the most
- * intense. Mirrors the design's editorial-not-pink color choice.
- */
-function ramp(b: number): { bg: string; border: string; fg: string } {
-    if (b === 0) {
-        return {
-            bg: "var(--muted)",
-            border: "var(--border)",
-            fg: "var(--muted-foreground)",
-        };
-    }
-    if (b === 1) {
-        return {
-            bg: "oklch(28% 0.02 80)",
-            border: "var(--border)",
-            fg: "var(--muted-foreground)",
-        };
-    }
-    if (b === 2) {
-        return {
-            bg: "oklch(38% 0.05 78)",
-            border: "transparent",
-            fg: "var(--foreground)",
-        };
-    }
-    if (b === 3) {
-        return {
-            bg: "oklch(55% 0.10 82)",
-            border: "transparent",
-            fg: "oklch(15% 0.02 80)",
-        };
-    }
-    if (b === 4) {
-        return {
-            bg: "oklch(72% 0.13 85)",
-            border: "transparent",
-            fg: "oklch(15% 0.02 80)",
-        };
-    }
-    return {
-        bg: "var(--warning)",
-        border: "transparent",
-        fg: "oklch(15% 0.02 80)",
-    };
 }
 
 /* ============================================================
@@ -759,8 +996,7 @@ function Legend({
                     background: color,
                     ...(ring
                         ? {
-                              boxShadow:
-                                  "0 0 0 1px color-mix(in oklab, var(--warning) 60%, transparent)",
+                              boxShadow: "0 0 0 1px var(--fg)",
                           }
                         : null),
                 }}
@@ -770,16 +1006,12 @@ function Legend({
     );
 }
 
-function findHeaviestWeekdayLabel(byWeekday: number[]): string {
-    let bestIdx = 0;
-    let best = 0;
-    for (let i = 0; i < byWeekday.length; i++) {
-        if (byWeekday[i] > best) {
-            best = byWeekday[i];
-            bestIdx = i;
-        }
-    }
-    if (best === 0) return "No spending recorded yet.";
+/** Takes the already-computed `heaviestWeekdayIdx` rather than
+ *  re-deriving its own argmax — a second independent computation of the
+ *  same fact is a second place for it to drift from the bar highlight. */
+function findHeaviestWeekdayLabel(byWeekday: number[], bestIdx: number): string {
+    if (bestIdx < 0 || byWeekday[bestIdx] <= 0) return "No spending recorded yet.";
+    const best = byWeekday[bestIdx];
     const avg = byWeekday.reduce((s, v) => s + v, 0) / byWeekday.length;
     const pctAbove = avg > 0 ? ((best - avg) / avg) * 100 : 0;
     return `${WEEKDAY_FULL[bestIdx]} is your heaviest spending day — ${pctAbove.toFixed(

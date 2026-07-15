@@ -8,6 +8,12 @@ import { useCurrentSpace } from "@/hooks/useCurrentSpace";
 import { ROUTES } from "@/router/routes";
 import { addDays, addMonths, endOfMonth, startOfMonth } from "@/lib/dates";
 import { UNALLOCATED_COLOR } from "@/lib/entityStyle";
+import {
+    computeQuantileEdges,
+    bucketize,
+    ramp,
+    formatCompact,
+} from "@/lib/spendHeatmapColor";
 import { useStore } from "@/stores/useStore";
 import { CumulativeRaceChart } from "@/pages/space/analytics/views/TrendsView";
 import { MetricToggle, useMetricMode } from "@/components/shared/MetricMode";
@@ -30,6 +36,12 @@ export default observer(function OverviewPage() {
     const lastMonthStart = addMonths(thisMonthStart, -1);
     const cashFlowStart = addMonths(thisMonthStart, -2);
     const trendStart = addDays(now, -29);
+    /* Same trailing-12-month window the Spending calendar analytics page
+     * uses (`addMonths(periodEnd, -12)` there, `periodEnd` = `thisMonthEnd`
+     * here) — the daily heatmap's color-bucket edges need this space's
+     * full yearly distribution, not just this month's data, or the two
+     * calendars would share a palette but not a scale. */
+    const heatmapEdgesStart = addMonths(thisMonthEnd, -12);
 
     /* Metric mode (URL-persisted via ?metric=cash|operational).
        Operational is the default everywhere — true income / expense
@@ -131,16 +143,30 @@ export default observer(function OverviewPage() {
     });
     const accountDistribution = isPersonal ? acctDistPersonal : acctDistSpace;
 
-    /* Daily spend by day (for the calendar heatmap on FLOW). */
+    /* Daily spend by day (for the calendar heatmap on FLOW). Window spans
+     * the trailing 12 months, not just this month — `DailyHeatmap` only
+     * renders this month's cells but needs the full year to compute color-
+     * bucket edges on the same scale as the Spending calendar page. */
     const heatmapSpace = trpc.analytics.spendingHeatmap.useQuery(
-        { spaceId: space.id, periodStart: thisMonthStart, periodEnd: thisMonthEnd },
+        { spaceId: space.id, periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd },
         { enabled: !isPersonal }
     );
     const heatmapPersonal = trpc.personal.spendingHeatmap.useQuery(
-        { periodStart: thisMonthStart, periodEnd: thisMonthEnd },
+        { periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd },
         { enabled: isPersonal }
     );
     const heatmap = isPersonal ? heatmapPersonal : heatmapSpace;
+    /* Stable reference so `DailyHeatmap`'s internal `useMemo` (bucketing a
+     * full year of rows into color edges) actually caches instead of
+     * recomputing every render on a freshly-mapped array. */
+    const heatmapData = useMemo(
+        () =>
+            (heatmap.data ?? []).map((r) => ({
+                day: typeof r.day === "string" ? new Date(r.day) : r.day,
+                total: r.total,
+            })),
+        [heatmap.data]
+    );
 
     /* ---------- New procedures wired for v2 cards ---------- */
     const todaySpaceQ = trpc.analytics.todaySummary.useQuery(
@@ -814,10 +840,8 @@ export default observer(function OverviewPage() {
                 <div className="ov-grid-7-5">
                     <DailyHeatmap
                         now={now}
-                        data={(heatmap.data ?? []).map((r) => ({
-                            day: typeof r.day === "string" ? new Date(r.day) : r.day,
-                            total: r.total,
-                        }))}
+                        spaceId={space.id}
+                        data={heatmapData}
                         loading={heatmap.isLoading}
                     />
                     {/* Top movers — week-over-week category shifts. */}
@@ -2293,15 +2317,35 @@ function NwcSplitBar({
     );
 }
 
-/** Daily spend heatmap — calendar grid with darkness = spend intensity. */
+const MONTH_ABBR = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * Daily spend heatmap — calendar grid shaded by the same data-driven
+ * quantile ramp as the "Spending calendar" analytics page
+ * (`@/lib/spendHeatmapColor`): bucket edges are the 20/40/60/80th
+ * percentile of the space's trailing 12-month distribution
+ * (IQR-outlier-trimmed), the same window the Spending calendar uses, so
+ * a given day's amount buckets the same way on both pages when the
+ * Spending calendar is unfiltered — that page recomputes its edges from
+ * whatever the active envelope/account/category filters leave in view,
+ * while this widget always uses the space's unfiltered distribution (it
+ * has no filters of its own). Colors are drawn from the shared `AMBER`
+ * palette so the two calendars are the same system, not just a
+ * similar-looking one.
+ */
 function DailyHeatmap({
     now,
     data,
     loading,
+    spaceId,
 }: {
     now: Date;
     data: Array<{ day: Date; total: number }>;
     loading?: boolean;
+    spaceId: string;
 }) {
     const monthLabel = formatInAppTz(now, "MMMM yyyy");
     const year = now.getFullYear();
@@ -2310,12 +2354,38 @@ function DailyHeatmap({
     const firstWeekday = new Date(year, month, 1).getDay(); // 0 = Sun
     const today = now.getDate();
 
+    /* `r.day` is an absolute instant (an app-tz day boundary from the
+     * server), not a date-only value — reading it with native
+     * `getMonth()`/`getDate()` returns the *browser-local* calendar day,
+     * which silently disagrees with the app-tz day for any viewer west
+     * of Asia/Dhaka. That was harmless while this query only ever
+     * returned the current month's rows, but now that it spans a full
+     * year (for the shared color-bucket edges below), a browser-local
+     * misread could both misplace a day within the grid *and* — since
+     * the check only compared month-of-year, not year — inject a
+     * same-numbered month from a different year into this month's
+     * total/peak. Compare the full app-tz "yyyy-MM" prefix instead,
+     * matching the `formatInAppTz`-keyed convention the Spending
+     * calendar page uses for the same data. */
+    const monthKey = formatInAppTz(now, "yyyy-MM");
     const byDay = new Map<number, number>();
     for (const r of data) {
-        const d = new Date(r.day);
-        if (d.getMonth() === month) byDay.set(d.getDate(), r.total);
+        const key = formatInAppTz(r.day, "yyyy-MM-dd");
+        if (key.startsWith(monthKey)) byDay.set(Number(key.slice(8, 10)), r.total);
     }
-    const max = Math.max(0, ...Array.from(byDay.values()));
+    /* Bucket edges come from `data`'s full trailing-12-month span (the same
+     * window the Spending calendar analytics page uses — see the widened
+     * query at this component's call site), not just this month's ~30
+     * days. Otherwise the two calendars would share a palette but not a
+     * scale: the same day's amount could land in a different bucket on
+     * each page, and a partial month's small sample would recolor already-
+     * rendered days as more of the month's data arrives. `byDay` above
+     * stays scoped to this month — it drives the grid and this month's
+     * stats, not the color scale. */
+    const edges = useMemo(
+        () => computeQuantileEdges(data.map((r) => r.total)),
+        [data]
+    );
     const totalMonth = Array.from(byDay.values()).reduce((s, x) => s + x, 0);
     const noSpendDays = Array.from({ length: today }, (_, i) => i + 1).filter(
         (d) => !byDay.has(d) || byDay.get(d) === 0
@@ -2346,11 +2416,14 @@ function DailyHeatmap({
                         spend heatmap
                     </>
                 }
-                sub={`${monthLabel} · darker = more spent`}
+                sub={`${monthLabel} · brighter = heavier day for you`}
                 action={
-                    <a className="ov-details-link" href="#">
+                    <Link
+                        className="ov-details-link"
+                        to={ROUTES.spaceAnalyticsDetail(spaceId, "heatmap")}
+                    >
                         Open calendar →
-                    </a>
+                    </Link>
                 }
             />
             {loading ? (
@@ -2364,11 +2437,11 @@ function DailyHeatmap({
                             </span>
                         ))}
                         {cells.map((c, i) => {
-                            const intensity =
-                                max > 0 && c.v > 0 ? Math.min(1, c.v / max) : 0;
                             const isToday = c.d === today;
                             const isFuture = c.d != null && c.d > today;
                             const isPlaceholder = c.d == null;
+                            const isPeak = c.d != null && c.d === peakDay;
+                            const r = ramp(bucketize(c.v, edges));
                             return (
                                 <div
                                     key={i}
@@ -2378,15 +2451,40 @@ function DailyHeatmap({
                                             ? "transparent"
                                             : isFuture
                                               ? "var(--bg-elev-2)"
-                                              : `color-mix(in oklab, var(--gold) ${intensity * 70}%, var(--bg-elev-2))`,
+                                              : r.bg,
+                                        /* Peak day gets the same dual-tone halo as the
+                                           Spending calendar page — a dark inner ring
+                                           plus a light outer ring reads clearly
+                                           regardless of the cell's own bucket color,
+                                           unlike a single-color ring that can vanish
+                                           against an already-bright cell. */
+                                        boxShadow: isPeak
+                                            ? "0 0 0 1px var(--bg), 0 0 0 2.5px var(--fg)"
+                                            : undefined,
                                     }}
                                 >
                                     {c.d != null && (
                                         <>
-                                            <span className="ov-heatmap-dnum">{c.d}</span>
+                                            <span
+                                                className="ov-heatmap-dnum"
+                                                style={
+                                                    !isFuture && !isPlaceholder
+                                                        ? { color: r.fg }
+                                                        : undefined
+                                                }
+                                            >
+                                                {c.d}
+                                            </span>
                                             {c.v > 0 && (
-                                                <span className="ov-heatmap-damt">
-                                                    {formatThousands(c.v)}
+                                                <span
+                                                    className="ov-heatmap-damt"
+                                                    style={
+                                                        !isFuture
+                                                            ? { color: r.fg }
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {formatCompact(c.v)}
                                                 </span>
                                             )}
                                         </>
@@ -2417,11 +2515,18 @@ function DailyHeatmap({
                             <div className="ov-stat-eyebrow">Peak day</div>
                             {peakDay ? (
                                 <span style={{ fontSize: 14 }}>
-                                    {formatInAppTz(
-                                        new Date(year, month, peakDay),
-                                        "MMM d"
-                                    )}{" "}
-                                    ·{" "}
+                                    {/* `year`/`month`/`peakDay` are all read via native
+                                        getters off browser-local Dates, so re-projecting
+                                        through `formatInAppTz` here could drift the label
+                                        a day off the ringed cell (which is also placed via
+                                        native getters) for any browser timezone east of
+                                        +6 — same class of bug already fixed on the
+                                        Spending calendar page's peak/heaviest-week
+                                        labels. Read the native month name directly
+                                        instead of round-tripping through an app-tz
+                                        formatter. */}
+                                    {MONTH_ABBR[month]} {peakDay}
+                                    {" · "}
                                     <Money
                                         amount={peakAmt}
                                         size={14}
@@ -2438,11 +2543,6 @@ function DailyHeatmap({
             )}
         </div>
     );
-}
-
-function formatThousands(n: number): string {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-    return Math.round(n).toString();
 }
 
 /** Top movers — biggest week-over-week category shifts. */
