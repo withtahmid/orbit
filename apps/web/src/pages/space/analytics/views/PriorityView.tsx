@@ -177,7 +177,6 @@ export default function PriorityView() {
                                         : undefined
                                 }
                                 size={240}
-                                thickness={26}
                             />
                         )}
                         <p className="text-center text-[11px] leading-relaxed text-muted-foreground">

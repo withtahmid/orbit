@@ -132,9 +132,10 @@ export function SpendTimelineChart({
             const income = r?.income ?? 0;
             cumExpense += expense;
             cumIncome += income;
-            /* Track the max STACKED height (expense + income) so the volume
-               strip's scaling keeps the tallest bar at ~28% even on days that
-               have both flows. */
+            /* Track the max stacked height (expense + income) — only used
+               to gate whether the bar strip renders at all (`maxDaily > 0`
+               below); the bars themselves now share the cumulative axis's
+               own scale, not a separate one derived from this max. */
             maxD = Math.max(maxD, expense + income);
             const offset = Math.round((parseAppDay(date).getTime() - startMs) / 86_400_000);
             /* Pace = budget you should have spent BY THE END of this day =
@@ -161,18 +162,40 @@ export function SpendTimelineChart({
     if (data.length === 0 || series.length === 0) return null;
 
     const tickFmt = (v: string) => dfFormat(parseAppDay(v), "MMM d");
-    /* Daily bars ride a hidden right axis scaled so a full-height bar reaches
-       ~28% up — a "volume" strip under the cumulative curve that stays
-       perfectly x-aligned because it is the SAME chart / x-scale. */
-    const volMax = maxDaily > 0 ? maxDaily * 3.6 : 1;
+    /* Daily bars share the SAME `cum` y-axis as the cumulative line — an
+     * earlier version rode a separate hidden axis capped so a full-height
+     * bar only reached ~28% up, which looked wrong: a bar's top didn't
+     * correspond to the dollar value the visible axis labels/gridlines
+     * actually show. Sharing the axis makes bar height honestly readable
+     * against those same labels. Safe to share without distorting the
+     * cumulative curve's own scale: `cumExpense` is a running total, so
+     * its final (largest) value is always >= any single day's amount —
+     * the domain ceiling a lone day's bar could reach is already implied
+     * by the line's own max. */
+    /* A fixed `barSize` reads best on short/typical events (the common
+     * case), but doesn't shrink — past ~24 days the per-day category slot
+     * on a real card width can drop below 14px, and a NON-shrinking bar
+     * then overlaps its neighbors instead of thinning out. `maxBarSize`
+     * degrades gracefully for those longer windows (Recharts shrinks bars
+     * to fit), at the cost of being thin — an acceptable tradeoff since a
+     * multi-week+ event's daily strip is already a dense read either way. */
+    const barSizeProps = series.length <= 24 ? { barSize: 14 } : { maxBarSize: 14 };
 
     return (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ width: "100%", height: 264 }}>
+            <div style={{ width: "100%", height: 340 }}>
                 <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart
                         data={series}
-                        margin={{ top: 8, right: 10, bottom: 0, left: -8 }}
+                        // A negative `left` margin puts CartesianGrid's
+                        // computed offset into a degenerate state that
+                        // silently drops every horizontal line from the
+                        // DOM — a documented recharts quirk with negative
+                        // chart margins. `0` keeps the axis close to the
+                        // edge without breaking the grid (confirmed via
+                        // the identical bug on the Spending Calendar's
+                        // "Spend by week" chart).
+                        margin={{ top: 8, right: 10, bottom: 0, left: 0 }}
                     >
                         <defs>
                             <linearGradient id={`${gid}-cum`} x1="0" y1="0" x2="0" y2="1">
@@ -202,13 +225,11 @@ export function SpendTimelineChart({
                             tickLine={false}
                             width={44}
                         />
-                        {/* Hidden right axis for the daily-volume bars — shares
-                            the single x-scale, so bars align exactly under the
-                            cumulative curve. */}
-                        <YAxis yAxisId="vol" orientation="right" hide domain={[0, volMax]} />
                         <RTooltip
                             cursor={{ stroke: "var(--line-strong)", strokeWidth: 1 }}
-                            content={<TimelineTooltip anyIncome={anyIncome} hasEstimate={hasEstimate} />}
+                            content={
+                                <TimelineTooltip anyIncome={anyIncome} hasEstimate={hasEstimate} />
+                            }
                         />
                         {/* Area first (bottom of the z-order) so its translucent
                             fill sits behind the volume bars rather than dimming
@@ -225,25 +246,33 @@ export function SpendTimelineChart({
                         />
                         {maxDaily > 0 && (
                             <Bar
-                                yAxisId="vol"
+                                yAxisId="cum"
                                 stackId="vol"
                                 dataKey="expense"
-                                fill="var(--expense)"
-                                fillOpacity={0.5}
+                                // Themed to the event's own color (matching
+                                // the cumulative area/line above it), not a
+                                // generic expense red — same "one series,
+                                // one color" idea the envelope and trends
+                                // versions of this bar strip follow too.
+                                fill={color}
+                                // Matches the subtler fillOpacity the
+                                // envelope/trends bar strips use — a
+                                // lighter, quieter volume read.
+                                fillOpacity={0.32}
                                 radius={[2, 2, 0, 0]}
-                                maxBarSize={14}
+                                {...barSizeProps}
                                 isAnimationActive={false}
                             />
                         )}
                         {maxDaily > 0 && anyIncome && (
                             <Bar
-                                yAxisId="vol"
+                                yAxisId="cum"
                                 stackId="vol"
                                 dataKey="income"
                                 fill="var(--income)"
-                                fillOpacity={0.5}
+                                fillOpacity={0.32}
                                 radius={[2, 2, 0, 0]}
-                                maxBarSize={14}
+                                {...barSizeProps}
                                 isAnimationActive={false}
                             />
                         )}
@@ -278,21 +307,19 @@ export function SpendTimelineChart({
                 <LegendKey swatch={color} label="Cumulative spend" />
                 {hasEstimate && <LegendKey swatch="var(--fg-3)" dashed label="Pace to estimate" />}
                 {anyIncome && <LegendKey swatch="var(--income)" label="Income" />}
-                <LegendKey swatch="var(--expense)" label="Daily spend" />
+                {/* Tinted to match the bars' own 0.32 fillOpacity — a
+                    solid swatch here would be visually identical to
+                    "Cumulative spend" above, since both use `color`. */}
+                <LegendKey
+                    swatch={`color-mix(in oklab, ${color} 32%, transparent)`}
+                    label="Daily spend"
+                />
             </div>
         </div>
     );
 }
 
-function LegendKey({
-    swatch,
-    label,
-    dashed,
-}: {
-    swatch: string;
-    label: string;
-    dashed?: boolean;
-}) {
+function LegendKey({ swatch, label, dashed }: { swatch: string; label: string; dashed?: boolean }) {
     return (
         <span className="ev-chart-legend-key">
             <span
@@ -317,7 +344,9 @@ function TimelineTooltip({
     hasEstimate,
 }: {
     active?: boolean;
-    payload?: Array<{ payload: DailyRow & { cumExpense: number; cumIncome: number; pace?: number } }>;
+    payload?: Array<{
+        payload: DailyRow & { cumExpense: number; cumIncome: number; pace?: number };
+    }>;
     anyIncome: boolean;
     hasEstimate: boolean;
 }) {
@@ -604,10 +633,7 @@ export function CategoryDonutChart({ roots }: { roots: CatNode[] }) {
                                             aria-hidden
                                         />
                                     ) : (
-                                        <span
-                                            aria-hidden
-                                            style={{ width: 12, flexShrink: 0 }}
-                                        />
+                                        <span aria-hidden style={{ width: 12, flexShrink: 0 }} />
                                     )}
                                 </button>
                             </li>
@@ -680,8 +706,13 @@ export function RadialBudgetGauge({
 
     return (
         <div className="ev-gauge" style={{ width: size }}>
-            <svg viewBox="0 0 200 200" width={size} height={size} role="img"
-                 aria-label={`${pct.toFixed(0)}% of estimate used`}>
+            <svg
+                viewBox="0 0 200 200"
+                width={size}
+                height={size}
+                role="img"
+                aria-label={`${pct.toFixed(0)}% of estimate used`}
+            >
                 <path
                     d={arc}
                     fill="none"
@@ -712,7 +743,13 @@ export function RadialBudgetGauge({
                 <span className="ev-gauge-sub">
                     {over ? (
                         <>
-                            <Money amount={spent - estimate} size={12.5} variant="expense" weight={500} /> over
+                            <Money
+                                amount={spent - estimate}
+                                size={12.5}
+                                variant="expense"
+                                weight={500}
+                            />{" "}
+                            over
                         </>
                     ) : (
                         <>
@@ -724,4 +761,3 @@ export function RadialBudgetGauge({
         </div>
     );
 }
-

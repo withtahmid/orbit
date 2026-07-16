@@ -531,8 +531,8 @@ function Accounts() {
                 </Link>{" "}
                 page shows every account you can access across every space you&apos;re in, grouped
                 by owner, with links straight into each space&apos;s detail view. Its summary strip
-                carries your net worth, per-type totals, and a distribution bar showing where
-                your holdings sit.
+                carries your net worth, per-type totals, and a distribution bar showing where your
+                holdings sit.
             </Paragraph>
         </section>
     );
@@ -824,7 +824,7 @@ function Analytics() {
     return (
         <section className="od-section">
             <SectionHeader id="analytics" title="Analytics" icon={BarChart3} />
-            <Paragraph>Nine dedicated analytics views, all period-filterable:</Paragraph>
+            <Paragraph>Eight dedicated analytics views, all period-filterable:</Paragraph>
             <ul className="od-list">
                 <li>
                     <strong>Cash flow</strong> — income vs expense by day / week / month
@@ -840,9 +840,6 @@ function Analytics() {
                 </li>
                 <li>
                     <strong>Heatmap</strong> — daily expense calendar
-                </li>
-                <li>
-                    <strong>Allocations</strong> — where each envelope&apos;s budget is committed
                 </li>
                 <li>
                     <strong>Trends</strong> — projection vs prior period, daily burn rate, YoY
@@ -861,7 +858,7 @@ function Analytics() {
                 12-column envelope × month grid showing planned vs spent for every envelope across
                 the year, with the overspend total per row.
             </Paragraph>
-            <ScreenshotPlaceholder label="Analytics index with the 10 sub-view cards" />
+            <ScreenshotPlaceholder label="Analytics index with the 8 sub-view cards" />
         </section>
     );
 }

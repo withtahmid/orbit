@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector } from "recharts";
 import { cn } from "@/lib/utils";
 
 export interface DrillableDonutSlice {
@@ -21,39 +22,38 @@ interface Props {
     centerValue?: string;
     /** Outer diameter of the donut, in pixels. */
     size?: number;
-    /** Stroke width — the thicker, the chunkier the donut. */
-    thickness?: number;
     /** Click handler for slices and legend chips. */
     onSelect?: (slice: DrillableDonutSlice) => void;
     emptyLabel?: string;
     className?: string;
 }
 
+/** Same ring proportions as the shared `Donut` (`@/components/shared/charts/Donut`)
+ *  so every donut in the app reads as one system: thin ring, rounded segment
+ *  ends, a visible gap between slices. */
+const RING_RATIO = 0.62;
+
 /**
- * Editorial-dark donut chart, hand-rolled in SVG with stroke-dasharray
- * arcs (no recharts). Drillable slices grow a thin outer halo that
- * brightens on hover, signalling "click to descend." Mirrors the
- * `DrillableDonut` from the design canvas — same geometry, same
- * interaction shape — and pairs with a chip-style legend below the
- * chart that surfaces a `>` chevron for drillable items.
- *
- * Why not recharts: recharts' Pie wraps slices in `<g>` with implicit
- * focus rings, has fragile activeIndex semantics, and doesn't support
- * the design's per-slice halo without ejecting to a custom shape.
- * Stroke-dasharray on a circle is a few lines and gives us the look
- * directly.
+ * Editorial-dark donut chart, recharts-based (same `Pie`/`Cell`/`Sector`
+ * primitives as the shared `Donut` and the event category donut) — same
+ * geometry, same rounded/padded look, so this one no longer stands out as
+ * a separate, thicker, sharp-edged implementation. Drillable slices get a
+ * thin outer halo ring (a second `Pie` layer sharing the same angular
+ * partitioning as the main ring, so it always lines up) that brightens on
+ * hover, signalling "click to descend." Pairs with a chip-style legend
+ * below the chart that surfaces a `>` chevron for drillable items.
  */
 export function DrillableDonut({
     slices,
     centerLabel = "Total",
     centerValue,
     size = 240,
-    thickness = 28,
     onSelect,
     emptyLabel = "No data",
     className,
 }: Props) {
     const [hoverId, setHoverId] = useState<string | null>(null);
+    const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
     if (slices.length === 0) {
         return (
@@ -69,129 +69,102 @@ export function DrillableDonut({
         );
     }
 
-    const r = (size - thickness) / 2;
-    const c = 2 * Math.PI * r;
     const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-    const haloR = r + thickness / 2 + 3;
-    const haloC = 2 * Math.PI * haloR;
+    const hovered = hoverId ? slices.find((s) => s.id === hoverId) : null;
+    // Screen readers and touch users otherwise get nothing until they
+    // find and tap a slice — mirrors the shared `Donut`'s per-slice
+    // summary so both donuts are equally accessible.
+    const summaryLabel = `${centerLabel} ${centerValue ?? formatShort(total)}. Breakdown: ${slices
+        .map((s) => `${s.name} ${formatShort(s.value)}`)
+        .join(", ")}`;
 
-    let acc = 0;
-    const arcs = slices.map((s) => {
-        const len = (s.value / total) * c;
-        const off = c - acc;
-        acc += len;
-        return { slice: s, len, off };
-    });
+    const pieActiveProps =
+        activeIndex !== null ? { activeIndex, activeShape: renderActiveShape } : {};
+
+    const handleEnter = (id: string, i: number) => {
+        setHoverId(id);
+        setActiveIndex(i);
+    };
+    const handleLeave = () => {
+        setHoverId(null);
+        setActiveIndex(null);
+    };
 
     return (
-        <div
-            className={cn(
-                "flex flex-col items-center gap-4",
-                className
-            )}
-        >
-            <svg
-                width={size}
-                height={size}
-                viewBox={`0 0 ${size} ${size}`}
+        <div className={cn("flex flex-col items-center gap-4", className)}>
+            <div
+                className="relative"
+                style={{ width: size, height: size }}
+                onMouseLeave={handleLeave}
                 role="img"
-                aria-label="Distribution donut chart"
+                aria-label={summaryLabel}
             >
-                {/* Track ring — the empty slot beneath the segments */}
-                <circle
-                    cx={size / 2}
-                    cy={size / 2}
-                    r={r}
-                    fill="none"
-                    stroke="var(--bg-elev-3, var(--muted))"
-                    strokeWidth={thickness}
-                />
-
-                {arcs.map(({ slice, len, off }) => {
-                    const drillable = !!slice.drillable;
-                    const isHover = hoverId === slice.id;
-                    return (
-                        <g
-                            key={slice.id}
-                            onMouseEnter={() => setHoverId(slice.id)}
-                            onMouseLeave={() => setHoverId(null)}
-                            onClick={() => onSelect?.(slice)}
-                            style={{
-                                cursor:
-                                    drillable || onSelect
-                                        ? "pointer"
-                                        : "default",
-                            }}
+                <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                        <Pie
+                            data={slices}
+                            dataKey="value"
+                            nameKey="name"
+                            innerRadius={`${Math.round(RING_RATIO * 100)}%`}
+                            outerRadius="88%"
+                            paddingAngle={1.5}
+                            cornerRadius={6}
+                            stroke="none"
+                            {...pieActiveProps}
+                            onMouseEnter={(_, i) => handleEnter(slices[i].id, i)}
+                            onClick={(_, i) => onSelect?.(slices[i])}
+                            isAnimationActive={true}
+                            animationDuration={400}
                         >
-                            {/* Main arc */}
-                            <circle
-                                cx={size / 2}
-                                cy={size / 2}
-                                r={r}
-                                fill="none"
-                                stroke={slice.color}
-                                strokeWidth={thickness}
-                                strokeDasharray={`${len} ${c - len}`}
-                                strokeDashoffset={off}
-                                transform={`rotate(-90 ${size / 2} ${size / 2})`}
-                                strokeLinecap="butt"
-                                style={{
-                                    opacity: hoverId && !isHover ? 0.55 : 1,
-                                    transition: "opacity 140ms ease",
-                                }}
-                            />
-                            {/* Drillable halo — outer hint ring that intensifies on hover */}
-                            {drillable && (
-                                <circle
-                                    cx={size / 2}
-                                    cy={size / 2}
-                                    r={haloR}
-                                    fill="none"
-                                    stroke={slice.color}
-                                    strokeWidth={1.5}
-                                    opacity={isHover ? 0.85 : 0.4}
-                                    strokeDasharray={`${(len * haloR) / r} ${
-                                        haloC - (len * haloR) / r
-                                    }`}
-                                    strokeDashoffset={(off * haloR) / r}
-                                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
-                                    style={{ transition: "opacity 140ms ease" }}
+                            {slices.map((s) => (
+                                <Cell
+                                    key={s.id}
+                                    fill={s.color}
+                                    stroke="none"
+                                    style={{
+                                        cursor: s.drillable || onSelect ? "pointer" : "default",
+                                    }}
                                 />
-                            )}
-                        </g>
-                    );
-                })}
-
-                {/* Center text — uppercase eyebrow + the value below */}
-                <text
-                    x="50%"
-                    y="46%"
-                    textAnchor="middle"
-                    fill="var(--muted-foreground)"
-                    fontSize="10"
-                    letterSpacing="1.6"
-                    style={{ textTransform: "uppercase" }}
-                >
-                    {hoverId
-                        ? slices.find((s) => s.id === hoverId)?.name ?? centerLabel
-                        : centerLabel}
-                </text>
-                <text
-                    x="50%"
-                    y="58%"
-                    textAnchor="middle"
-                    fill="var(--foreground)"
-                    fontSize="22"
-                    fontWeight={500}
-                    style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                    {hoverId
-                        ? formatShort(
-                              slices.find((s) => s.id === hoverId)?.value ?? 0
-                          )
-                        : centerValue ?? formatShort(total)}
-                </text>
-            </svg>
+                            ))}
+                        </Pie>
+                        {/* Drillable halo — a thin hint ring just outside the
+                            main ring (mirrors the original hand-rolled
+                            version's 1.5px stroke, not a thick second band —
+                            a wide filled arc reads as a duplicate donut when
+                            several adjacent slices are all drillable).
+                            Shares the exact same `data`/`paddingAngle` as the
+                            main ring so its slices' angles always line up;
+                            only drillable cells get a visible fill. */}
+                        <Pie
+                            data={slices}
+                            dataKey="value"
+                            nameKey="name"
+                            innerRadius="90%"
+                            outerRadius="91.5%"
+                            paddingAngle={1.5}
+                            stroke="none"
+                            isAnimationActive={false}
+                        >
+                            {slices.map((s) => (
+                                <Cell
+                                    key={s.id}
+                                    fill={s.drillable ? s.color : "transparent"}
+                                    fillOpacity={s.drillable ? (hoverId === s.id ? 0.75 : 0.3) : 0}
+                                    stroke="none"
+                                />
+                            ))}
+                        </Pie>
+                    </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {hovered ? hovered.name : centerLabel}
+                    </p>
+                    <p className="mt-0.5 text-xl font-bold tabular-nums sm:text-2xl">
+                        {hovered ? formatShort(hovered.value) : (centerValue ?? formatShort(total))}
+                    </p>
+                </div>
+            </div>
 
             {/* Chip legend — wraps under the donut, drillable chips show a > arrow */}
             <div className="flex flex-wrap justify-center gap-x-3 gap-y-1.5">
@@ -201,9 +174,21 @@ export function DrillableDonut({
                         <button
                             key={s.id}
                             type="button"
-                            onMouseEnter={() => setHoverId(s.id)}
-                            onMouseLeave={() => setHoverId(null)}
+                            onMouseEnter={() =>
+                                handleEnter(
+                                    s.id,
+                                    slices.findIndex((x) => x.id === s.id)
+                                )
+                            }
+                            onMouseLeave={handleLeave}
                             onClick={() => onSelect?.(s)}
+                            aria-label={
+                                drillable
+                                    ? `Drill into ${s.name}, ${formatShort(s.value)}`
+                                    : onSelect
+                                      ? `View ${s.name} transactions, ${formatShort(s.value)}`
+                                      : `${s.name}, ${formatShort(s.value)}`
+                            }
                             className={cn(
                                 "inline-flex items-center gap-1.5 text-[11px] transition-colors",
                                 drillable || onSelect
@@ -224,6 +209,48 @@ export function DrillableDonut({
                 })}
             </div>
         </div>
+    );
+}
+
+interface ActiveShapeProps {
+    cx?: number;
+    cy?: number;
+    innerRadius?: number;
+    outerRadius?: number;
+    startAngle?: number;
+    endAngle?: number;
+    fill?: string;
+    cornerRadius?: number;
+}
+
+/**
+ * Recharts active-shape renderer — renders a slightly enlarged slice under
+ * the cursor, same color, no stroke. Matches the shared `Donut`'s hover
+ * treatment (`@/components/shared/charts/Donut`).
+ */
+function renderActiveShape(props: ActiveShapeProps) {
+    const {
+        cx,
+        cy,
+        innerRadius,
+        outerRadius = 0,
+        startAngle,
+        endAngle,
+        fill,
+        cornerRadius,
+    } = props;
+    return (
+        <Sector
+            cx={cx}
+            cy={cy}
+            innerRadius={innerRadius}
+            outerRadius={outerRadius + 6}
+            startAngle={startAngle}
+            endAngle={endAngle}
+            fill={fill}
+            cornerRadius={cornerRadius}
+            stroke="none"
+        />
     );
 }
 

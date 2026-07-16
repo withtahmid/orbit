@@ -4,7 +4,6 @@ import {
     PieChart as PieIcon,
     Layers as LayersIcon,
     Flame,
-    Network,
     Activity,
     AlertTriangle,
     Star,
@@ -61,14 +60,6 @@ const ENTRIES: Entry[] = [
         description: "How much of each envelope you've consumed this period.",
         icon: LayersIcon,
         color: "var(--ent-2)",
-    },
-    {
-        view: "allocations",
-        title: "Allocation map",
-        description:
-            "Where each envelope's budget is committed — your space-wide spending intent.",
-        icon: Network,
-        color: "var(--ent-4)",
     },
     {
         view: "balance",

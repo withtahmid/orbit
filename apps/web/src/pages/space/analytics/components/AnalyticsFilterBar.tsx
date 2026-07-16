@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, FolderTree, Tags, Wallet, X } from "lucide-react";
+import { ChevronDown, Tags, Wallet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
@@ -15,6 +15,7 @@ import { EntityAvatar } from "@/components/shared/EntityAvatar";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
 import type { FilterKey } from "./useAnalyticsFilters";
+import { CategoryMultiSelect, type CategoryRow } from "./CategoryMultiSelect";
 
 /** Which filter dimensions to surface. Envelopes/Categories are always
  *  hidden on personal (`/s/me`) regardless of this, since they're
@@ -82,8 +83,7 @@ export function AnalyticsFilterBar({
     const showAccounts = dimensions?.accounts !== false;
     // Categories can appear on personal only when the host opts in.
     const showCategories =
-        dimensions?.categories !== false &&
-        (!isPersonal || !!personalCategories);
+        dimensions?.categories !== false && (!isPersonal || !!personalCategories);
 
     const envelopesQ = trpc.envelop.listBySpace.useQuery(
         { spaceId },
@@ -93,32 +93,28 @@ export function AnalyticsFilterBar({
         { spaceId },
         { enabled: !isPersonal && showCategories }
     );
-    const personalCategoriesQ = trpc.personal.listCategories.useQuery(
-        undefined,
-        { enabled: isPersonal && showCategories }
-    );
-    const accountsSpaceQ = trpc.account.listBySpace.useQuery(
-        { spaceId },
-        { enabled: !isPersonal }
-    );
+    const personalCategoriesQ = trpc.personal.listCategories.useQuery(undefined, {
+        enabled: isPersonal && showCategories,
+    });
+    const accountsSpaceQ = trpc.account.listBySpace.useQuery({ spaceId }, { enabled: !isPersonal });
     const accountsPersonalQ = trpc.personal.ownedAccounts.useQuery(undefined, {
         enabled: isPersonal,
     });
 
     const envelopes = useMemo(
         () =>
-            (envelopesQ.data ?? []).filter((e) => !e.archived).map((e) => ({
-                id: e.id,
-                name: e.name,
-                color: e.color,
-                icon: e.icon,
-            })),
+            (envelopesQ.data ?? [])
+                .filter((e) => !e.archived)
+                .map((e) => ({
+                    id: e.id,
+                    name: e.name,
+                    color: e.color,
+                    icon: e.icon,
+                })),
         [envelopesQ.data]
     );
     const accounts = useMemo(() => {
-        const src = isPersonal
-            ? accountsPersonalQ.data ?? []
-            : accountsSpaceQ.data ?? [];
+        const src = isPersonal ? (accountsPersonalQ.data ?? []) : (accountsSpaceQ.data ?? []);
         return src.map((a) => ({
             id: a.id,
             name: a.name,
@@ -128,10 +124,7 @@ export function AnalyticsFilterBar({
     }, [isPersonal, accountsPersonalQ.data, accountsSpaceQ.data]);
 
     const categoriesRaw = useMemo(
-        () =>
-            isPersonal
-                ? personalCategoriesQ.data ?? []
-                : categoriesQ.data ?? [],
+        () => (isPersonal ? (personalCategoriesQ.data ?? []) : (categoriesQ.data ?? [])),
         [isPersonal, personalCategoriesQ.data, categoriesQ.data]
     );
 
@@ -185,9 +178,7 @@ export function AnalyticsFilterBar({
             </div>
             {hasAnyFilter && (
                 <FilterSummaryLine
-                    envelopeIds={
-                        !isPersonal && showEnvelopes ? envelopeIds : []
-                    }
+                    envelopeIds={!isPersonal && showEnvelopes ? envelopeIds : []}
                     accountIds={showAccounts ? accountIds : []}
                     categoryIds={showCategories ? categoryIds : []}
                     envelopes={envelopes}
@@ -236,13 +227,11 @@ function ChipMultiSelect({
         selected.length === 0
             ? `${label} · All`
             : selected.length === 1
-              ? items.find((i) => selectedSet.has(i.id))?.name ?? `${label} · 1`
+              ? (items.find((i) => selectedSet.has(i.id))?.name ?? `${label} · 1`)
               : `${label} · ${selected.length}`;
 
     const toggle = (id: string) => {
-        const next = selectedSet.has(id)
-            ? selected.filter((s) => s !== id)
-            : [...selected, id];
+        const next = selectedSet.has(id) ? selected.filter((s) => s !== id) : [...selected, id];
         onChange(next);
     };
 
@@ -254,8 +243,7 @@ function ChipMultiSelect({
                     size="sm"
                     className={cn(
                         "h-9 gap-1.5 px-2.5 text-sm sm:h-7 sm:text-[12px]",
-                        selected.length > 0 &&
-                            "border-warning/40 bg-warning/5 text-foreground"
+                        selected.length > 0 && "border-warning/40 bg-warning/5 text-foreground"
                     )}
                 >
                     {icon}
@@ -263,10 +251,7 @@ function ChipMultiSelect({
                     <ChevronDown className="size-3 opacity-60" />
                 </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent
-                align="start"
-                className="w-[min(16rem,calc(100vw-1.5rem))]"
-            >
+            <DropdownMenuContent align="start" className="w-[min(16rem,calc(100vw-1.5rem))]">
                 <DropdownMenuLabel className="text-xs">
                     Filter by {label.toLowerCase()}
                 </DropdownMenuLabel>
@@ -281,9 +266,7 @@ function ChipMultiSelect({
                     />
                 </div>
                 {items.length === 0 ? (
-                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                        {emptyLabel}
-                    </p>
+                    <p className="px-2 py-1.5 text-xs text-muted-foreground">{emptyLabel}</p>
                 ) : (
                     <>
                         <DropdownMenuItem
@@ -337,211 +320,6 @@ function ChipMultiSelect({
     );
 }
 
-interface CategoryRow {
-    id: string;
-    name: string;
-    color: string;
-    icon: string;
-    parent_id: string | null;
-    /** Present only on the personal cross-space list — used to disambiguate
-     *  same-named categories from different spaces. */
-    space_name?: string | null;
-}
-
-interface CategoryNode extends CategoryRow {
-    depth: number;
-    descendantCount: number;
-}
-
-/** Multi-select category dropdown that surfaces the hierarchy: each
- *  parent row carries a "+N sub" badge so users see at a glance that
- *  selecting it includes descendants. */
-function CategoryMultiSelect({
-    selected,
-    categories,
-    onChange,
-}: {
-    selected: string[];
-    categories: CategoryRow[];
-    onChange: (next: string[]) => void;
-}) {
-    const [query, setQuery] = useState("");
-    const selectedSet = useMemo(() => new Set(selected), [selected]);
-
-    // Names that appear more than once (personal cross-space list) get a
-    // space suffix so the two rows aren't indistinguishable.
-    const dupNames = useMemo(() => {
-        const counts = new Map<string, number>();
-        for (const c of categories)
-            counts.set(c.name, (counts.get(c.name) ?? 0) + 1);
-        return new Set(
-            [...counts].filter(([, n]) => n > 1).map(([name]) => name)
-        );
-    }, [categories]);
-
-    const flattened = useMemo<CategoryNode[]>(() => {
-        const byParent = new Map<string | null, CategoryRow[]>();
-        for (const c of categories) {
-            const arr = byParent.get(c.parent_id) ?? [];
-            arr.push(c);
-            byParent.set(c.parent_id, arr);
-        }
-        for (const arr of byParent.values()) {
-            arr.sort((a, b) => a.name.localeCompare(b.name));
-        }
-        const descCount = new Map<string, number>();
-        const countDescendants = (id: string): number => {
-            const direct = byParent.get(id) ?? [];
-            let n = direct.length;
-            for (const child of direct) n += countDescendants(child.id);
-            descCount.set(id, n);
-            return n;
-        };
-        for (const c of categories) {
-            if (!descCount.has(c.id)) countDescendants(c.id);
-        }
-        const out: CategoryNode[] = [];
-        const walk = (parentId: string | null, depth: number) => {
-            const arr = byParent.get(parentId) ?? [];
-            for (const c of arr) {
-                out.push({ ...c, depth, descendantCount: descCount.get(c.id) ?? 0 });
-                walk(c.id, depth + 1);
-            }
-        };
-        walk(null, 0);
-        return out;
-    }, [categories]);
-
-    const filtered = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        if (!q) return flattened;
-        return flattened.filter((n) => n.name.toLowerCase().includes(q));
-    }, [query, flattened]);
-
-    const triggerLabel =
-        selected.length === 0
-            ? "Categories · All"
-            : selected.length === 1
-              ? categories.find((c) => selectedSet.has(c.id))?.name ??
-                "Categories · 1"
-              : `Categories · ${selected.length}`;
-
-    const toggle = (id: string) => {
-        const next = selectedSet.has(id)
-            ? selected.filter((s) => s !== id)
-            : [...selected, id];
-        onChange(next);
-    };
-
-    return (
-        <DropdownMenu onOpenChange={(o) => !o && setQuery("")}>
-            <DropdownMenuTrigger asChild>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className={cn(
-                        "h-9 gap-1.5 px-2.5 text-sm sm:h-7 sm:text-[12px]",
-                        selected.length > 0 &&
-                            "border-warning/40 bg-warning/5 text-foreground"
-                    )}
-                >
-                    <FolderTree className="size-3.5" />
-                    <span className="max-w-[180px] truncate">{triggerLabel}</span>
-                    <ChevronDown className="size-3 opacity-60" />
-                </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-                align="start"
-                className="w-[min(18rem,calc(100vw-1.5rem))]"
-            >
-                <DropdownMenuLabel className="text-xs">
-                    Filter by category
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <div className="px-2 pb-1.5">
-                    <Input
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search categories…"
-                        aria-label="Search categories"
-                        className="h-7 text-[16px] sm:text-xs"
-                    />
-                </div>
-                {categories.length === 0 ? (
-                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                        No categories.
-                    </p>
-                ) : (
-                    <>
-                        <DropdownMenuItem
-                            onSelect={(e) => {
-                                e.preventDefault();
-                                onChange([]);
-                            }}
-                            disabled={selected.length === 0}
-                            className="text-xs"
-                        >
-                            Clear selection
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <div className="max-h-[300px] overflow-y-auto">
-                            {filtered.length === 0 ? (
-                                <p className="px-2 py-2 text-center text-xs text-muted-foreground">
-                                    No matches
-                                </p>
-                            ) : (
-                                filtered.map((n) => (
-                                    <DropdownMenuCheckboxItem
-                                        key={n.id}
-                                        checked={selectedSet.has(n.id)}
-                                        onCheckedChange={() => toggle(n.id)}
-                                        onSelect={(e) => e.preventDefault()}
-                                        style={{
-                                            paddingLeft: `${0.5 + n.depth * 0.75}rem`,
-                                        }}
-                                    >
-                                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                                            <EntityAvatar
-                                                size="sm"
-                                                color={n.color}
-                                                icon={n.icon}
-                                            />
-                                            <span className="truncate">
-                                                {n.name}
-                                                {dupNames.has(n.name) &&
-                                                    n.space_name && (
-                                                        <span className="text-muted-foreground">
-                                                            {" · "}
-                                                            {n.space_name}
-                                                        </span>
-                                                    )}
-                                            </span>
-                                            {n.descendantCount > 0 && (
-                                                <span
-                                                    className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[9.5px] font-medium text-muted-foreground"
-                                                    title={`Includes ${n.descendantCount} sub-categor${
-                                                        n.descendantCount === 1 ? "y" : "ies"
-                                                    }`}
-                                                >
-                                                    +{n.descendantCount}
-                                                </span>
-                                            )}
-                                        </span>
-                                    </DropdownMenuCheckboxItem>
-                                ))
-                            )}
-                        </div>
-                    </>
-                )}
-                <DropdownMenuSeparator />
-                <p className="px-2 pb-1.5 pt-1 text-[10.5px] text-muted-foreground">
-                    Selecting a category includes all sub-categories.
-                </p>
-            </DropdownMenuContent>
-        </DropdownMenu>
-    );
-}
-
 /** One-line summary under the filter buttons — names the active picks so
  *  the user doesn't have to open the popovers to remember what they set. */
 function FilterSummaryLine({
@@ -560,11 +338,7 @@ function FilterSummaryLine({
     categories: CategoryRow[];
 }) {
     const parts: string[] = [];
-    const nameOf = (
-        ids: string[],
-        items: { id: string; name: string }[],
-        label: string
-    ) => {
+    const nameOf = (ids: string[], items: { id: string; name: string }[], label: string) => {
         if (ids.length === 0) return;
         if (ids.length === 1) {
             const name = items.find((i) => i.id === ids[0])?.name;
@@ -586,9 +360,5 @@ function FilterSummaryLine({
     nameOf(accountIds, accounts, "accounts");
     nameOf(categoryIds, categories, "categories");
     if (parts.length === 0) return null;
-    return (
-        <p className="text-[11px] text-muted-foreground">
-            Filtered to {parts.join(" · ")}
-        </p>
-    );
+    return <p className="text-[11px] text-muted-foreground">Filtered to {parts.join(" · ")}</p>;
 }

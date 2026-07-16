@@ -2,6 +2,7 @@
 - [Unbudgeted cash identity](unbudgeted_cash_identity.md) — held clamp GREATEST(0,alloc-consumed) is a cash invariant; removing it pushes Unbudgeted > net worth. Verified on real data. Keep clamp.
 - [Personal held asymmetry](personal_held_asymmetry.md) — personal/summary.mts: space-wide allocated vs owner-only consumed overstates held when a co-member spends. Dormant in seed, real in prod.
 - [Money storage convention](money_storage.md) — Orbit stores money as Postgres `numeric` cast to text in transit, then `Number()` on the client. No minor-unit ints.
+- [Cash vs operational expense pairing](cash_vs_operational_expense_pairing.md) — periodExpense is ALWAYS cash (incl transfers); operational-mode views must compare against operationalExpense, not periodExpense.
 - [Envelope total denominator](envelope_total.md) — "% used" should use `consumed / (allocated + carryIn)`. EnvelopesPage urgency sort was fixed in branch `wrap`.
 - [Filtered-totals OUT formula](filtered_totals_out.md) — Per-space and personal procedures disagree on what counts in OUT (adjustments, account-flow scoping). Treat as ambiguous until product decides.
 - [Transfer fee storage](transfer_fee_rollup.md) — Post-mig-048 fees are a SEPARATE type='expense' row with own envelop_id; `WHERE type='expense' AND envelop_id` already captures them, no UNION needed.
@@ -30,3 +31,6 @@
 - [No-spending day count fencepost](no_spending_day_count_fencepost.md) — HeatmapView "days with no spending" uses duration/86400000 (time-of-day unstable, can go negative); must be inclusive calendar-day count like OverviewPage.
 - [Event detail dashboard math](event_detail_dashboard_math.md) — feat/enevt/details invariants: day-span partition, timeline conservation (widen/fold/2000-cap safe), pace formula, category-tree conservation. Audited CLEAN.
 - [Heatmap clamp tz-frame mix](heatmap_clamp_tz_frame_mix.md) — feat/heatmap-enhanch heaviest-week drill-down: clampedStart=periodStart (app-tz instant) read via NATIVE getters → one-day-early `from` for sub-+6 users; latent for Dhaka.
+- [Envelopes combined pace period mismatch](envelopes_combined_pace_period_mismatch.md) — CONFIRMED BUG: "This month combined" pace line uses period-scoped allocated vs hardcoded-now spend; N× too high on "this-year", inverts on/over-pace. Row-level pace is gated; chart isn't.
+- [Daily bar-strip diff pattern](daily_bar_strip_diff_pattern.md) — 3 charts diff a cumulative array for per-day amounts; Math.max(0)/Math.min(cap) guards provably inert (positive-only amounts, cap=3.6×max). Round 4 CLEAN.
+- [heatmap-fix branch round-3 audit](heatmap_fix_branch_round3.md) — categoryMonthlyTrend SQL, YTD/combined trend charts, MultiSeriesLineChart, operational zero-day handling all verified CLEAN; CategoryMultiSelect has unguarded tree recursion (hang risk, non-calc).

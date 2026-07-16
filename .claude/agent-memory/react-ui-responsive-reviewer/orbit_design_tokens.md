@@ -15,3 +15,7 @@ Approx WCAG contrast ratios (treating oklch L ≈ CIE L*):
 **Recurring issue:** meaningful caption text keeps getting shipped at `--fg-4` (empty-state helper lines, chart axis labels, file sizes, tooltip sub-values). It should be `--fg-3`. Decorative icons at fg-4 are fine.
 
 Focus rings on orbit-design: 2-layer `box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand)` (4px total). `.od-card` has NO overflow:hidden so rings aren't clipped; `.ev-hero`/`.ev-stat` DO set overflow:hidden but their focusable children sit inside ≥16px padding so the 4px ring survives.
+
+**Cross-scope charts are safe, but only because the whole app is dark-only.** `index.css` defines shadcn tokens under a single `:root, .dark { … }` block (no separate light values), so `--muted-foreground`/`--popover`/`--border`/`--card` are dark values everywhere. orbit-design does NOT redefine those shadcn names. Shared charts that use Tailwind `text-muted-foreground` / `bg-popover` / `var(--border)` (`Donut`, `DrillableDonut`, `MultiSeriesLineChart`) therefore render legibly whether inside `.orbit-design` (OverviewPage DonutCard) or in a shadcn Card. This is a *latent* trap: if a real light theme is ever added, those charts inside orbit-design's hardcoded near-black surface would flip to light-mode grays. Flag only as future risk, not a live bug.
+
+Envelope/category `color` fields are hex (`#22c55e`, from server/seed + palette in `entityStyle.ts`), NOT `var(--ent-*)` tokens — so they resolve identically in any scope. Chart slice/avatar colors do not break outside orbit-design.

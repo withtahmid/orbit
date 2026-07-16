@@ -40,7 +40,10 @@ const GRANULARITY_OPTIONS: ReadonlyArray<{
 /** Window bounds for the selected granularity, aligned with Postgres
  *  `date_trunc(granularity, ...)` semantics so frontend-derived periods
  *  (movers card) match the backend's bucket boundaries. */
-function periodBoundsFor(g: Granularity, now: Date = new Date()): {
+function periodBoundsFor(
+    g: Granularity,
+    now: Date = new Date()
+): {
     start: Date;
     end: Date;
 } {
@@ -127,9 +130,7 @@ export default function TrendsView() {
         { enabled: isPersonal }
     );
     const dailyData = (isPersonal ? dailyPersonalQ.data : dailySpaceQ.data) ?? null;
-    const dailyLoading = isPersonal
-        ? dailyPersonalQ.isLoading
-        : dailySpaceQ.isLoading;
+    const dailyLoading = isPersonal ? dailyPersonalQ.isLoading : dailySpaceQ.isLoading;
 
     /* YoY card always compares calendar years — independent of the
        selected granularity. Pin to the current year as Dhaka knows it,
@@ -172,8 +173,7 @@ export default function TrendsView() {
         },
         { enabled: isPersonal }
     );
-    const moversResponse =
-        (isPersonal ? moversPersonalQ.data : moversSpaceQ.data) ?? null;
+    const moversResponse = (isPersonal ? moversPersonalQ.data : moversSpaceQ.data) ?? null;
     const moversData = moversResponse?.items ?? [];
     const moversMode: "standard" | "drill" = moversResponse?.mode ?? "standard";
     const moversDrillRootId = moversResponse?.drillRootCategoryId ?? null;
@@ -209,41 +209,25 @@ export default function TrendsView() {
 
     const monthSoFar = cumulative.cur[TODAY - 1] ?? 0;
     const lastMonthSoFar = cumulative.prv[TODAY - 1] ?? 0;
-    const lastMonthFull =
-        cumulative.prv[Math.max(0, cumulative.prv.length - 1)] ?? 0;
+    const lastMonthFull = cumulative.prv[Math.max(0, cumulative.prv.length - 1)] ?? 0;
     const dailyAvg = TODAY > 0 ? monthSoFar / TODAY : 0;
     const projected = dailyAvg * DAYS_IN_MONTH;
     /* `null` when there's no prior-period spend to compare against — the
        UI then shows a neutral em-dash instead of a misleading "0% behind". */
-    const paceDelta =
-        lastMonthSoFar > 0
-            ? (monthSoFar / lastMonthSoFar - 1) * 100
-            : null;
+    const paceDelta = lastMonthSoFar > 0 ? (monthSoFar / lastMonthSoFar - 1) * 100 : null;
 
     /* Typical = avg cumulative shape across all prior periods. The
        same-position cumulative tells us where typical spending stood
        at *this* bucket-in-period; full-period typical is the endpoint. */
-    const typicalSoFar = cumulative.avg
-        ? cumulative.avg[TODAY - 1] ?? 0
-        : 0;
-    const typicalFull = cumulative.avg
-        ? cumulative.avg[cumulative.avg.length - 1] ?? 0
-        : 0;
-    const typicalDailyAvg =
-        DAYS_IN_MONTH > 0 ? typicalFull / (DAYS_IN_MONTH * BUCKET_DAYS) : 0;
+    const typicalSoFar = cumulative.avg ? (cumulative.avg[TODAY - 1] ?? 0) : 0;
+    const typicalFull = cumulative.avg ? (cumulative.avg[cumulative.avg.length - 1] ?? 0) : 0;
+    const typicalDailyAvg = DAYS_IN_MONTH > 0 ? typicalFull / (DAYS_IN_MONTH * BUCKET_DAYS) : 0;
     const paceVsTypical =
-        cumulative.avg && typicalSoFar > 0
-            ? (monthSoFar / typicalSoFar - 1) * 100
-            : null;
+        cumulative.avg && typicalSoFar > 0 ? (monthSoFar / typicalSoFar - 1) * 100 : null;
 
     /* Bucket-unit-aware label so KPIs read sensibly across granularities
        ("Day 5 of 7" for week, "Week 3 of 13" for quarter, etc.). */
-    const bucketLabel =
-        BUCKET_UNIT === "week"
-            ? "Week"
-            : BUCKET_UNIT === "month"
-              ? "Month"
-              : "Day";
+    const bucketLabel = BUCKET_UNIT === "week" ? "Week" : BUCKET_UNIT === "month" ? "Month" : "Day";
 
     const kpiItems: KpiItem[] = [
         {
@@ -264,12 +248,7 @@ export default function TrendsView() {
             valueFormat: "percent",
             /* No prior-period spend → neutral, no tone color and no
                "ahead/behind" copy that misreads as good/bad. */
-            tone:
-                paceDelta == null
-                    ? "muted"
-                    : paceDelta > 0
-                      ? "expense"
-                      : "income",
+            tone: paceDelta == null ? "muted" : paceDelta > 0 ? "expense" : "income",
             sub:
                 paceDelta == null
                     ? `No spend last ${noun} to compare`
@@ -286,13 +265,8 @@ export default function TrendsView() {
                       label: "Vs typical",
                       value: paceVsTypical,
                       valueFormat: "percent" as const,
-                      tone: (paceVsTypical > 0 ? "expense" : "income") as
-                          | "expense"
-                          | "income",
-                      sub:
-                          paceVsTypical > 0
-                              ? "above your usual pace"
-                              : "below your usual pace",
+                      tone: (paceVsTypical > 0 ? "expense" : "income") as "expense" | "income",
+                      sub: paceVsTypical > 0 ? "above your usual pace" : "below your usual pace",
                   },
               ]
             : []),
@@ -315,19 +289,15 @@ export default function TrendsView() {
        not-yet-happened month of `thisYear`, so `findIndex(v == null)`
        gives us the cutoff. Mid-May with flat YoY spend should read
        ~0%, not ~-58%. */
-    const yoyFutureStartIdx = (yoyData?.thisYear ?? []).findIndex(
-        (v) => v == null
-    );
-    const yoyWindowMonths =
-        yoyFutureStartIdx === -1 ? 12 : yoyFutureStartIdx;
+    const yoyFutureStartIdx = (yoyData?.thisYear ?? []).findIndex((v) => v == null);
+    const yoyWindowMonths = yoyFutureStartIdx === -1 ? 12 : yoyFutureStartIdx;
     const yoyThisTotal = (yoyData?.thisYear ?? [])
         .slice(0, yoyWindowMonths)
         .reduce<number>((s, v) => s + (v ?? 0), 0);
     const yoyLastTotal = (yoyData?.lastYear ?? [])
         .slice(0, yoyWindowMonths)
         .reduce<number>((s, v) => s + (v ?? 0), 0);
-    const yoyTotalDelta =
-        yoyLastTotal > 0 ? (yoyThisTotal / yoyLastTotal - 1) * 100 : 0;
+    const yoyTotalDelta = yoyLastTotal > 0 ? (yoyThisTotal / yoyLastTotal - 1) * 100 : 0;
     const yoyHeaviestGrowth = useMemo(() => {
         if (!yoyData) return null;
         let bestIdx = -1;
@@ -357,10 +327,7 @@ export default function TrendsView() {
             actions={
                 <div className="flex flex-wrap items-center gap-2">
                     <MetricToggle />
-                    <GranularityToggle
-                        value={granularity}
-                        onChange={setGranularity}
-                    />
+                    <GranularityToggle value={granularity} onChange={setGranularity} />
                 </div>
             }
         >
@@ -382,14 +349,14 @@ export default function TrendsView() {
                         Cumulative spend race · this {noun} vs last {noun}
                     </CardTitle>
                     <p className="text-xs text-muted-foreground">
-                        {bucketLabel} {TODAY} of {DAYS_IN_MONTH} · projection
-                        extends through {noun}-end based on current pace. The
-                        flat line is the typical pace from the last 3 {noun}s.
+                        {bucketLabel} {TODAY} of {DAYS_IN_MONTH} · projection extends through {noun}
+                        -end based on current pace. The flat line is the typical pace from the last
+                        3 {noun}s.
                     </p>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-4">
                     {dailyLoading ? (
-                        <Skeleton className="h-[380px] w-full" />
+                        <Skeleton className="h-[478px] w-full" />
                     ) : (
                         <CumulativeRaceChart
                             cur={cumulative.cur}
@@ -431,10 +398,7 @@ export default function TrendsView() {
                                 color="var(--income)"
                                 kind="solid"
                                 label={`Typical (avg of all prior ${noun}s)`}
-                                value={
-                                    cumulative.avg[cumulative.avg.length - 1] ??
-                                    0
-                                }
+                                value={cumulative.avg[cumulative.avg.length - 1] ?? 0}
                             />
                         ) : null}
                     </div>
@@ -448,8 +412,8 @@ export default function TrendsView() {
                             Year-over-year · {yoyYear} vs {yoyYear - 1}
                         </CardTitle>
                         <p className="text-xs text-muted-foreground">
-                            {yoyYear} (solid) vs {yoyYear - 1} (faded). Shaded
-                            gap shows growth or shrinkage.
+                            {yoyYear} (solid) vs {yoyYear - 1} (faded). Shaded gap shows growth or
+                            shrinkage.
                         </p>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3">
@@ -492,9 +456,7 @@ export default function TrendsView() {
                 <Card>
                     <CardHeader>
                         <CardTitle>Velocity</CardTitle>
-                        <p className="text-xs text-muted-foreground">
-                            How fast money is leaving.
-                        </p>
+                        <p className="text-xs text-muted-foreground">How fast money is leaving.</p>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-2.5">
                         <VelocityRow
@@ -504,11 +466,7 @@ export default function TrendsView() {
                         />
                         <VelocityRow
                             label={`Per day last ${noun}`}
-                            value={
-                                TODAY > 0
-                                    ? lastMonthSoFar / TODAY / BUCKET_DAYS
-                                    : 0
-                            }
+                            value={TODAY > 0 ? lastMonthSoFar / TODAY / BUCKET_DAYS : 0}
                             sub={`Same window, prior ${noun}`}
                             muted
                         />
@@ -528,11 +486,7 @@ export default function TrendsView() {
                                     ? `No spend last ${noun} to compare`
                                     : `% change vs last ${noun}'s daily burn`
                             }
-                            tone={
-                                paceDelta != null && paceDelta >= 0
-                                    ? "expense"
-                                    : undefined
-                            }
+                            tone={paceDelta != null && paceDelta >= 0 ? "expense" : undefined}
                             unit="%"
                             decimals={1}
                             muted={paceDelta == null}
@@ -552,7 +506,9 @@ export default function TrendsView() {
                                     noun={noun}
                                 />
                             ) : (
-                                <>Biggest movers · this {noun} vs last {noun}</>
+                                <>
+                                    Biggest movers · this {noun} vs last {noun}
+                                </>
                             )}
                         </CardTitle>
                         <p className="text-xs text-muted-foreground">
@@ -578,11 +534,7 @@ export default function TrendsView() {
                                         key={m.categoryId}
                                         className="flex items-center gap-3 rounded-lg border border-border/40 bg-muted/20 p-3.5"
                                     >
-                                        <EntityAvatar
-                                            size="md"
-                                            color={m.color}
-                                            icon={m.icon}
-                                        />
+                                        <EntityAvatar size="md" color={m.color} icon={m.icon} />
                                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                                             <span className="truncate text-[13px] font-medium">
                                                 {m.name}
@@ -610,9 +562,7 @@ export default function TrendsView() {
                                                     <ArrowDown className="size-3" />
                                                 )}
                                                 {up ? "+" : "−"}
-                                                {Math.abs(
-                                                    m.deltaAmount
-                                                ).toLocaleString("en-US", {
+                                                {Math.abs(m.deltaAmount).toLocaleString("en-US", {
                                                     maximumFractionDigits: 0,
                                                 })}
                                             </span>
@@ -638,6 +588,22 @@ export default function TrendsView() {
    under the cumulative line, "Today" marker, and inline labels
    on the projection / last-month endpoints.
    ============================================================ */
+
+/** Path for a bar with rounded TOP corners only — a plain `<rect rx>`
+ *  rounds all four, including the bottom edge sitting on the baseline,
+ *  which doesn't match the top-only rounding the event detail page's
+ *  (Recharts) bar strip uses. Matching that convention here. */
+function topRoundedBarPath(
+    x: number,
+    yTop: number,
+    width: number,
+    height: number,
+    r: number
+): string {
+    if (width <= 0 || height <= 0) return "";
+    const rr = Math.min(r, width / 2, height);
+    return `M${x} ${yTop + height} L${x} ${yTop + rr} Q${x} ${yTop} ${x + rr} ${yTop} L${x + width - rr} ${yTop} Q${x + width} ${yTop} ${x + width} ${yTop + rr} L${x + width} ${yTop + height} Z`;
+}
 
 /**
  * Cumulative spend chart — current period vs prior + typical-shape
@@ -696,25 +662,16 @@ export function CumulativeRaceChart({
     /** Tooltip date format — slightly longer than the axis so the
      *  user gets the year too when looking at month / year views. */
     const tooltipDateFormat =
-        bucketUnit === "month"
-            ? "MMMM yyyy"
-            : daysInMonth <= 7
-              ? "EEE, MMM d"
-              : "MMM d, yyyy";
+        bucketUnit === "month" ? "MMMM yyyy" : daysInMonth <= 7 ? "EEE, MMM d" : "MMM d, yyyy";
     const w = 800;
-    const h = 380;
+    const h = 460;
     const p = 32;
-    const avgEndpoint = avg ? avg[avg.length - 1] ?? 0 : 0;
+    const avgEndpoint = avg ? (avg[avg.length - 1] ?? 0) : 0;
     /* Guard against the all-zero / empty-data case. Without this floor,
        `v / max` produces NaN coordinates and the chart silently renders
        blank — exactly the "no data" symptom reported. We surface an
        explicit empty-state below instead. */
-    const rawMax = Math.max(
-        prv[prv.length - 1] ?? 0,
-        cur[today - 1] ?? 0,
-        projection,
-        avgEndpoint
-    );
+    const rawMax = Math.max(prv[prv.length - 1] ?? 0, cur[today - 1] ?? 0, projection, avgEndpoint);
     const noData = !Number.isFinite(rawMax) || rawMax <= 0 || cur.length === 0;
     const max = (rawMax > 0 ? rawMax : 1) * 1.1;
     const sx = (i: number) => p + (i / (daysInMonth - 1)) * (w - p * 2);
@@ -730,17 +687,28 @@ export function CumulativeRaceChart({
         .map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`)
         .join(" ");
     const projPath = `M${todayX} ${todayY} L${sx(daysInMonth - 1)} ${sy(projection)}`;
+
+    /* Daily-volume bar strip beneath the cumulative curve — same idea as
+     * the event detail page's timeline chart and the envelope detail
+     * page's pace chart: per-bucket amounts (derived by diffing the
+     * cumulative `cur` series, since that's all this chart is handed).
+     * Shares the SAME `sy()`/`max` scale as the cumulative line — an
+     * earlier version rode its own capped scale so a full-height bar
+     * only reached ~28% up, which looked wrong: a bar's top didn't
+     * correspond to the dollar value the Y-axis labels actually show.
+     * Themed to the same `var(--warning)` as the rest of "this period",
+     * not a separate hue. */
+    const dailyCur = cur.map((v, i) => Math.max(0, v - (i > 0 ? (cur[i - 1] ?? 0) : 0)));
+    const barBaseline = sy(0);
+    const daySpacing = (w - p * 2) / (daysInMonth - 1);
+    const barWidth = Math.max(2, Math.min(14, daySpacing * 0.6));
+
     /* Average path follows the same per-bucket cumulative shape as
        cur/prev — a curved line that captures the typical spending
        rhythm across all prior periods, not a flat run-rate. */
     const avgPath =
         avg && avgEndpoint > 0
-            ? avg
-                  .map(
-                      (v, i) =>
-                          `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`
-                  )
-                  .join(" ")
+            ? avg.map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`).join(" ")
             : null;
     const curArea = `${curPath} L ${todayX} ${h - p} L ${p} ${h - p} Z`;
 
@@ -822,23 +790,9 @@ export function CumulativeRaceChart({
                     aria-label="Cumulative spend chart"
                 >
                     <defs>
-                        <linearGradient
-                            id="trendGrad"
-                            x1="0"
-                            x2="0"
-                            y1="0"
-                            y2="1"
-                        >
-                            <stop
-                                offset="0%"
-                                stopColor="var(--warning)"
-                                stopOpacity="0.28"
-                            />
-                            <stop
-                                offset="100%"
-                                stopColor="var(--warning)"
-                                stopOpacity="0"
-                            />
+                        <linearGradient id="trendGrad" x1="0" x2="0" y1="0" y2="1">
+                            <stop offset="0%" stopColor="var(--warning)" stopOpacity="0.28" />
+                            <stop offset="100%" stopColor="var(--warning)" stopOpacity="0" />
                         </linearGradient>
                     </defs>
 
@@ -896,6 +850,28 @@ export function CumulativeRaceChart({
                     />
                     {/* Current month area + line */}
                     <path d={curArea} fill="url(#trendGrad)" />
+                    {/* Daily-volume bars — same warning color as the
+                        cumulative line, on top of the translucent area
+                        fill but under the line's own stroke so the
+                        running total always stays the clearest read. */}
+                    {dailyCur
+                        .slice(0, today)
+                        .map((v, i) =>
+                            v > 0 ? (
+                                <path
+                                    key={i}
+                                    d={topRoundedBarPath(
+                                        sx(i) - barWidth / 2,
+                                        sy(v),
+                                        barWidth,
+                                        barBaseline - sy(v),
+                                        1.5
+                                    )}
+                                    fill="var(--warning)"
+                                    fillOpacity={0.32}
+                                />
+                            ) : null
+                        )}
                     <path
                         d={curPath}
                         fill="none"
@@ -915,12 +891,7 @@ export function CumulativeRaceChart({
                     />
 
                     {/* Endpoint markers */}
-                    <circle
-                        cx={todayX}
-                        cy={todayY}
-                        r={4}
-                        fill="var(--warning)"
-                    />
+                    <circle cx={todayX} cy={todayY} r={4} fill="var(--warning)" />
                     <circle
                         cx={sx(daysInMonth - 1)}
                         cy={projY}
@@ -987,7 +958,7 @@ export function CumulativeRaceChart({
                     height is fixed. */}
                 {[0, 1, 2, 3, 4].map((i) => {
                     const yPx = p + (i * (h - p * 2)) / 4;
-                    const value = (((4 - i) * max) / 4) / 1000;
+                    const value = ((4 - i) * max) / 4 / 1000;
                     return (
                         <span
                             key={`yt-${i}`}
@@ -1040,10 +1011,7 @@ export function CumulativeRaceChart({
                     >
                         <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                             <span className="text-foreground">
-                                {formatInAppTz(
-                                    bucketDate(hoverIdx),
-                                    tooltipDateFormat
-                                )}
+                                {formatInAppTz(bucketDate(hoverIdx), tooltipDateFormat)}
                             </span>
                             {/* For quarter / year the "Day 145 of 365"
                                 counter competes with the date without
@@ -1059,9 +1027,12 @@ export function CumulativeRaceChart({
                         </div>
                         <TooltipRow
                             label={`This (so far)`}
-                            value={
-                                hoverIdx < today ? (cur[hoverIdx] ?? 0) : null
-                            }
+                            value={hoverIdx < today ? (cur[hoverIdx] ?? 0) : null}
+                            color="var(--warning)"
+                        />
+                        <TooltipRow
+                            label={`Spent this ${bucketLabelSingular.toLowerCase()}`}
+                            value={hoverIdx < today ? (dailyCur[hoverIdx] ?? 0) : null}
                             color="var(--warning)"
                         />
                         <TooltipRow
@@ -1091,9 +1062,7 @@ export function CumulativeRaceChart({
                 the card on mobile. */}
             <div className="mt-1 flex justify-between px-[4%] text-[10.5px] text-muted-foreground">
                 {dayTicks.map((d) => (
-                    <span key={d}>
-                        {formatInAppTz(bucketDate(d - 1), axisDateFormat)}
-                    </span>
+                    <span key={d}>{formatInAppTz(bucketDate(d - 1), axisDateFormat)}</span>
                 ))}
             </div>
         </div>
@@ -1114,10 +1083,7 @@ function TooltipRow({
     return (
         <div className="flex items-center justify-between gap-3">
             <span className="inline-flex items-center gap-1.5 text-foreground/85">
-                <span
-                    className="size-1.5 rounded-full"
-                    style={{ backgroundColor: color }}
-                />
+                <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
                 {label}
             </span>
             <span className="tabular-nums font-medium">
@@ -1354,22 +1320,11 @@ function YoYBars({
     );
 }
 
-function YoyTooltipRow({
-    label,
-    value,
-    color,
-}: {
-    label: string;
-    value: number;
-    color: string;
-}) {
+function YoyTooltipRow({ label, value, color }: { label: string; value: number; color: string }) {
     return (
         <div className="flex items-center justify-between gap-3">
             <span className="inline-flex items-center gap-1.5 text-foreground/85">
-                <span
-                    className="size-1.5 rounded-full"
-                    style={{ backgroundColor: color }}
-                />
+                <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
                 {label}
             </span>
             <span className="tabular-nums font-medium">
@@ -1379,22 +1334,12 @@ function YoyTooltipRow({
     );
 }
 
-function YoyDeltaRow({
-    thisVal,
-    lastVal,
-}: {
-    thisVal: number;
-    lastVal: number;
-}) {
+function YoyDeltaRow({ thisVal, lastVal }: { thisVal: number; lastVal: number }) {
     if (lastVal === 0) return null;
     const delta = thisVal - lastVal;
     const pct = (delta / lastVal) * 100;
     const tone =
-        delta > 0
-            ? "var(--expense)"
-            : delta < 0
-              ? "var(--income)"
-              : "var(--muted-foreground)";
+        delta > 0 ? "var(--expense)" : delta < 0 ? "var(--income)" : "var(--muted-foreground)";
     return (
         <div className="mt-1 flex items-center justify-between gap-3 border-t border-border/40 pt-1 text-[10.5px]">
             <span className="text-muted-foreground">Δ vs prior</span>
@@ -1445,20 +1390,13 @@ function EndpointStat({
                     style={{
                         borderTopWidth: kind === "solid" ? 2 : 1.5,
                         borderTopStyle:
-                            kind === "solid"
-                                ? "solid"
-                                : kind === "dashed"
-                                  ? "dashed"
-                                  : "dotted",
+                            kind === "solid" ? "solid" : kind === "dashed" ? "dashed" : "dotted",
                         borderTopColor: color,
                     }}
                 />
                 <span className="truncate">{label}</span>
             </span>
-            <span
-                className="text-[15px] font-semibold tabular-nums"
-                style={{ color }}
-            >
+            <span className="text-[15px] font-semibold tabular-nums" style={{ color }}>
                 {value.toLocaleString("en-US", { maximumFractionDigits: 0 })}
             </span>
         </div>
@@ -1532,14 +1470,13 @@ function DrillRootTitle({
     rootId: string | null;
     noun: string;
 }) {
-    const q = trpc.expenseCategory.listBySpace.useQuery(
-        { spaceId },
-        { enabled: !!rootId }
-    );
+    const q = trpc.expenseCategory.listBySpace.useQuery({ spaceId }, { enabled: !!rootId });
     const name = q.data?.find((c) => c.id === rootId)?.name;
     if (!name) {
         return (
-            <>Biggest movers · this {noun} vs last {noun}</>
+            <>
+                Biggest movers · this {noun} vs last {noun}
+            </>
         );
     }
     return (

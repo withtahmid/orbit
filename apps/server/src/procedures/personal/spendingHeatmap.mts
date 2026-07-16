@@ -7,9 +7,14 @@ import { intersectAccountIds } from "../analytics/utils/trendsFilters.mjs";
 import { resolveMemberSpaceIds, resolveOwnedAccountIds } from "./shared.mjs";
 
 /**
- * Daily expense totals across every space the caller is a member of,
- * restricted to expenses paid out of accounts they personally own —
- * the dataset for the personal view's calendar heatmap.
+ * Daily spend totals across every space the caller is a member of,
+ * restricted to accounts they personally own — the dataset for the
+ * personal view's calendar heatmap.
+ *
+ * `mode` mirrors `personal/cashFlow.mts`'s own `cash`/`operational` split:
+ * `cash` (default) counts expenses plus owned-outbound cross-space
+ * transfer principal (a transfer to a space you don't own reduced your
+ * personal cash); `operational` counts only true `type='expense'` debits.
  */
 export const personalSpendingHeatmap = authorizedProcedure
     .input(
@@ -18,6 +23,7 @@ export const personalSpendingHeatmap = authorizedProcedure
             periodEnd: z.coerce.date(),
             /* Only the account filter is meaningful on `/s/me`. */
             accountIds: z.array(z.string().uuid()).max(200).optional(),
+            mode: z.enum(["cash", "operational"]).default("cash"),
         })
     )
     .query(async ({ ctx, input }) => {
@@ -41,6 +47,12 @@ export const personalSpendingHeatmap = authorizedProcedure
                 if (scopedAccounts.length === 0 || memberSpaces.length === 0)
                     return [];
 
+                /* Transfer-principal branch is always emitted; its
+                   contribution is multiplied by a 0/1 factor derived from
+                   the Zod-validated `mode` enum — same convention as
+                   `personal/cashFlow.mts`'s expense-side transfer branch. */
+                const xferFactor = input.mode === "cash" ? 1 : 0;
+
                 const query = sql<{ day: Date; total: string }>`
                     SELECT day, SUM(amount)::text AS total FROM (
                         SELECT date_trunc('day', transaction_datetime) AS day, amount
@@ -48,6 +60,15 @@ export const personalSpendingHeatmap = authorizedProcedure
                         WHERE space_id = ANY(${memberSpaces})
                           AND type = 'expense'
                           AND source_account_id = ANY(${scopedAccounts})
+                          AND transaction_datetime >= ${input.periodStart}
+                          AND transaction_datetime < ${input.periodEnd}
+                        UNION ALL
+                        SELECT date_trunc('day', transaction_datetime) AS day, amount * ${xferFactor} AS amount
+                        FROM transactions
+                        WHERE space_id = ANY(${memberSpaces})
+                          AND type = 'transfer'
+                          AND source_account_id = ANY(${scopedAccounts})
+                          AND destination_account_id <> ALL(${owned})
                           AND transaction_datetime >= ${input.periodStart}
                           AND transaction_datetime < ${input.periodEnd}
                     ) entries

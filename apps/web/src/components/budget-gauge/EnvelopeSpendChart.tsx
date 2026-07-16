@@ -33,6 +33,22 @@ function fmtYTick(v: number): string {
     return String(Math.round(v));
 }
 
+/** Path for a bar with rounded TOP corners only — a plain `<rect rx>`
+ *  rounds all four, including the bottom edge sitting on the baseline,
+ *  which doesn't match the top-only rounding the event detail page's
+ *  (Recharts) bar strip uses. Matching that convention here. */
+function topRoundedBarPath(
+    x: number,
+    yTop: number,
+    width: number,
+    height: number,
+    r: number
+): string {
+    if (width <= 0 || height <= 0) return "";
+    const rr = Math.min(r, width / 2, height);
+    return `M${x} ${yTop + height} L${x} ${yTop + rr} Q${x} ${yTop} ${x + rr} ${yTop} L${x + width - rr} ${yTop} Q${x + width} ${yTop} ${x + width} ${yTop + rr} L${x + width} ${yTop + height} Z`;
+}
+
 export function EnvelopeSpendChart({
     cur,
     prv,
@@ -82,14 +98,13 @@ export function EnvelopeSpendChart({
     };
 
     const axisDateFormat = bucketUnit === "month" ? "MMM" : "MMM d";
-    const tooltipDateFormat =
-        bucketUnit === "month" ? "MMMM yyyy" : "MMM d, yyyy";
+    const tooltipDateFormat = bucketUnit === "month" ? "MMMM yyyy" : "MMM d, yyyy";
 
     const w = 800;
-    const h = 440;
+    const h = 520;
     const p = 34;
     const hasBudget = budget != null && budget > 0;
-    const avgEndpoint = avg ? avg[avg.length - 1] ?? 0 : 0;
+    const avgEndpoint = avg ? (avg[avg.length - 1] ?? 0) : 0;
     const rawMax = Math.max(
         prv[prv.length - 1] ?? 0,
         cur[today - 1] ?? 0,
@@ -113,18 +128,26 @@ export function EnvelopeSpendChart({
         .map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`)
         .join(" ");
     const projPath = `M${todayX} ${todayY} L${sx(daysInMonth - 1)} ${sy(projection)}`;
+
+    /* Daily-volume bar strip beneath the cumulative curve — same idea as
+     * the event detail page's `SpendTimelineChart`: per-day amounts (here
+     * derived by diffing the cumulative `cur` series, since that's all
+     * this chart is handed). Shares the SAME `sy()`/`max` scale as the
+     * cumulative line — an earlier version rode its own capped scale so
+     * a full-height bar only reached ~28% up, which looked wrong: a
+     * bar's top didn't correspond to the dollar value the Y-axis labels
+     * actually show. Only drawn for days that have actually happened
+     * (`< today`), matching `curSlice`. */
+    const dailyCur = cur.map((v, i) => Math.max(0, v - (i > 0 ? (cur[i - 1] ?? 0) : 0)));
+    const barBaseline = sy(0);
+    const daySpacing = (w - p * 2) / denom;
+    const barWidth = Math.max(2, Math.min(14, daySpacing * 0.6));
     const avgPath =
         avg && avgEndpoint > 0
-            ? avg
-                  .map(
-                      (v, i) =>
-                          `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`
-                  )
-                  .join(" ")
+            ? avg.map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`).join(" ")
             : null;
     const curArea = `${curPath} L ${todayX} ${h - p} L ${p} ${h - p} Z`;
-    const paceAt = (i: number) =>
-        hasBudget ? (budget * (i + 1)) / daysInMonth : 0;
+    const paceAt = (i: number) => (hasBudget ? (budget * (i + 1)) / daysInMonth : 0);
     // Today's actual spend sitting above the on-budget pace line — the
     // chart escalates this at a glance (bracket + larger pulsing dot),
     // not just the small footnote below it. Severity is two-tiered so the
@@ -135,11 +158,7 @@ export function EnvelopeSpendChart({
     // matching every other alarm color on this page.
     const isOverPace = hasBudget && showToday && (cur[today - 1] ?? 0) > paceAt(today - 1);
     const isOverBudget = hasBudget && (cur[today - 1] ?? 0) > budget;
-    const alertColor = archived
-        ? "var(--fg-3)"
-        : isOverBudget
-          ? "var(--expense)"
-          : "var(--warn)";
+    const alertColor = archived ? "var(--fg-3)" : isOverBudget ? "var(--expense)" : "var(--warn)";
     const paceNowY = sy(paceAt(today - 1));
 
     const dayTicks =
@@ -195,8 +214,7 @@ export function EnvelopeSpendChart({
         const idx = Math.max(0, Math.min(daysInMonth - 1, Math.round(raw)));
         setHoverIdx(idx);
     };
-    const handleMove: MouseEventHandler<HTMLDivElement> = (e) =>
-        setIdxFromClientX(e.clientX);
+    const handleMove: MouseEventHandler<HTMLDivElement> = (e) => setIdxFromClientX(e.clientX);
     const handleTouch = (e: ReactTouchEvent<HTMLDivElement>) => {
         const t = e.touches[0];
         if (t) setIdxFromClientX(t.clientX);
@@ -210,9 +228,7 @@ export function EnvelopeSpendChart({
                 className="flex w-full items-center justify-center rounded-md border border-dashed border-border/60 bg-muted/10"
                 style={{ height: h }}
             >
-                <span className="px-4 text-center text-sm text-muted-foreground">
-                    {emptyLabel}
-                </span>
+                <span className="px-4 text-center text-sm text-muted-foreground">{emptyLabel}</span>
             </div>
         );
     }
@@ -276,7 +292,63 @@ export function EnvelopeSpendChart({
                         />
                     ) : null}
 
-                    {/* Budget ceiling + on-budget pace guide */}
+                    {/* Typical average */}
+                    {avgPath ? (
+                        <path
+                            d={avgPath}
+                            fill="none"
+                            stroke="var(--income)"
+                            strokeWidth={1.25}
+                            opacity={0.55}
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    ) : null}
+
+                    {/* Last period */}
+                    <path
+                        d={prvPath}
+                        fill="none"
+                        stroke="var(--muted-foreground)"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 4"
+                        opacity={0.7}
+                        vectorEffect="non-scaling-stroke"
+                    />
+
+                    {/* Current period */}
+                    <path d={curArea} fill={`url(#${gradId})`} />
+                    {/* Daily-volume bars — themed to the envelope's own
+                        color (not a generic expense red) so the strip
+                        reads as part of the same series as the cumulative
+                        line above it, not a separate metric. Sit on top of
+                        the translucent area fill but under the cumulative
+                        stroke, so the running-total line always stays the
+                        clearest read even where a tall bar and the curve
+                        overlap. */}
+                    {dailyCur
+                        .slice(0, today)
+                        .map((v, i) =>
+                            v > 0 ? (
+                                <path
+                                    key={i}
+                                    d={topRoundedBarPath(
+                                        sx(i) - barWidth / 2,
+                                        sy(v),
+                                        barWidth,
+                                        barBaseline - sy(v),
+                                        1.5
+                                    )}
+                                    fill={color}
+                                    fillOpacity={0.32}
+                                />
+                            ) : null
+                        )}
+                    {/* Budget ceiling + on-budget pace guide — drawn after
+                        the bars (not before, as originally) so a tall
+                        early-day bar can no longer visually cover the
+                        pace guide's low left end; the guide/ceiling stay
+                        readable at every x, and still sit under the
+                        current-period stroke below. */}
                     {hasBudget ? (
                         <>
                             <line
@@ -305,32 +377,6 @@ export function EnvelopeSpendChart({
                             />
                         </>
                     ) : null}
-
-                    {/* Typical average */}
-                    {avgPath ? (
-                        <path
-                            d={avgPath}
-                            fill="none"
-                            stroke="var(--income)"
-                            strokeWidth={1.25}
-                            opacity={0.55}
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    ) : null}
-
-                    {/* Last period */}
-                    <path
-                        d={prvPath}
-                        fill="none"
-                        stroke="var(--muted-foreground)"
-                        strokeWidth={1.5}
-                        strokeDasharray="4 4"
-                        opacity={0.7}
-                        vectorEffect="non-scaling-stroke"
-                    />
-
-                    {/* Current period */}
-                    <path d={curArea} fill={`url(#${gradId})`} />
                     <path
                         d={curPath}
                         fill="none"
@@ -463,12 +509,7 @@ export function EnvelopeSpendChart({
                         ) : null}
                         {hoverIdx < today ? (
                             <span
-                                style={dotStyle(
-                                    sx(hoverIdx),
-                                    sy(cur[hoverIdx] ?? 0),
-                                    7,
-                                    color
-                                )}
+                                style={dotStyle(sx(hoverIdx), sy(cur[hoverIdx] ?? 0), 7, color)}
                             />
                         ) : null}
                         <span
@@ -556,7 +597,12 @@ export function EnvelopeSpendChart({
                         </div>
                         <TooltipRow
                             label="This (so far)"
-                            value={hoverIdx < today ? cur[hoverIdx] ?? 0 : null}
+                            value={hoverIdx < today ? (cur[hoverIdx] ?? 0) : null}
+                            color={color}
+                        />
+                        <TooltipRow
+                            label={`Spent this ${bucketLabelSingular.toLowerCase()}`}
+                            value={hoverIdx < today ? (dailyCur[hoverIdx] ?? 0) : null}
                             color={color}
                         />
                         {hasBudget ? (
@@ -612,16 +658,11 @@ function TooltipRow({
     return (
         <div className="flex items-center justify-between gap-3">
             <span className="inline-flex items-center gap-1.5 text-foreground/85">
-                <span
-                    className="size-1.5 rounded-full"
-                    style={{ backgroundColor: color }}
-                />
+                <span className="size-1.5 rounded-full" style={{ backgroundColor: color }} />
                 {label}
             </span>
             <span className="tabular-nums font-medium">
-                {value === null
-                    ? "—"
-                    : value.toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                {value === null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 0 })}
             </span>
         </div>
     );

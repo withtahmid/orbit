@@ -588,6 +588,14 @@ export default function BudgetDetailPage() {
         // endpoint is > 0) — an all-zero history has no visible line.
         if (avg && (avg[avg.length - 1] ?? 0) > 0)
             spendLegend.push({ label: "Typical", kind: "solid", color: "var(--income)" });
+        // Matches the chart's own bar fillOpacity — a lighter tint of the
+        // same envelope color, not a separate hue, since the bars are the
+        // same "this period" series broken into daily amounts.
+        spendLegend.push({
+            label: "Daily spend",
+            kind: "solid",
+            color: `color-mix(in oklab, ${envelope.color} 45%, transparent)`,
+        });
 
         return {
             kind: "spend",
@@ -1182,10 +1190,10 @@ export default function BudgetDetailPage() {
                             </>
                         ) : dailyQuery.isLoading && !isGoal ? (
                             // Matches the loaded chart-wrap + foot-text block's
-                            // measured height (~460 + ~40px) so the loading→
+                            // measured height (~540 + ~40px) so the loading→
                             // loaded transition doesn't snap the card taller
                             // once data arrives.
-                            <Skeleton height={500} />
+                            <Skeleton height={580} />
                         ) : (
                             <div className="ed-empty">
                                 {total > 0

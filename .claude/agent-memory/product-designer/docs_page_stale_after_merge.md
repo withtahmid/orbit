@@ -5,6 +5,8 @@ metadata:
   type: project
 ---
 
+**2026-07-16 (heatmap-fix branch):** This branch DELETED the `allocations` analytics view (AnalyticsPage entry, router route, `AllocationsView.tsx`, and server `analytics.allocations`). No dangling refs remain in `apps/web/src` code, but `DocsPage.tsx` `Analytics()` (`:823-865`) is now stale in a new way: header says "Nine dedicated analytics views", the bulleted list still includes "Allocations — where each envelope's budget is committed" (`:844-846`) for the deleted view, and the ScreenshotPlaceholder says "10 sub-view cards" (`:864`). Ground truth is now EIGHT views (cash-flow, trends, categories, envelopes, balance, heatmap, anomalies, priority). Fix: recount to 8, drop the Allocations bullet, correct the placeholder. (The separate `Allocations()` budgeting-concept section `:759+` is still valid — that documents envelope allocation, not the analytics view.)
+
 **2026-06-23 (simplify-budgeting branch, post-fix-batch):** The four targeted fixes converged cleanly — AllocationsView "Drift" KPI (no "legacy", sub "Assets − envelopes"), UnbudgetedBanner breakdown (Income 90d + Silent overspend absorbed, both real `unbudgetedTrend` fields), BudgetDetailPage stale-id not-found state, NewTransactionSheet overspend copy ("Save as-is..."). No live `borrow/reckon/strict/matrix/2D` refs remain in apps/web/src. Remaining staleness is confined to `apps/web/src/pages/DocsPage.tsx`:
 - Analytics section (`:886-905`) says "Ten ... views" + lists Year-report/Matrix grid — Matrix deleted; recount + prune.
 - Allocations section (`:841-848`) describes "Budget this month" as a 3-column last-actual/last-budget/this-budget grid — verify against current `BudgetMonthPage`.

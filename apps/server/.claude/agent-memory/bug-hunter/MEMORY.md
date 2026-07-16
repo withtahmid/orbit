@@ -1,0 +1,1 @@
+- [Analytics invariants](analytics_invariants.md) — cycle-guard convention, cash/operational xferFactor, operational-mode zero-row consumer rule

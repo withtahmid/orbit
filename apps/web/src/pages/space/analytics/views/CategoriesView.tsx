@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
     ArrowDownRight,
@@ -13,6 +13,13 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MoneyDisplay } from "@/components/shared/MoneyDisplay";
 import { PeriodChip } from "@/components/shared/PeriodChip";
@@ -20,6 +27,8 @@ import {
     DrillableDonut,
     type DrillableDonutSlice,
 } from "@/components/shared/charts/DrillableDonut";
+import { MultiSeriesLineChart } from "@/components/shared/charts/MultiSeriesLineChart";
+import { CategoryMultiSelect } from "../components/CategoryMultiSelect";
 import { EntityAvatar } from "@/components/shared/EntityAvatar";
 import { KpiStrip, type KpiItem } from "@/components/shared/KpiStrip";
 import { AnalyticsDetailLayout } from "./_AnalyticsLayout";
@@ -29,7 +38,26 @@ import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
 import { usePeriod } from "@/hooks/usePeriod";
 import { ROUTES } from "@/router/routes";
+import { getAppTzMonth, getAppTzYear, resolvePeriod, PERIOD_LABELS } from "@/lib/dates";
+import { formatInAppTz } from "@/lib/formatDate";
 import { cn } from "@/lib/utils";
+
+/** Presets offered for the "Spending trend" chart's own month range — a
+ *  deliberately shorter list than the main period picker, since every
+ *  option here already spans 3+ months (a trend needs several points). */
+type TrendPresetId =
+    | "last-3-months"
+    | "last-6-months"
+    | "last-12-months"
+    | "this-year"
+    | "all-time";
+const TREND_PRESET_ORDER: TrendPresetId[] = [
+    "last-3-months",
+    "last-6-months",
+    "last-12-months",
+    "this-year",
+    "all-time",
+];
 
 /**
  * Sentinel id used for the "<parent> (direct)" pseudo-slice in drilled
@@ -344,6 +372,14 @@ export default function CategoriesView() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rows, byId, prevById, space.id]);
 
+    // The long tail beyond the flat donut's top-N — lifted out of
+    // `flatDonutData` so the trend chart can roll up the exact same set of
+    // categories into its own "Other" line and the two never drift apart.
+    const flatOverflowIds = useMemo(
+        () => flatRankRows.slice(FLAT_DONUT_TOP_N).map((r) => r.id),
+        [flatRankRows]
+    );
+
     const flatDonutData: DrillableDonutSlice[] = useMemo(() => {
         const slices: DrillableDonutSlice[] = flatRankRows.slice(0, FLAT_DONUT_TOP_N).map((r) => ({
             id: r.id,
@@ -377,6 +413,166 @@ export default function CategoriesView() {
               navigate(`${ROUTES.spaceTransactions(space.id)}?cat=${d.id}`);
           }
         : onSelect;
+
+    const isLeaf =
+        focus !== null &&
+        (childrenByParent.get(focus.id) ?? []).length === 0 &&
+        focus.subtreeTotal === focus.directTotal;
+
+    // The trend chart's own month range — independent of the page's main
+    // `period` on purpose: the donut/KPIs answer "how much, in the period
+    // I picked" while the trend answers "how has this moved over time,"
+    // which usually wants a longer window than whatever the headline
+    // numbers are scoped to. Categories shown and envelope/account filters
+    // still come from the donut/filter bar above — only the time axis is
+    // separate.
+    const [trendPreset, setTrendPreset] = useState<TrendPresetId>("last-6-months");
+    const trendPeriod = useMemo(() => resolvePeriod(trendPreset), [trendPreset]);
+
+    // A trend needs at least two points to read as a trend — every preset
+    // in TREND_PRESETS already spans 3+ months, so this is just a safety
+    // floor, not something the picker can normally trigger.
+    const monthsInRange = useMemo(() => {
+        const endInclusive = new Date(
+            Math.max(trendPeriod.start.getTime(), trendPeriod.end.getTime() - 1)
+        );
+        const startIdx =
+            getAppTzYear(trendPeriod.start) * 12 + (getAppTzMonth(trendPeriod.start) - 1);
+        const endIdx = getAppTzYear(endInclusive) * 12 + (getAppTzMonth(endInclusive) - 1);
+        return Math.max(1, endIdx - startIdx + 1);
+    }, [trendPeriod.start, trendPeriod.end]);
+    const trendEnabled = !isLeaf && monthsInRange >= 2;
+
+    // Same envelope/account filters as the donut (the category *set* still
+    // agrees with it — see `trend` below), but the trend's own period.
+    // Drilling never refetches (this returns the whole tree, same as
+    // `categoryBreakdown`), so the trend re-slices client-side exactly
+    // like the donut does below.
+    const trendSpaceQ = trpc.analytics.categoryMonthlyTrend.useQuery(
+        {
+            spaceId: space.id,
+            periodStart: trendPeriod.start,
+            periodEnd: trendPeriod.end,
+            envelopeIds: f.envelopeIdsArg,
+            accountIds: f.accountIdsArg,
+        },
+        { enabled: !space.isPersonal && trendEnabled }
+    );
+    const trendPersonalQ = trpc.personal.categoryMonthlyTrend.useQuery(
+        {
+            periodStart: trendPeriod.start,
+            periodEnd: trendPeriod.end,
+            accountIds: f.accountIdsArg,
+        },
+        { enabled: space.isPersonal && trendEnabled }
+    );
+    const trendQ = space.isPersonal ? trendPersonalQ : trendSpaceQ;
+    const trendRows = useMemo(() => trendQ.data ?? [], [trendQ.data]);
+
+    // Which of the currently-shown donut slices to keep on the trend chart.
+    // Local state, not a URL filter: it only narrows this one chart. Options
+    // are exactly `activeDonut`'s real categories (not the whole category
+    // tree) — the picker can only ever narrow down what's already on the
+    // graph, never add something the donut isn't showing. The synthetic
+    // "(direct)" / "Other" slices aren't offered (they're aggregates, not
+    // a category of their own) but stay visible whenever nothing is picked.
+    const [trendCategoryIds, setTrendCategoryIds] = useState<string[]>([]);
+    const trendPickableSlices = useMemo(
+        () =>
+            activeDonut.filter(
+                (s) => !s.id.startsWith(DIRECT_SLICE_PREFIX) && s.id !== OTHER_SLICE_ID
+            ),
+        [activeDonut]
+    );
+    const categoryPickerRows = useMemo(
+        () =>
+            trendPickableSlices.map((s) => ({
+                id: s.id,
+                name: s.name,
+                color: s.color,
+                icon: byId.get(s.id)?.icon ?? "circle",
+                parent_id: null,
+            })),
+        [trendPickableSlices, byId]
+    );
+    // A prior pick can point at a category the donut no longer shows (drill
+    // level changed, filters changed) — drop those so the chart doesn't
+    // silently keep stale selections that aren't on-screen anymore.
+    useEffect(() => {
+        setTrendCategoryIds((cur) => {
+            if (cur.length === 0) return cur;
+            const validIds = new Set(trendPickableSlices.map((s) => s.id));
+            const next = cur.filter((id) => validIds.has(id));
+            return next.length === cur.length ? cur : next;
+        });
+    }, [trendPickableSlices]);
+
+    const monthlyById = useMemo(() => {
+        const m = new Map<string, Map<string, { directTotal: number; subtreeTotal: number }>>();
+        for (const r of trendRows) {
+            let inner = m.get(r.id);
+            if (!inner) {
+                inner = new Map();
+                m.set(r.id, inner);
+            }
+            inner.set(r.month, { directTotal: r.directTotal, subtreeTotal: r.subtreeTotal });
+        }
+        return m;
+    }, [trendRows]);
+
+    /**
+     * Trend chart data — one line per slice currently shown in the donut
+     * (`activeDonut`), narrowed down to the picker's selection when one is
+     * active. Never a different set than the donut: real category slices
+     * read `subtreeTotal` in tree mode (matching `donutData`) or
+     * `directTotal` in flat mode (matching `flatDonutData`); the synthetic
+     * "(direct)" and "Other" slices are reconstructed the same way their
+     * donut counterparts are, and only appear when nothing is picked.
+     */
+    const trend = useMemo(() => {
+        if (!trendEnabled || activeDonut.length === 0) return null;
+        const monthKeys = Array.from(new Set(trendRows.map((r) => r.month))).sort();
+        if (monthKeys.length < 2) return null;
+
+        const slices =
+            trendCategoryIds.length > 0
+                ? activeDonut.filter((s) => trendCategoryIds.includes(s.id))
+                : activeDonut;
+        if (slices.length === 0) return null;
+
+        const data = monthKeys.map((month) => {
+            const row: Record<string, string | number | null> = {
+                x: formatInAppTz(new Date(month), "MMM yyyy"),
+            };
+            for (const slice of slices) {
+                let value = 0;
+                if (slice.id.startsWith(DIRECT_SLICE_PREFIX)) {
+                    const realId = slice.id.slice(DIRECT_SLICE_PREFIX.length);
+                    value = monthlyById.get(realId)?.get(month)?.directTotal ?? 0;
+                } else if (slice.id === OTHER_SLICE_ID) {
+                    value = flatOverflowIds.reduce(
+                        (sum, id) => sum + (monthlyById.get(id)?.get(month)?.directTotal ?? 0),
+                        0
+                    );
+                } else {
+                    const m = monthlyById.get(slice.id)?.get(month);
+                    value = m ? (flat ? m.directTotal : m.subtreeTotal) : 0;
+                }
+                row[slice.id] = value;
+            }
+            return row;
+        });
+        const series = slices.map((s) => ({ id: s.id, name: s.name, color: s.color }));
+        return { data, series };
+    }, [
+        trendEnabled,
+        activeDonut,
+        trendCategoryIds,
+        trendRows,
+        monthlyById,
+        flatOverflowIds,
+        flat,
+    ]);
 
     /**
      * KPI summary — re-derived per mode. Uses prev-period rows for MoM delta.
@@ -432,11 +628,6 @@ export default function CategoriesView() {
             sub: flat ? "spending categories" : focus ? "in this branch" : "top-level categories",
         },
     ];
-
-    const isLeaf =
-        focus !== null &&
-        (childrenByParent.get(focus.id) ?? []).length === 0 &&
-        focus.subtreeTotal === focus.directTotal;
 
     return (
         <AnalyticsDetailLayout
@@ -565,18 +756,18 @@ export default function CategoriesView() {
                 </Card>
             ) : (
                 <div className="grid gap-3.5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-                    <Card>
+                    <Card className="flex h-[480px] flex-col">
                         <CardHeader>
                             <CardTitle>Distribution</CardTitle>
                             <p className="text-xs text-muted-foreground">
                                 {flat ? "Top categories by spend." : "Click a slice to drill in."}
                             </p>
                         </CardHeader>
-                        <CardContent>
+                        <CardContent className="flex min-h-0 flex-1 items-center justify-center">
                             {q.isLoading ? (
                                 <Skeleton className="h-[280px] w-full" />
                             ) : activeDonut.length === 0 ? (
-                                <p className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
+                                <p className="text-center text-sm text-muted-foreground">
                                     {focus
                                         ? `No spending in ${focus.name} for this period.`
                                         : "No spending in this period."}
@@ -594,13 +785,12 @@ export default function CategoriesView() {
                                     })}
                                     onSelect={onSelectActive}
                                     size={240}
-                                    thickness={28}
                                 />
                             )}
                         </CardContent>
                     </Card>
 
-                    <Card className="overflow-hidden p-0">
+                    <Card className="flex h-[480px] flex-col overflow-hidden p-0">
                         <div className="flex flex-col gap-0.5 px-6 pt-5 pb-3">
                             <CardTitle>Ranked spend</CardTitle>
                             <p className="text-xs text-muted-foreground">
@@ -610,15 +800,15 @@ export default function CategoriesView() {
                             </p>
                         </div>
                         {q.isLoading ? (
-                            <div className="px-6 pb-5">
+                            <div className="flex min-h-0 flex-1 items-center px-6 pb-5">
                                 <Skeleton className="h-64 w-full" />
                             </div>
                         ) : activeRows.length === 0 ? (
-                            <p className="px-6 pb-5 text-sm text-muted-foreground">
+                            <p className="flex flex-1 items-center justify-center px-6 pb-5 text-sm text-muted-foreground">
                                 Nothing spent in this period.
                             </p>
                         ) : (
-                            <div className="flex flex-col">
+                            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
                                 {activeRows.map((r, i) => {
                                     const max = activeRows[0]?.value ?? 1;
                                     const pct = max > 0 ? (r.value / max) * 100 : 0;
@@ -717,6 +907,70 @@ export default function CategoriesView() {
                         )}
                     </Card>
                 </div>
+            )}
+
+            {!isLeaf && (
+                <Card className="overflow-hidden">
+                    <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 gap-y-1">
+                        <div className="flex flex-col gap-1">
+                            <CardTitle>Spending trend</CardTitle>
+                            <p className="text-xs text-muted-foreground">
+                                {trendCategoryIds.length > 0
+                                    ? `${trendCategoryIds.length} of ${trendPickableSlices.length} categories from the Distribution chart, by month.`
+                                    : "One line per slice shown in the Distribution chart above, by month."}{" "}
+                                Its own range — independent of the period picker above, but which
+                                categories are available still follows it, so a category with no
+                                spend in the period above won't have a line here even if it has
+                                history in this chart's own range.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <CategoryMultiSelect
+                                selected={trendCategoryIds}
+                                categories={categoryPickerRows}
+                                onChange={setTrendCategoryIds}
+                            />
+                            <Select
+                                value={trendPreset}
+                                onValueChange={(v) => setTrendPreset(v as TrendPresetId)}
+                            >
+                                <SelectTrigger className="h-8 w-auto min-w-[9rem] text-xs">
+                                    <SelectValue>{PERIOD_LABELS[trendPreset]}</SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {TREND_PRESET_ORDER.map((p) => (
+                                        <SelectItem key={p} value={p}>
+                                            {PERIOD_LABELS[p]}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="h-[560px] px-2 sm:px-6">
+                        {!trendEnabled ? (
+                            <p className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                                Pick a longer range above to see a trend over time.
+                            </p>
+                        ) : trendQ.isLoading ? (
+                            <Skeleton className="h-full w-full" />
+                        ) : !trend ? (
+                            <p className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                                {trendCategoryIds.length > 0
+                                    ? "No spending in the selected categories across this period."
+                                    : focus
+                                      ? `No spending in ${focus.name} across this period.`
+                                      : "No spending in this period."}
+                            </p>
+                        ) : (
+                            <MultiSeriesLineChart
+                                data={trend.data}
+                                series={trend.series}
+                                ariaLabel={`Monthly spend trend for ${trend.series.length} categor${trend.series.length === 1 ? "y" : "ies"} — ${trendCategoryIds.length > 0 ? "narrowed down via the category selector" : "shown in the distribution chart"} — click a category in the legend below to isolate its line`}
+                            />
+                        )}
+                    </CardContent>
+                </Card>
             )}
         </AnalyticsDetailLayout>
     );

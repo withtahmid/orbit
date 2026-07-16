@@ -21,11 +21,7 @@ import { CreateOrEditEventDialog } from "./CreateOrEditEventDialog";
 import { DeleteEventDialog } from "./DeleteEventDialog";
 import { EventStatusButton } from "./EventStatusButton";
 import { EntityAvatar, Money, Skeleton } from "./eventUI";
-import {
-    CategoryDonutChart,
-    RadialBudgetGauge,
-    SpendTimelineChart,
-} from "./eventCharts";
+import { CategoryDonutChart, RadialBudgetGauge, SpendTimelineChart } from "./eventCharts";
 import {
     appDayStr,
     buildCategoryTree,
@@ -73,18 +69,12 @@ export default function EventDetailPage() {
         { spaceId: space.id },
         { enabled: !!eventId }
     );
-    const dailyQuery = trpc.analytics.eventDailySpend.useQuery(
-        { eventId },
-        { enabled: !!eventId }
-    );
+    const dailyQuery = trpc.analytics.eventDailySpend.useQuery({ eventId }, { enabled: !!eventId });
     const locationsQuery = trpc.analytics.eventTopLocations.useQuery(
         { eventId, limit: 8 },
         { enabled: !!eventId }
     );
-    const filesQuery = trpc.file.listForEvent.useQuery(
-        { eventId },
-        { enabled: !!eventId }
-    );
+    const filesQuery = trpc.file.listForEvent.useQuery({ eventId }, { enabled: !!eventId });
 
     const event = useMemo<EventTotal | null>(() => {
         if (!eventQuery.data) return null;
@@ -97,8 +87,7 @@ export default function EventDetailPage() {
             startTime: new Date(d.start_time),
             endTime: new Date(d.end_time),
             description: d.description,
-            estimatedAmount:
-                d.estimated_amount === null ? null : Number(d.estimated_amount),
+            estimatedAmount: d.estimated_amount === null ? null : Number(d.estimated_amount),
             status: d.status as EventStatus,
             closedAt: d.closed_at ? new Date(d.closed_at) : null,
             expenseTotal: eventTotalsRow?.expenseTotal ?? 0,
@@ -132,7 +121,7 @@ export default function EventDetailPage() {
     return (
         <div
             className="orbit-design ev-root"
-            style={event ? ({ ["--ev-accent" as never]: event.color }) : undefined}
+            style={event ? { ["--ev-accent" as never]: event.color } : undefined}
         >
             <style>{ED_STYLES}</style>
 
@@ -263,10 +252,7 @@ function HeroBand({ event, daily }: { event: EventTotal; daily: DailyRow[] }) {
                     <div className="ev-hero-idtext">
                         <div className="ev-eyebrow-row">
                             <span className="eyebrow">Event</span>
-                            <span
-                                className="ev-state"
-                                style={{ ["--chip" as never]: state.color }}
-                            >
+                            <span className="ev-state" style={{ ["--chip" as never]: state.color }}>
                                 <span className="ev-state-dot" aria-hidden />
                                 {state.label}
                             </span>
@@ -283,9 +269,7 @@ function HeroBand({ event, daily }: { event: EventTotal; daily: DailyRow[] }) {
                             </span>
                             <span>{totalDays}-day event</span>
                         </div>
-                        {event.description && (
-                            <p className="ev-hero-desc">{event.description}</p>
-                        )}
+                        {event.description && <p className="ev-hero-desc">{event.description}</p>}
                     </div>
                 </div>
 
@@ -446,11 +430,7 @@ function StatTiles({ event, daily }: { event: EventTotal; daily: DailyRow[] }) {
             {stats.map((s) => (
                 <div key={s.key} className={`ev-kpi${s.lead ? " ev-kpi--lead" : ""}`}>
                     <span className="ev-kpi-label">
-                        <span
-                            className="ev-kpi-dot"
-                            style={{ background: s.accent }}
-                            aria-hidden
-                        />
+                        <span className="ev-kpi-dot" style={{ background: s.accent }} aria-hidden />
                         {s.label}
                     </span>
                     <div className="ev-kpi-value">{s.value}</div>
@@ -473,9 +453,7 @@ function BudgetCard({ event }: { event: EventTotal }) {
         <div className="od-card ev-detail-section ev-budget-card">
             <div className="ev-sect-head">
                 <div className="ev-sect-text">
-                    <h2 className="display ev-sect-title">
-                        {closed ? "Final budget" : "Budget"}
-                    </h2>
+                    <h2 className="display ev-sect-title">{closed ? "Final budget" : "Budget"}</h2>
                     <span className="ev-sect-sub">
                         {hasEstimate
                             ? closed
@@ -505,8 +483,8 @@ function BudgetCard({ event }: { event: EventTotal }) {
                         }
                     >
                         <span style={{ fontSize: 13, color: "var(--fg-3)", lineHeight: 1.5 }}>
-                            Set an estimate to track spend against a budget and unlock the
-                            pacing line on the timeline.
+                            Set an estimate to track spend against a budget and unlock the pacing
+                            line on the timeline.
                         </span>
                         <CreateOrEditEventDialog
                             event={event}
@@ -542,14 +520,13 @@ function TimelineCard({
                 <div className="ev-sect-text">
                     <h2 className="display ev-sect-title">Spending over time</h2>
                     <span className="ev-sect-sub">
-                        Cumulative burn{event.estimatedAmount ? " vs. pace" : ""} · daily
-                        volume
+                        Cumulative burn{event.estimatedAmount ? " vs. pace" : ""} · daily volume
                     </span>
                 </div>
                 <TrendingUp className="size-4" style={{ color: "var(--fg-4)" }} />
             </div>
             {isLoading ? (
-                <Skeleton height={314} />
+                <Skeleton height={366} />
             ) : daily.length === 0 ? (
                 <div className="ev-mini-empty">No dated spending yet.</div>
             ) : (
@@ -593,8 +570,8 @@ function CategoryCard({
                 <div className="ev-sect-text">
                     <h2 className="display ev-sect-title">Spending by category</h2>
                     <span className="ev-sect-sub">
-                        {count} {count === 1 ? "category" : "categories"} · click a slice to
-                        drill in
+                        {count} {count === 1 ? "category" : "categories"} · click a slice to drill
+                        in
                     </span>
                 </div>
             </div>
@@ -607,13 +584,7 @@ function CategoryCard({
  *  Where it went — top locations + day-of-week
  * ------------------------------------------------------------------ */
 
-function WhereCard({
-    locations,
-    isLoading,
-}: {
-    locations: LocationRow[];
-    isLoading: boolean;
-}) {
+function WhereCard({ locations, isLoading }: { locations: LocationRow[]; isLoading: boolean }) {
     if (isLoading) return <Skeleton height={160} />;
     if (locations.length === 0) return null;
 

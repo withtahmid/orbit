@@ -13,7 +13,17 @@ import {
     trendsFilterInputShape,
 } from "./utils/trendsFilters.mjs";
 
-export const categoryBreakdown = authorizedProcedure
+/**
+ * Monthly time series behind `categoryBreakdown` — same filter shape, same
+ * full-tree-every-time contract (one row per category per calendar month
+ * in range, zero-filled), so the Categories analytics page's trend chart
+ * can slice it with the exact same `focus`/`rootRows`/`childrenByParent`
+ * client logic it already uses for the donut, and always agree with it.
+ *
+ * Bucketing is calendar months over `[periodStart, periodEnd)` — the same
+ * exclusive-end convention every other period-scoped procedure uses.
+ */
+export const categoryMonthlyTrend = authorizedProcedure
     .input(
         z.object({
             spaceId: z.string().uuid(),
@@ -32,10 +42,6 @@ export const categoryBreakdown = authorizedProcedure
                     roles: ["owner", "editor", "viewer"] as unknown as SpaceMembers["role"][],
                 });
 
-                /* Filter fragments — empty when the corresponding filter
-                   isn't active so the unfiltered query reads cleanly.
-                   The `t.` alias on `spending_rows.transactions` is what
-                   lets the envelope/category fragments splice in. */
                 const catCTE = selectedCategoriesCTEClause(input.categoryIds, [input.spaceId]);
                 const catWhere = categoryFilterWhere(input.categoryIds);
                 const envWhere = envelopeFilterWhere(input.envelopeIds);
@@ -47,6 +53,7 @@ export const categoryBreakdown = authorizedProcedure
                     name: string;
                     color: string;
                     icon: string;
+                    month: string;
                     direct_total: string;
                     subtree_total: string;
                 }>`
@@ -71,8 +78,18 @@ export const categoryBreakdown = authorizedProcedure
                         WHERE space_id = ${input.spaceId}
                         ${acctScope}
                     ),
+                    months AS (
+                        SELECT generate_series(
+                            date_trunc('month', ${input.periodStart}::timestamptz),
+                            date_trunc('month', ${input.periodEnd}::timestamptz - interval '1 second'),
+                            interval '1 month'
+                        )::date AS month
+                    ),
                     spending_rows AS (
-                        SELECT t.expense_category_id AS id, t.amount
+                        SELECT
+                            t.expense_category_id AS id,
+                            date_trunc('month', t.transaction_datetime)::date AS month,
+                            t.amount
                         FROM transactions t
                         WHERE t.space_id = ${input.spaceId}
                           AND t.type = 'expense'
@@ -84,9 +101,9 @@ export const categoryBreakdown = authorizedProcedure
                           ${catWhere}
                     ),
                     spends AS (
-                        SELECT id, SUM(amount) AS total
+                        SELECT id, month, SUM(amount) AS total
                         FROM spending_rows
-                        GROUP BY id
+                        GROUP BY id, month
                     )
                     SELECT
                         ec.id::text,
@@ -94,17 +111,19 @@ export const categoryBreakdown = authorizedProcedure
                         ec.name,
                         ec.color,
                         ec.icon,
+                        mo.month::text,
                         COALESCE(s.total, 0)::text AS direct_total,
                         COALESCE((
                             SELECT SUM(ss.total)
                             FROM spends ss
                             JOIN tree t ON t.id = ss.id
-                            WHERE t.root = ec.id
+                            WHERE t.root = ec.id AND ss.month = mo.month
                         ), 0)::text AS subtree_total
                     FROM expense_categories ec
-                    LEFT JOIN spends s ON s.id = ec.id
+                    CROSS JOIN months mo
+                    LEFT JOIN spends s ON s.id = ec.id AND s.month = mo.month
                     WHERE ec.space_id = ${input.spaceId}
-                    ORDER BY ec.created_at ASC
+                    ORDER BY ec.created_at ASC, mo.month ASC
                 `;
                 const res = await query.execute(trx);
                 return res.rows.map((r) => ({
@@ -113,6 +132,7 @@ export const categoryBreakdown = authorizedProcedure
                     name: r.name,
                     color: r.color,
                     icon: r.icon,
+                    month: r.month,
                     directTotal: Number(r.direct_total),
                     subtreeTotal: Number(r.subtree_total),
                 }));
@@ -122,7 +142,7 @@ export const categoryBreakdown = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message: error.message || "Failed to compute category breakdown",
+                message: error.message || "Failed to compute category monthly trend",
             });
         }
         return result;

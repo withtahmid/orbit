@@ -5,11 +5,22 @@ metadata:
   type: project
 ---
 
-`OverviewPage.tsx` `DailyHeatmap` builds its current-month `byDay` map with
-browser-local native getters:
-`const d = new Date(r.day); if (d.getMonth() === month) byDay.set(d.getDate(), r.total)`.
-The analytics `HeatmapView.tsx` does the tz-safe thing instead — keys by
-`formatInAppTz(r.day, "yyyy-MM-dd")` and matches on `formatInAppTz`-derived y/m.
+UPDATE 2026-07-16 (heatmap-fix branch): the DATA-BUCKETING half is now FIXED —
+`byDay` keys off `formatInAppTz(r.day, "yyyy-MM-dd")` and filters on
+`monthKey = formatInAppTz(now, "yyyy-MM")`. BUT the GRID GEOMETRY is still
+native/browser-local: `year=now.getFullYear()`, `month=now.getMonth()`,
+`daysInMonth=new Date(year,month+1,0).getDate()`, `firstWeekday=new Date(year,month,1).getDay()`,
+`today=now.getDate()`, and the Peak-day label `MONTH_ABBR[month]` (deliberately, per
+an in-code comment claiming it "matches" the native grid). So the two halves now
+DISAGREE with each other: data is app-tz, layout is browser-tz. For a non-Dhaka
+viewer near a month boundary the header (`formatInAppTz(now,"MMMM yyyy")`, app-tz)
+and app-tz `byDay` can point at month M+1 while the grid renders month M with the
+wrong number of cells / wrong `today` marker / wrong peak label — day cells then
+show another month's data or blanks. Correct fix: derive year/month/today/
+daysInMonth/firstWeekday from `getAppTz*` helpers too.
+
+The analytics `HeatmapView.tsx` was the tz-safe reference — keys by
+`formatInAppTz(r.day, "yyyy-MM-dd")`.
 
 **Why it matters:** server `spendingHeatmap` returns one row per day as a
 midnight-Dhaka instant. For any browser west of +6, a month-boundary instant

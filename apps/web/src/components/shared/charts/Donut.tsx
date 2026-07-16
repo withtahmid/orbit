@@ -1,12 +1,5 @@
 import { useMemo, useState } from "react";
-import {
-    Cell,
-    Pie,
-    PieChart,
-    ResponsiveContainer,
-    Sector,
-    Tooltip as RTooltip,
-} from "recharts";
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip as RTooltip } from "recharts";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/money";
 import { colorForId } from "@/lib/entityStyle";
@@ -43,6 +36,18 @@ interface Props {
     /** Called with datum when user clicks a slice or legend row. */
     onSelect?: (d: DonutDatum) => void;
     emptyLabel?: string;
+    /** Externally-controlled active (hovered) slice id. Pass this (with
+     *  `onActiveIdChange`) to drive the donut's highlight from an external
+     *  legend rendered elsewhere (e.g. via `hideLegend`) — hovering that
+     *  external row can then activate the matching slice here, and vice
+     *  versa. Omit for the default uncontrolled behavior (own hover state,
+     *  own built-in legend). */
+    activeId?: string | null;
+    /** Fired whenever the hovered slice changes — whether the hover came
+     *  from the pie itself or (when not hidden) this component's own
+     *  legend row. Lets an external legend mirror the donut's hover state
+     *  even when it isn't the one controlling `activeId`. */
+    onActiveIdChange?: (id: string | null) => void;
 }
 
 /**
@@ -67,6 +72,8 @@ export function Donut({
     className,
     onSelect,
     emptyLabel = "No data",
+    activeId,
+    onActiveIdChange,
 }: Props) {
     const normalized = useMemo(
         () =>
@@ -78,25 +85,42 @@ export function Donut({
                 })),
         [data]
     );
-    const total = useMemo(
-        () =>
-            centerValue ??
-            normalized.reduce((acc, d) => acc + d.value, 0),
-        [normalized, centerValue]
-    );
+    /** Actual sum of the visualized slices — the only correct denominator
+     *  for "% of total" math. `centerValue` is a caller-supplied headline
+     *  number (e.g. "Spendables") that's allowed to legitimately differ
+     *  from the slice sum (that's the whole point of the prop), so it
+     *  must never be used to compute a percentage — doing so silently
+     *  produces nonsense like a legend reading "106%" and "30%" for two
+     *  slices of the same pie. */
+    const sliceSum = useMemo(() => normalized.reduce((acc, d) => acc + d.value, 0), [normalized]);
+    /** What the center label shows when nothing is hovered — this one
+     *  legitimately falls back to `centerValue`. */
+    const total = centerValue ?? sliceSum;
     // Text summary for screen readers / touch users — the chart is
     // otherwise silent when both the legend and the hover tooltip are
     // hidden (the wedge identity would only ever be visible to a mouse
     // user hovering, since it just swaps the center label).
     const summaryLabel = useMemo(() => {
-        const parts = normalized
-            .map((d) => `${d.name} ${format(d.value)}`)
-            .join(", ");
+        const parts = normalized.map((d) => `${d.name} ${format(d.value)}`).join(", ");
         return `${centerLabel ?? "Total"} ${format(total)}${parts ? `. Breakdown: ${parts}` : ""}`;
     }, [normalized, format, centerLabel, total]);
 
-    const [activeIndex, setActiveIndex] = useState<number | null>(null);
+    const [internalActiveIndex, setInternalActiveIndex] = useState<number | null>(null);
+    // Controlled (`activeId` passed) vs uncontrolled: an external legend
+    // (rendered via `hideLegend` elsewhere) can drive the highlight by id;
+    // otherwise the donut tracks its own hover state as before.
+    const isControlled = activeId !== undefined;
+    const activeIndex = isControlled
+        ? (() => {
+              const i = normalized.findIndex((d) => d.id === activeId);
+              return i >= 0 ? i : null;
+          })()
+        : internalActiveIndex;
     const activeDatum = activeIndex !== null ? normalized[activeIndex] : null;
+    const setActive = (i: number | null) => {
+        if (!isControlled) setInternalActiveIndex(i);
+        onActiveIdChange?.(i !== null ? (normalized[i]?.id ?? null) : null);
+    };
 
     if (normalized.length === 0) {
         return (
@@ -131,15 +155,14 @@ export function Donut({
                 // queries) rather than the viewport, so this works both
                 // in 3-up overview cards and wide detail views.
                 "@container grid gap-4",
-                !hideLegend &&
-                    "@md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]",
+                !hideLegend && "@md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]",
                 className
             )}
         >
             <div
                 className="relative mx-auto w-full min-w-0 max-w-[18rem] @md:mx-0"
                 style={{ height }}
-                onMouseLeave={() => setActiveIndex(null)}
+                onMouseLeave={() => setActive(null)}
                 role="img"
                 aria-label={summaryLabel}
             >
@@ -156,7 +179,7 @@ export function Donut({
                             stroke="none"
                             strokeWidth={0}
                             {...pieActiveProps}
-                            onMouseEnter={(_, i) => setActiveIndex(i)}
+                            onMouseEnter={(_, i) => setActive(i)}
                             onClick={(_, i) => onSelect?.(normalized[i])}
                             isAnimationActive={true}
                             animationDuration={400}
@@ -171,7 +194,7 @@ export function Donut({
                                 content={({ active, payload }) => {
                                     if (!active || !payload?.length) return null;
                                     const item = payload[0].payload as DonutDatum;
-                                    const pct = total > 0 ? (item.value / total) * 100 : 0;
+                                    const pct = sliceSum > 0 ? (item.value / sliceSum) * 100 : 0;
                                     return (
                                         <div className="rounded-md border border-border bg-popover p-2 text-xs shadow-lg">
                                             <div className="flex items-center gap-2 font-medium">
@@ -201,14 +224,14 @@ export function Donut({
                 </ResponsiveContainer>
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        {activeDatum ? activeDatum.name : centerLabel ?? "Total"}
+                        {activeDatum ? activeDatum.name : (centerLabel ?? "Total")}
                     </p>
                     <p className="mt-0.5 text-xl font-bold tabular-nums sm:text-2xl">
                         {format(activeDatum ? activeDatum.value : total)}
                     </p>
-                    {activeDatum && total > 0 && (
+                    {activeDatum && sliceSum > 0 && (
                         <p className="text-[11px] text-muted-foreground">
-                            {((activeDatum.value / total) * 100).toFixed(1)}% of total
+                            {((activeDatum.value / sliceSum) * 100).toFixed(1)}% of total
                         </p>
                     )}
                 </div>
@@ -217,13 +240,13 @@ export function Donut({
             {!hideLegend && (
                 <ul className="flex max-h-[280px] flex-col gap-1 overflow-y-auto pr-1 text-sm">
                     {normalized.map((d, i) => {
-                        const pct = total > 0 ? (d.value / total) * 100 : 0;
+                        const pct = sliceSum > 0 ? (d.value / sliceSum) * 100 : 0;
                         const isActive = activeIndex === i;
                         return (
                             <li key={d.id}>
                                 <button
                                     type="button"
-                                    onMouseEnter={() => setActiveIndex(i)}
+                                    onMouseEnter={() => setActive(i)}
                                     onClick={() => onSelect?.(d)}
                                     className={cn(
                                         "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
@@ -238,9 +261,7 @@ export function Donut({
                                         {d.name}
                                     </span>
                                     <span className="flex shrink-0 flex-col items-end leading-tight">
-                                        <span className="tabular-nums">
-                                            {format(d.value)}
-                                        </span>
+                                        <span className="tabular-nums">{format(d.value)}</span>
                                         <span className="text-[10px] text-muted-foreground">
                                             {pct.toFixed(0)}%
                                         </span>
@@ -261,16 +282,7 @@ export function Donut({
  * that was making the chart look "bordered."
  */
 function renderActiveShape(props: any) {
-    const {
-        cx,
-        cy,
-        innerRadius,
-        outerRadius,
-        startAngle,
-        endAngle,
-        fill,
-        cornerRadius,
-    } = props;
+    const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, cornerRadius } = props;
     return (
         <Sector
             cx={cx}

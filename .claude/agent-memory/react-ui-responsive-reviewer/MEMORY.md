@@ -22,3 +22,9 @@
 - [orbit-design token contrast](orbit_design_tokens.md) — dark-only surface; fg-3≈4.4-5.2 / fg-4≈2.7-3.2 contrast ratios; recurring fg-4-on-meaningful-text AA fail; 4px focus-ring not clipped by od-card.
 - [ov-shimmer keyframe scoping](ov_shimmer_keyframe_scoping.md) — Skeleton shimmer keyframe lives only in OverviewPage inline <style>; every other page's skeleton is static (React unmounts the style).
 - [Event detail page](event_detail_page.md) — Full-bleed ev-root; KPI flex-band stray-rule-on-wrap trap (721-1250px); 30px hero action targets incl. Delete; search input has no accessible name.
+- [Envelopes bottle grid](envelopes_bottle_grid.md) — Analytics EnvelopesView gauge grid; absolute Over/Trending badge overlaps envelope name on 2-col mobile (~141px card).
+- [CategoryMultiSelect dropdown](category_multiselect.md) — Embedded search Input missing onKeyDown stopPropagation (Radix typeahead hijack); "+N sub" badge SR-ambiguous.
+- [MultiSeriesLineChart](multiseries_line_chart.md) — Click-to-isolate legend is the SOLE line-ID affordance; watch legend max-height per breakpoint + dimmed-interactive-chip legibility; test with 10+ series.
+- [Analytics UI accepted tradeoffs](analytics_accepted_tradeoffs.md) — Settled UI/a11y choices (click-isolate, 32px targets, search-in-dropdown keyboard limit, rAF auto-focus); don't re-flag.
+- [Daily-volume bar strip pattern](daily_volume_bar_strip_pattern.md) — 4 spend charts share a daily-bar strip; hand-rolled 2 clamp bar width to 60% slot, eventCharts `barSize={14}` overlaps on long events.
+- [Heatmap Spending Calendar](heatmap_spending_calendar.md) — Donut controlled-hover (additive, no other consumer uses it); SlabLegend keyboard dead-ends; granularity toggle drift vs TrendsView; ReferenceLines LIVE (gridline fixes off-limits).

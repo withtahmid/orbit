@@ -7,8 +7,12 @@ type: project
 `expense_categories.parent_id` is a self-FK with ON DELETE RESTRICT but **no cycle prevention**.
 
 - DB: migration `0012_create_expense_categories_table.mts` defines the FK only.
-- App: `procedures/expenseCategory/changeParent.mts` blocks `parent === self` but does **not** walk the ancestor chain to reject e.g. A→B, then B→A.
+- App (UPDATED 2026-07-16): `procedures/expenseCategory/changeParent.mts` DOES now walk the ancestor chain (depth-capped recursive `chain` CTE) AND locks both endpoints `FOR UPDATE` in id order to serialize reciprocal A→B / B→A moves. So cycles are NOT creatable through the normal app path — a cycle can only exist via direct DB manipulation / pre-existing corruption.
 
-**Why:** Pre-existing latent issue — until recently no readers used `WITH RECURSIVE` on this table, so a cycle would only break the UI, not DoS the DB.
+**Why:** The server CTEs and readers defend against a *pre-existing corrupt* cycle, not one creatable in-app.
 
-**How to apply:** When reviewing a change that introduces a recursive CTE over `expense_categories` (e.g. analytics `trendsCategoryMovers`, `trendsFilters.selected_categories`, `child_of_root`), call out the cycle risk. The CTEs use `UNION ALL` (no cycle dedup), so an owner-crafted A↔B cycle hangs the query until `statement_timeout`. Either add `WHERE NOT (id = ANY(path))` cycle guards to the CTE, or fix `changeParent` to walk the ancestor chain.
+**Server hardening now COMPLETE (verified 2026-07-16, heatmap-fix branch):** both `trendsFilters.buildSelectedCategoriesCTE` AND the sibling `tree AS (... UNION ALL ...)` closures in `categoryBreakdown.mts`, `personal/categoryBreakdown.mts`, and the new `categoryMonthlyTrend.mts` / `personal/categoryMonthlyTrend.mts` now all carry a `path` array + `NOT (ec.id = ANY(path))` guard. The unguarded-`tree` asymmetry noted previously is FIXED.
+
+**Remaining gap — CLIENT side:** `apps/web/src/pages/space/analytics/components/CategoryMultiSelect.tsx` builds its tree with `countDescendants(id)` + `walk(parentId, depth)` that recurse over `byParent` with **no** visited/path guard. A corrupt parent_id cycle in the category data would infinite-recurse → stack overflow, white-screening the filter dropdown + CategoriesView trend picker. Not reachable via normal flow (changeParent blocks creation), so Low severity — but it's the one category-tree walker in the codebase still missing the guard the rest applies defensively.
+
+**How to apply:** New recursive CTE over `expense_categories` → confirm it carries the `path`/`NOT (... = ANY(path))` guard (the template now does). New client-side tree walk over category rows → add a visited-set guard to match.
