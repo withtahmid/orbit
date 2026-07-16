@@ -1,6 +1,5 @@
 import { accountBalanceHistory } from "../procedures/analytics/accountBalanceHistory.mjs";
 import { accountDistribution } from "../procedures/analytics/accountDistribution.mjs";
-import { allocations } from "../procedures/analytics/allocations.mjs";
 import { anomaliesOutliers } from "../procedures/analytics/anomaliesOutliers.mjs";
 import { anomaliesPatternBreaks } from "../procedures/analytics/anomaliesPatternBreaks.mjs";
 import { anomaliesRecurring } from "../procedures/analytics/anomaliesRecurring.mjs";
@@ -9,6 +8,7 @@ import { anomaliesStreaks } from "../procedures/analytics/anomaliesStreaks.mjs";
 import { balanceHistory } from "../procedures/analytics/balanceHistory.mjs";
 import { cashFlow } from "../procedures/analytics/cashFlow.mjs";
 import { categoryBreakdown } from "../procedures/analytics/categoryBreakdown.mjs";
+import { categoryMonthlyTrend } from "../procedures/analytics/categoryMonthlyTrend.mjs";
 import { categoryWoW } from "../procedures/analytics/categoryWoW.mjs";
 import { cumulativeSpend } from "../procedures/analytics/cumulativeSpend.mjs";
 import { envelopeMonthlyAllocations } from "../procedures/analytics/envelopeMonthlyAllocations.mjs";
@@ -40,6 +40,7 @@ export const analyticsRouter = router({
     yearReport,
     cashFlow,
     categoryBreakdown,
+    categoryMonthlyTrend,
     envelopeUtilization,
     envelopeMonthlyAllocations,
     eventTotals,
@@ -53,8 +54,6 @@ export const analyticsRouter = router({
     accountBalanceHistory,
     balanceHistory,
     spendingHeatmap,
-    /* Allocation map / matrix views. */
-    allocations,
     /* Overview cards. */
     todaySummary,
     categoryWoW,

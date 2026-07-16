@@ -7,19 +7,16 @@ import { intersectAccountIds } from "../analytics/utils/trendsFilters.mjs";
 import { resolveMemberSpaceIds, resolveOwnedAccountIds } from "./shared.mjs";
 
 /**
- * Flat category list across every space the caller is a member of, with
- * `directTotal` and `subtreeTotal` summed over expenses paid out of the
- * caller's owned accounts only. Each row carries `spaceId` / `spaceName`
- * so the consumer can group by space before building trees (categories
- * are space-scoped; a parent_id only makes sense within one space).
+ * Monthly time series behind `personalCategoryBreakdown` — same shape and
+ * caveats (categories are space-scoped, so rows carry `spaceId`/`spaceName`
+ * rather than being merged into one cross-space tree), bucketed by
+ * calendar month over `[periodStart, periodEnd)`.
  */
-export const personalCategoryBreakdown = authorizedProcedure
+export const personalCategoryMonthlyTrend = authorizedProcedure
     .input(
         z.object({
             periodStart: z.coerce.date(),
             periodEnd: z.coerce.date(),
-            /* Only the account filter is meaningful on `/s/me` —
-               envelopes/categories are space-scoped and hidden there. */
             accountIds: z.array(z.string().uuid()).max(200).optional(),
         })
     )
@@ -30,10 +27,6 @@ export const personalCategoryBreakdown = authorizedProcedure
                 const memberSpaces = await resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id);
                 if (memberSpaces.length === 0) return [];
 
-                /* Narrow to the user-picked accounts (intersected with
-                   owned). When the intersection is empty, `= ANY('{}')`
-                   yields zero spend — categories still return with zero
-                   totals, which is the correct "nothing matched" view. */
                 const scopedAccounts = intersectAccountIds(owned, input.accountIds);
 
                 const query = sql<{
@@ -44,6 +37,7 @@ export const personalCategoryBreakdown = authorizedProcedure
                     icon: string;
                     space_id: string;
                     space_name: string;
+                    month: string;
                     direct_total: string;
                     subtree_total: string;
                 }>`
@@ -62,8 +56,18 @@ export const personalCategoryBreakdown = authorizedProcedure
                         WHERE ec.space_id = ANY(${memberSpaces})
                           AND NOT (ec.id = ANY(t.path))
                     ),
+                    months AS (
+                        SELECT generate_series(
+                            date_trunc('month', ${input.periodStart}::timestamptz),
+                            date_trunc('month', ${input.periodEnd}::timestamptz - interval '1 second'),
+                            interval '1 month'
+                        )::date AS month
+                    ),
                     spending_rows AS (
-                        SELECT expense_category_id AS id, amount
+                        SELECT
+                            expense_category_id AS id,
+                            date_trunc('month', transaction_datetime)::date AS month,
+                            amount
                         FROM transactions
                         WHERE space_id = ANY(${memberSpaces})
                           AND type = 'expense'
@@ -73,9 +77,9 @@ export const personalCategoryBreakdown = authorizedProcedure
                           AND transaction_datetime < ${input.periodEnd}
                     ),
                     spends AS (
-                        SELECT id, SUM(amount) AS total
+                        SELECT id, month, SUM(amount) AS total
                         FROM spending_rows
-                        GROUP BY id
+                        GROUP BY id, month
                     )
                     SELECT
                         ec.id::text,
@@ -85,18 +89,20 @@ export const personalCategoryBreakdown = authorizedProcedure
                         ec.icon,
                         ec.space_id::text,
                         s.name AS space_name,
+                        mo.month::text,
                         COALESCE(sp.total, 0)::text AS direct_total,
                         COALESCE((
                             SELECT SUM(ss.total)
                             FROM spends ss
                             JOIN tree t ON t.id = ss.id
-                            WHERE t.root = ec.id
+                            WHERE t.root = ec.id AND ss.month = mo.month
                         ), 0)::text AS subtree_total
                     FROM expense_categories ec
                     JOIN spaces s ON s.id = ec.space_id
-                    LEFT JOIN spends sp ON sp.id = ec.id
+                    CROSS JOIN months mo
+                    LEFT JOIN spends sp ON sp.id = ec.id AND sp.month = mo.month
                     WHERE ec.space_id = ANY(${memberSpaces})
-                    ORDER BY s.name ASC, ec.created_at ASC
+                    ORDER BY s.name ASC, ec.created_at ASC, mo.month ASC
                 `;
                 const res = await query.execute(ctx.services.qb);
                 return res.rows.map((r) => ({
@@ -107,6 +113,7 @@ export const personalCategoryBreakdown = authorizedProcedure
                     icon: r.icon,
                     spaceId: r.space_id,
                     spaceName: r.space_name,
+                    month: r.month,
                     directTotal: Number(r.direct_total),
                     subtreeTotal: Number(r.subtree_total),
                 }));
@@ -116,7 +123,7 @@ export const personalCategoryBreakdown = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message: error.message || "Failed to compute personal category breakdown",
+                message: error.message || "Failed to compute personal category monthly trend",
             });
         }
         return result;

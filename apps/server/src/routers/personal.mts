@@ -8,6 +8,7 @@ import { personalAnomaliesStreaks } from "../procedures/personal/anomaliesStreak
 import { personalBalanceHistory } from "../procedures/personal/balanceHistory.mjs";
 import { personalCashFlow } from "../procedures/personal/cashFlow.mjs";
 import { personalCategoryBreakdown } from "../procedures/personal/categoryBreakdown.mjs";
+import { personalCategoryMonthlyTrend } from "../procedures/personal/categoryMonthlyTrend.mjs";
 import { personalCategoryWoW } from "../procedures/personal/categoryWoW.mjs";
 import { personalCumulativeSpend } from "../procedures/personal/cumulativeSpend.mjs";
 import { personalEnvelopeRecentAverages } from "../procedures/personal/envelopeRecentAverages.mjs";
@@ -47,6 +48,7 @@ export const personalRouter = router({
     topCategories: personalTopCategories,
     topCategoriesByBucket: personalTopCategoriesByBucket,
     categoryBreakdown: personalCategoryBreakdown,
+    categoryMonthlyTrend: personalCategoryMonthlyTrend,
     envelopeUtilization: personalEnvelopeUtilization,
     balanceHistory: personalBalanceHistory,
     spendingHeatmap: personalSpendingHeatmap,

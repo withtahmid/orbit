@@ -1,15 +1,29 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+    Bar,
+    BarChart,
+    Cell,
+    ReferenceLine,
+    ResponsiveContainer,
+    Tooltip as RTooltip,
+    XAxis,
+    YAxis,
+} from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MoneyDisplay } from "@/components/shared/MoneyDisplay";
 import { KpiStrip, type KpiItem } from "@/components/shared/KpiStrip";
+import { Donut, type DonutDatum } from "@/components/shared/charts/Donut";
 import { AnalyticsDetailLayout } from "./_AnalyticsLayout";
 import { AnalyticsFilterBar } from "../components/AnalyticsFilterBar";
 import { useAnalyticsFilters } from "../components/useAnalyticsFilters";
+import { MetricToggle, useMetricMode } from "@/components/shared/MetricMode";
 import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
 import {
+    addDays,
     addMonths,
     getAppTzDate,
     getAppTzMonth,
@@ -30,11 +44,28 @@ import {
 } from "@/lib/spendHeatmapColor";
 
 const MONTH_NAMES = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 ];
 const WEEKDAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
 const WEEKDAY_FULL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+type BarGranularity = "day" | "week" | "month";
+const BAR_GRANULARITY_OPTIONS: Array<{ id: BarGranularity; label: string }> = [
+    { id: "day", label: "Day" },
+    { id: "week", label: "Week" },
+    { id: "month", label: "Month" },
+];
 
 /**
  * Spending calendar — twelve-month grid where every day is a real calendar
@@ -52,20 +83,27 @@ const WEEKDAY_FULL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export default function HeatmapView() {
     const { space } = useCurrentSpace();
     const f = useAnalyticsFilters();
+    /** Shared with the donut below via `activeId`/`onActiveIdChange` —
+     *  hovering our own external legend row highlights the matching slice
+     *  on the ring, and hovering a slice highlights the matching row, in
+     *  both directions. */
+    const [hoveredSlab, setHoveredSlab] = useState<string | null>(null);
+    /** Bucket size for the "Spend by ___" bar chart below the calendar. */
+    const [barGranularity, setBarGranularity] = useState<BarGranularity>("week");
+    /* Defaults to `operational` (true expense, no transfer principal) —
+     * a transfer to your own savings account isn't spending, so it
+     * shouldn't paint a calendar day as a heavy one. Same reasoning and
+     * default as Spending Trends' own `MetricToggle`; `cash` remains one
+     * click away for reconciling against a bank statement. */
+    const { mode } = useMetricMode("operational");
 
     /**
      * Window: most-recent 12 months ending at the start of the next month.
      * That gives 12 full months + the partial current one is handled by
      * the data simply being absent for future days.
      */
-    const periodEnd = useMemo(
-        () => addMonths(startOfMonth(new Date()), 1),
-        []
-    );
-    const periodStart = useMemo(
-        () => addMonths(periodEnd, -12),
-        [periodEnd]
-    );
+    const periodEnd = useMemo(() => addMonths(startOfMonth(new Date()), 1), []);
+    const periodStart = useMemo(() => addMonths(periodEnd, -12), [periodEnd]);
     /** `periodStart` is a true absolute instant (app-tz midnight). The
      *  `heaviestWeeks` start dates below are native `new Date(y, m, d)`
      *  values that *represent* an app-tz calendar date but are stored at
@@ -89,12 +127,7 @@ export default function HeatmapView() {
      *  earliest can run before `periodStart`; both drill-down boundaries
      *  need clamping in the same timezone frame as `w.start`/`end`. */
     const periodEndLocal = useMemo(
-        () =>
-            new Date(
-                getAppTzYear(periodEnd),
-                getAppTzMonth(periodEnd),
-                getAppTzDate(periodEnd)
-            ),
+        () => new Date(getAppTzYear(periodEnd), getAppTzMonth(periodEnd), getAppTzDate(periodEnd)),
         [periodEnd]
     );
 
@@ -103,6 +136,7 @@ export default function HeatmapView() {
             spaceId: space.id,
             periodStart,
             periodEnd,
+            mode,
             envelopeIds: f.envelopeIdsArg,
             accountIds: f.accountIdsArg,
             categoryIds: f.categoryIdsArg,
@@ -110,7 +144,7 @@ export default function HeatmapView() {
         { enabled: !space.isPersonal }
     );
     const qPersonal = trpc.personal.spendingHeatmap.useQuery(
-        { periodStart, periodEnd, accountIds: f.accountIdsArg },
+        { periodStart, periodEnd, mode, accountIds: f.accountIdsArg },
         { enabled: space.isPersonal }
     );
     const q = space.isPersonal ? qPersonal : qSpace;
@@ -132,10 +166,7 @@ export default function HeatmapView() {
         { kind: "bill" },
         { enabled: space.isPersonal }
     );
-    const recurringData =
-        (space.isPersonal
-            ? recurringPersonalQ.data
-            : recurringSpaceQ.data) ?? [];
+    const recurringData = (space.isPersonal ? recurringPersonalQ.data : recurringSpaceQ.data) ?? [];
     const recurringByDay = useMemo(() => {
         const m = new Map<number, { color: string; label: string; amount: number }>();
         /* The recurring detector runs over the whole space/owned set, so
@@ -148,9 +179,7 @@ export default function HeatmapView() {
             .sort((a, b) => b.avgAmount - a.avgAmount)
             .slice(0, TOP_N_BILLS);
         for (const r of monthlyBills) {
-            const dt = r.nextExpectedDate
-                ? new Date(r.nextExpectedDate)
-                : new Date(r.lastSeen);
+            const dt = r.nextExpectedDate ? new Date(r.nextExpectedDate) : new Date(r.lastSeen);
             /* Day-of-month read in app timezone (BST), not browser-local.
                `new Date(...)` is an absolute UTC instant; `getDate()`
                would resolve in the user's browser tz and could land the
@@ -185,10 +214,7 @@ export default function HeatmapView() {
      *  intensity. Computed from this space's own twelve months so the ramp
      *  self-scales to whatever currency/amount range the user actually
      *  spends in, instead of fixed dollar-scale breakpoints. */
-    const edges = useMemo(
-        () => computeQuantileEdges(Array.from(byDay.values())),
-        [byDay]
-    );
+    const edges = useMemo(() => computeQuantileEdges(Array.from(byDay.values())), [byDay]);
 
     /** Median (typical) active day — a plain, absolute reference point to
      *  sit next to the average, since the calendar's own intensity scale
@@ -279,12 +305,13 @@ export default function HeatmapView() {
         const sums = [0, 0, 0, 0, 0, 0, 0];
         const counts = [0, 0, 0, 0, 0, 0, 0];
         byDay.forEach((v, key) => {
+            // Operational mode keeps a real (zero-amount) row for days whose
+            // only activity was a cross-space transfer — skip those here
+            // too, same as every other consumer of `byDay`, so they don't
+            // dilute the average with a count-only, zero-value day.
+            if (v <= 0) return;
             const [yStr, mStr, dStr] = key.split("-");
-            const dow = new Date(
-                Number(yStr),
-                Number(mStr) - 1,
-                Number(dStr)
-            ).getDay();
+            const dow = new Date(Number(yStr), Number(mStr) - 1, Number(dStr)).getDay();
             sums[dow] += v;
             counts[dow]++;
         });
@@ -312,18 +339,10 @@ export default function HeatmapView() {
         const buckets = new Map<string, { start: Date; total: number }>();
         byDay.forEach((v, key) => {
             const [yStr, mStr, dStr] = key.split("-");
-            const dt = new Date(
-                Number(yStr),
-                Number(mStr) - 1,
-                Number(dStr)
-            );
+            const dt = new Date(Number(yStr), Number(mStr) - 1, Number(dStr));
             const sunday = new Date(dt);
             sunday.setDate(dt.getDate() - dt.getDay());
-            const bucketKey = ymd(
-                sunday.getFullYear(),
-                sunday.getMonth(),
-                sunday.getDate()
-            );
+            const bucketKey = ymd(sunday.getFullYear(), sunday.getMonth(), sunday.getDate());
             const existing = buckets.get(bucketKey);
             if (existing) existing.total += v;
             else buckets.set(bucketKey, { start: sunday, total: v });
@@ -367,10 +386,104 @@ export default function HeatmapView() {
     const totalDaysInWindow = Math.max(
         0,
         Math.round(
-            (startOfDay(elapsedEnd).getTime() - periodStart.getTime()) /
-                (1000 * 60 * 60 * 24)
+            (startOfDay(elapsedEnd).getTime() - periodStart.getTime()) / (1000 * 60 * 60 * 24)
         ) + 1
     );
+
+    /** Every bucket (day, Sun-Sat week, or calendar month — per
+     *  `barGranularity`) touching the elapsed part of the 12-month window,
+     *  oldest → newest, INCLUDING zero-spend buckets — unlike
+     *  `heaviestWeeks` below (top 5, zero-total weeks dropped), this drives
+     *  a continuous bar chart where a quiet stretch should read as a real
+     *  gap, not silently vanish. Iterates day-by-day (not just
+     *  `byDay.forEach`) so a bucket with NO transaction days at all still
+     *  gets included — `byDay` only has entries for days the server
+     *  actually returned. */
+    const chartBuckets = useMemo(() => {
+        const buckets = new Map<string, { start: Date; total: number }>();
+        let cursor = periodStart;
+        while (cursor <= elapsedEnd) {
+            const y = getAppTzYear(cursor);
+            const m = getAppTzMonth(cursor);
+            const d = getAppTzDate(cursor);
+            const dt = new Date(y, m, d);
+            let bucketStart: Date;
+            if (barGranularity === "day") {
+                bucketStart = dt;
+            } else if (barGranularity === "week") {
+                bucketStart = new Date(dt);
+                bucketStart.setDate(dt.getDate() - dt.getDay());
+            } else {
+                bucketStart = new Date(y, m, 1);
+            }
+            const bucketKey = ymd(
+                bucketStart.getFullYear(),
+                bucketStart.getMonth(),
+                bucketStart.getDate()
+            );
+            const key = formatInAppTz(cursor, "yyyy-MM-dd");
+            const v = byDay.get(key) ?? 0;
+            const existing = buckets.get(bucketKey);
+            if (existing) existing.total += v;
+            else buckets.set(bucketKey, { start: bucketStart, total: v });
+            cursor = addDays(cursor, 1);
+        }
+        return Array.from(buckets.values()).sort((a, b) => a.start.getTime() - b.start.getTime());
+    }, [periodStart, elapsedEnd, byDay, barGranularity]);
+
+    /** Drives the "Spend by ___" chart's horizontal reference lines (see
+     *  render below) — `<CartesianGrid>` silently rendered zero lines in
+     *  this chart for reasons that didn't resolve even after fixing a
+     *  known negative-margin quirk, so the lines are drawn directly via
+     *  `<ReferenceLine>` instead, which computes its own position from
+     *  the data scale independently of CartesianGrid's internals. */
+    const chartMax = useMemo(
+        () => Math.max(0, ...chartBuckets.map((b) => b.total)),
+        [chartBuckets]
+    );
+
+    /** How much was spent, and on how many ELAPSED days (never future ones
+     *  — see `totalDaysInWindow` above), within each of the 5 spend-level
+     *  buckets (the amber ramp; bucket 0 "no spend" always totals $0 by
+     *  definition so it's excluded below). Iterates the exact same
+     *  [periodStart, elapsedEnd] window `totalDaysInWindow` counts over,
+     *  day by day, so a day that hasn't happened yet never contributes. */
+    const slabStats = useMemo(() => {
+        const totals = new Array(6).fill(0);
+        const counts = new Array(6).fill(0);
+        let cursor = periodStart;
+        while (cursor <= elapsedEnd) {
+            const key = formatInAppTz(cursor, "yyyy-MM-dd");
+            const v = byDay.get(key) ?? 0;
+            const b = bucketize(v, edges);
+            totals[b] += v;
+            counts[b]++;
+            cursor = addDays(cursor, 1);
+        }
+        return { totals, counts };
+    }, [periodStart, elapsedEnd, byDay, edges]);
+
+    /** Donut slices for the slab breakdown — same edges/wording as the
+     *  color-legend labels below the calendar, so the two stay in
+     *  lockstep. Sized by DOLLARS spent within each band, not by day
+     *  count: the bands are 20/40/60/80th-percentile edges of the same
+     *  active-day set being classified, so a day-count breakdown would
+     *  always land ~5 near-equal slices regardless of the actual spend
+     *  pattern — a dollar breakdown genuinely varies (e.g. many small
+     *  days vs. a few big ones). */
+    const slabDonutData = useMemo<DonutDatum[]>(() => {
+        const label = (b: number): string => {
+            const upper = b <= 4 ? edges[b - 1] : edges[3];
+            return b <= 4 ? `≤${formatCompact(upper)}` : `${formatCompact(upper)}+`;
+        };
+        return [1, 2, 3, 4, 5].map((b) => ({
+            id: `slab-${b}`,
+            name: label(b),
+            value: slabStats.totals[b],
+            hint: `${slabStats.counts[b]} ${slabStats.counts[b] === 1 ? "day" : "days"}`,
+            color: ramp(b).bg,
+        }));
+    }, [slabStats, edges]);
 
     /** Carries the active Envelope/Account/Category filters into a
      *  Transactions deep link, using the same `env`/`acc`/`cat` URL keys
@@ -415,20 +528,22 @@ export default function HeatmapView() {
         },
         {
             label: "Avg per active day",
-            value:
-                stats.activeDays > 0 ? stats.yearTotal / stats.activeDays : 0,
+            value: stats.activeDays > 0 ? stats.yearTotal / stats.activeDays : 0,
             money: true,
             sub:
-                stats.activeDays > 0
-                    ? `Typical day ~${formatCompact(medianActiveDay)}`
-                    : undefined,
+                stats.activeDays > 0 ? `Typical day ~${formatCompact(medianActiveDay)}` : undefined,
         },
     ];
 
     return (
         <AnalyticsDetailLayout
             title="Spending calendar"
-            description="Every day of the last twelve months, shaded by how it compares to your own spending — not a fixed amount. Small dots mark detected recurring monthly charges; the ringed cell is the year's peak day. Click any day to see what happened."
+            description={
+                mode === "cash"
+                    ? "Every day of the last twelve months, shaded by cash outflow — includes cross-space transfer principal as spend. Switch to Operational for the true expense-only view. Small dots mark detected recurring monthly charges; the ringed cell is the year's peak day."
+                    : "Every day of the last twelve months, shaded by true expense — transfer principal excluded, only real spending counts. Small dots mark detected recurring monthly charges; the ringed cell is the year's peak day."
+            }
+            actions={<MetricToggle />}
         >
             <AnalyticsFilterBar
                 spaceId={space.id}
@@ -448,9 +563,9 @@ export default function HeatmapView() {
                     <div>
                         <CardTitle>Twelve months at a glance</CardTitle>
                         <p className="text-xs text-muted-foreground">
-                            Each tile is one month · intensity = how heavy that day
-                            was for you (percentile, not a fixed amount) · ring =
-                            year peak. Click a day to open its transactions.
+                            Each tile is one month · intensity = how heavy that day was for you
+                            (percentile, not a fixed amount) · ring = year peak. Select any day to
+                            see its transactions.
                         </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
@@ -470,12 +585,8 @@ export default function HeatmapView() {
                     ) : (
                         <div className="grid items-start gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
                             {months.map(({ y, m }, i) => {
-                                const monthTotal =
-                                    stats.monthTotals[i]?.total ?? 0;
-                                const rel =
-                                    stats.maxMonth > 0
-                                        ? monthTotal / stats.maxMonth
-                                        : 0;
+                                const monthTotal = stats.monthTotals[i]?.total ?? 0;
+                                const rel = stats.maxMonth > 0 ? monthTotal / stats.maxMonth : 0;
                                 return (
                                     <MonthTile
                                         key={`${y}-${m}`}
@@ -507,11 +618,7 @@ export default function HeatmapView() {
                                                 activeDays but not toward this
                                                 elapsed-day window, which could
                                                 otherwise show a negative count. */}
-                                            {Math.max(
-                                                0,
-                                                totalDaysInWindow - stats.activeDays
-                                            )}{" "}
-                                            days
+                                            {Math.max(0, totalDaysInWindow - stats.activeDays)} days
                                         </span>{" "}
                                         with no spending
                                     </>
@@ -520,28 +627,42 @@ export default function HeatmapView() {
                                 )}
                             </span>
                             {stats.activeDays > 0 && (
-                                <span className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                <span className="flex flex-wrap items-center gap-2.5 text-[11px] text-muted-foreground">
                                     <span>No spend</span>
-                                    {[0, 1, 2, 3, 4, 5].map((b) => {
+                                    {[1, 2, 3, 4, 5].map((b) => {
                                         const r = ramp(b);
+                                        // Buckets 1-4 are "up to" the edge that
+                                        // defines their ceiling; bucket 5 (the
+                                        // heaviest) is everything past the last
+                                        // edge, so it gets a "+" instead of a
+                                        // range — same quantile edges the cells
+                                        // themselves are bucketized against.
+                                        const upper = b <= 4 ? edges[b - 1] : edges[3];
+                                        const valueLabel =
+                                            b <= 4
+                                                ? `≤${formatCompact(upper)}`
+                                                : `${formatCompact(upper)}+`;
                                         return (
                                             <span
                                                 key={b}
-                                                className="inline-block size-4 rounded"
-                                                style={{
-                                                    background: r.bg,
-                                                    border: `1px solid ${
-                                                        r.border === "transparent"
-                                                            ? "transparent"
-                                                            : r.border
-                                                    }`,
-                                                }}
-                                            />
+                                                className="inline-flex items-center gap-1"
+                                                title={`Daily spend ${valueLabel}`}
+                                            >
+                                                <span
+                                                    className="inline-block size-4 rounded"
+                                                    style={{
+                                                        background: r.bg,
+                                                        border: `1px solid ${
+                                                            r.border === "transparent"
+                                                                ? "transparent"
+                                                                : r.border
+                                                        }`,
+                                                    }}
+                                                />
+                                                <span className="tabular-nums">{valueLabel}</span>
+                                            </span>
                                         );
                                     })}
-                                    <span>
-                                        Heavy day ({formatCompact(edges[3])}+)
-                                    </span>
                                 </span>
                             )}
                         </div>
@@ -549,7 +670,145 @@ export default function HeatmapView() {
                 </CardContent>
             </Card>
 
-            <div className="grid gap-3.5 lg:grid-cols-2">
+            <Card>
+                <CardHeader className="flex-row flex-wrap items-start justify-between gap-2">
+                    <div>
+                        <CardTitle>Spend by {barGranularity}</CardTitle>
+                        <p className="text-xs text-muted-foreground">
+                            Every {barGranularity} in this window — bar height is directly
+                            proportional to its total, including quiet stretches (they show as a
+                            real gap, not missing data).
+                        </p>
+                    </div>
+                    <div
+                        role="tablist"
+                        aria-label="Chart granularity"
+                        className="inline-flex h-8 shrink-0 items-center rounded-md border border-border bg-card p-0.5 text-[11.5px]"
+                    >
+                        {BAR_GRANULARITY_OPTIONS.map((opt) => {
+                            const active = opt.id === barGranularity;
+                            return (
+                                <button
+                                    key={opt.id}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={active}
+                                    onClick={() => setBarGranularity(opt.id)}
+                                    className={cn(
+                                        "h-7 rounded px-2.5 transition-colors",
+                                        active
+                                            ? "bg-accent text-foreground"
+                                            : "text-muted-foreground hover:text-foreground"
+                                    )}
+                                >
+                                    {opt.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    {isLoading ? (
+                        <Skeleton className="h-[520px] w-full" />
+                    ) : chartBuckets.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No data to chart yet.</p>
+                    ) : (
+                        <div style={{ width: "100%", height: 520 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart
+                                    data={chartBuckets.map((b) => ({
+                                        label:
+                                            barGranularity === "month"
+                                                ? MONTH_NAMES[b.start.getMonth()]
+                                                : `${MONTH_NAMES[b.start.getMonth()]} ${b.start.getDate()}`,
+                                        total: b.total,
+                                        start: b.start,
+                                    }))}
+                                    // A negative `left` margin (previously
+                                    // -12, used to tuck the Y-axis closer
+                                    // to the card edge) put CartesianGrid's
+                                    // computed offset into a degenerate
+                                    // state that silently dropped every
+                                    // horizontal line from the DOM — a
+                                    // documented recharts quirk with
+                                    // negative chart margins. `0` keeps the
+                                    // axis close without breaking the grid.
+                                    margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+                                >
+                                    <XAxis
+                                        dataKey="label"
+                                        tick={{ fill: "var(--fg-3)", fontSize: 9.5 }}
+                                        axisLine={{ stroke: "var(--line-soft)" }}
+                                        tickLine={false}
+                                        interval="preserveStartEnd"
+                                        minTickGap={24}
+                                    />
+                                    <YAxis
+                                        tickFormatter={formatCompact}
+                                        tick={{ fill: "var(--fg-3)", fontSize: 10.5 }}
+                                        axisLine={false}
+                                        tickLine={false}
+                                        width={40}
+                                        // More labeled reference points to
+                                        // gauge a bar's height against, at
+                                        // a glance — independent of the
+                                        // `ReferenceLine`s below, which are
+                                        // spaced by fraction of the max
+                                        // rather than synced to these ticks.
+                                        tickCount={7}
+                                        allowDecimals={false}
+                                    />
+                                    <RTooltip
+                                        cursor={{ fill: "var(--accent)", opacity: 0.25 }}
+                                        content={<BarChartTooltip granularity={barGranularity} />}
+                                    />
+                                    {/* Horizontal reference lines, drawn
+                                        directly rather than via
+                                        `<CartesianGrid>` (see `chartMax`'s
+                                        comment) — 4 evenly-spaced lines at
+                                        25/50/75/100% of the tallest bar,
+                                        low-opacity so they read as
+                                        calibration marks, not competing
+                                        data. recharts v3 paints by each
+                                        element's own default z-index
+                                        (`ReferenceLine` above `Bar`) rather
+                                        than JSX order, so `zIndex={0}` is
+                                        set explicitly here to put these
+                                        behind the bars as intended. */}
+                                    {chartMax > 0 &&
+                                        [0.25, 0.5, 0.75, 1].map((frac) => (
+                                            <ReferenceLine
+                                                key={frac}
+                                                y={chartMax * frac}
+                                                stroke="var(--line-soft)"
+                                                strokeDasharray="2 4"
+                                                ifOverflow="extendDomain"
+                                                zIndex={0}
+                                            />
+                                        ))}
+                                    <Bar
+                                        dataKey="total"
+                                        radius={[2, 2, 0, 0]}
+                                        isAnimationActive={false}
+                                    >
+                                        {chartBuckets.map((b, i) => (
+                                            <Cell
+                                                key={i}
+                                                fill={b.total > 0 ? AMBER.b4 : "var(--bg-elev-2)"}
+                                            />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Intensity donut needs room for BOTH the ring and its own
+                legend list beside it, so it gets a wider track than the
+                other two (which are just narrow text/bar lists). */}
+            <div className="grid gap-3.5 lg:grid-cols-[1fr_1fr_1.35fr]">
                 <Card>
                     <CardHeader>
                         <CardTitle>By weekday</CardTitle>
@@ -571,8 +830,7 @@ export default function HeatmapView() {
                                             key={d}
                                             className="grid items-center gap-3"
                                             style={{
-                                                gridTemplateColumns:
-                                                    "44px minmax(0, 1fr) 80px",
+                                                gridTemplateColumns: "44px minmax(0, 1fr) 80px",
                                             }}
                                         >
                                             <span className="text-[12px] text-muted-foreground">
@@ -582,9 +840,7 @@ export default function HeatmapView() {
                                                 <span
                                                     className="absolute inset-y-0 left-0 rounded-full"
                                                     style={{
-                                                        width: `${
-                                                            (v / max) * 100
-                                                        }%`,
+                                                        width: `${(v / max) * 100}%`,
                                                         backgroundColor: isHeaviest
                                                             ? AMBER.b5
                                                             : "var(--primary)",
@@ -613,8 +869,8 @@ export default function HeatmapView() {
                     <CardHeader>
                         <CardTitle>Heaviest weeks</CardTitle>
                         <p className="text-xs text-muted-foreground">
-                            Top {heaviestWeeks.length || 5} spending weeks of the
-                            year. Click a week to see its transactions.
+                            Top {heaviestWeeks.length || 5} spending weeks of the year. Click a week
+                            to see its transactions.
                         </p>
                     </CardHeader>
                     <CardContent>
@@ -640,9 +896,7 @@ export default function HeatmapView() {
                                        in out-of-window transactions the
                                        displayed total never counted. */
                                     const clampedStart =
-                                        w.start < periodStartLocal
-                                            ? periodStartLocal
-                                            : w.start;
+                                        w.start < periodStartLocal ? periodStartLocal : w.start;
                                     const fromKey = ymd(
                                         clampedStart.getFullYear(),
                                         clampedStart.getMonth(),
@@ -658,9 +912,7 @@ export default function HeatmapView() {
                                        gets silently dropped from the
                                        filtered results. */
                                     const rawExclusiveEnd = new Date(w.start);
-                                    rawExclusiveEnd.setDate(
-                                        w.start.getDate() + 7
-                                    );
+                                    rawExclusiveEnd.setDate(w.start.getDate() + 7);
                                     /* Mirrors the `clampedStart` clamp above:
                                        the most recent week can run past
                                        `periodEnd`, which would otherwise let
@@ -698,9 +950,7 @@ export default function HeatmapView() {
                                                 <span
                                                     className="absolute inset-y-0 left-0 rounded-full"
                                                     style={{
-                                                        width: `${
-                                                            (w.total / max) * 100
-                                                        }%`,
+                                                        width: `${(w.total / max) * 100}%`,
                                                         backgroundColor: AMBER.b5,
                                                     }}
                                                 />
@@ -713,6 +963,58 @@ export default function HeatmapView() {
                                         </Link>
                                     );
                                 })}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Spend by intensity</CardTitle>
+                        <p className="text-xs text-muted-foreground">
+                            How much you spent within each spend level — the same bands as the
+                            calendar's color legend above. Hover a slice for its day count.
+                        </p>
+                    </CardHeader>
+                    <CardContent>
+                        {isLoading ? (
+                            <Skeleton className="h-60 w-full" />
+                        ) : totalDaysInWindow === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                                No elapsed days to analyze yet.
+                            </p>
+                        ) : (
+                            <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-center">
+                                {/* `Donut`'s `ResponsiveContainer` needs an
+                                    ancestor with a real (non-shrink-to-fit)
+                                    width to measure against — constraining
+                                    the ring's size via a plain sized wrapper
+                                    div, not by handing `Donut` itself a
+                                    width-collapsing className, which left
+                                    its internal chart div with nothing to
+                                    size against (the ring silently failed
+                                    to render, only the center text showed). */}
+                                <div className="w-full max-w-[220px] shrink-0 sm:w-[220px]">
+                                    <Donut
+                                        data={slabDonutData}
+                                        centerLabel="Total spend"
+                                        height={220}
+                                        // Labels rendered ourselves, to the
+                                        // RIGHT of the ring — the shared
+                                        // component's own legend only moves
+                                        // beside the donut past a container
+                                        // width this card, squeezed into a
+                                        // 3-up row, rarely reaches.
+                                        hideLegend
+                                        activeId={hoveredSlab}
+                                        onActiveIdChange={setHoveredSlab}
+                                    />
+                                </div>
+                                <SlabLegend
+                                    data={slabDonutData}
+                                    activeId={hoveredSlab}
+                                    onActiveIdChange={setHoveredSlab}
+                                />
                             </div>
                         )}
                     </CardContent>
@@ -745,10 +1047,7 @@ function MonthTile({
     monthTotal: number;
     relativeFraction: number;
     peakDate: Date | null;
-    recurringByDay: Map<
-        number,
-        { color: string; label: string; amount: number }
-    >;
+    recurringByDay: Map<number, { color: string; label: string; amount: number }>;
     earliestActiveKey: string | null;
     txHref: (fromKey: string, toKey: string) => string;
 }) {
@@ -796,8 +1095,7 @@ function MonthTile({
            (likely: the space/account didn't exist yet) from "genuinely
            zero spend that month" — asserting "no spending" for the former
            would overclaim knowledge we don't have. */
-        const predatesHistory =
-            earliestActiveKey !== null && lastDayKey < earliestActiveKey;
+        const predatesHistory = earliestActiveKey !== null && lastDayKey < earliestActiveKey;
         return (
             <div className="flex flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border/30 bg-card/40 px-3 py-6">
                 <span className="inline-flex items-baseline gap-1.5">
@@ -823,9 +1121,7 @@ function MonthTile({
                     <span className="text-[13px] font-medium tracking-wide">
                         {MONTH_NAMES[month]}
                     </span>
-                    <span className="text-[10px] text-muted-foreground tabular-nums">
-                        {year}
-                    </span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums">{year}</span>
                 </span>
                 <MoneyDisplay
                     amount={monthTotal}
@@ -877,24 +1173,54 @@ function MonthTile({
                             const r = ramp(b);
                             const recurring = recurringByDay.get(d);
                             const peak = isPeakDay(d);
-                            const baseTitle = `${MONTH_NAMES[month]} ${d} · ${formatMoney(v)}`;
-                            const title = recurring
-                                ? `${baseTitle} · ${recurring.label} (${formatMoney(recurring.amount)}/mo)`
-                                : v > 0
-                                  ? `${baseTitle} · click to view transactions`
-                                  : baseTitle;
+                            const tooltipBody = (
+                                <div className="flex flex-col gap-0.5">
+                                    {/* Date is context, the amount is the
+                                        actual answer — sized/weighted so
+                                        the number is what the eye lands on
+                                        first, not a low-contrast afterthought. */}
+                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                        {MONTH_NAMES[month]} {d}
+                                    </span>
+                                    <span className="text-sm font-semibold tabular-nums text-foreground">
+                                        {formatMoney(v)}
+                                    </span>
+                                    {recurring && (
+                                        <span
+                                            className="text-[11px] font-medium"
+                                            style={{ color: recurring.color }}
+                                        >
+                                            {recurring.label} · {formatMoney(recurring.amount)}/mo
+                                        </span>
+                                    )}
+                                </div>
+                            );
                             const cellStyle = {
                                 background: r.bg,
                                 border: `1px solid ${peak ? "var(--bg)" : r.border}`,
-                                boxShadow: peak
-                                    ? "0 0 0 1.5px var(--fg)"
-                                    : undefined,
+                                boxShadow: peak ? "0 0 0 1.5px var(--fg)" : undefined,
                                 color: r.fg,
+                                // Read by the hover glow's Tailwind arbitrary
+                                // shadow class — themed to the page's own
+                                // amber accent instead of the generic
+                                // (cyan/blue) `--ring`.
+                                ["--cell-glow" as never]: AMBER.b5,
                             };
                             const cellClassName = cn(
-                                "relative grid aspect-square place-items-center rounded text-[8.5px] font-medium tabular-nums",
+                                // Purely cosmetic hover (brightness + a thin
+                                // outline glow) — no scale/size change of
+                                // any kind, so neighboring cells never
+                                // reflow or resize. The glow color rides a
+                                // `--cell-glow` custom property (set in
+                                // `cellStyle` below) rather than the
+                                // generic `--ring` — that's a cyan/blue
+                                // accent that clashes against this page's
+                                // amber palette. Keyboard focus keeps the
+                                // app-wide `--ring` — that's a system-level
+                                // a11y indicator, not a per-page look.
+                                "relative grid aspect-square place-items-center rounded text-[8.5px] font-medium tabular-nums transition-[filter,box-shadow] duration-150 ease-out hover:brightness-110",
                                 v > 0 &&
-                                    "cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1"
+                                    "cursor-pointer hover:shadow-[0_0_0_1.5px_var(--cell-glow)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1"
                             );
                             const dot = recurring && (
                                 <span
@@ -905,27 +1231,27 @@ function MonthTile({
                                     }}
                                 />
                             );
-                            return v > 0 ? (
-                                <Link
-                                    key={di}
-                                    to={txHref(key, nextDayKey)}
-                                    title={title}
-                                    className={cellClassName}
-                                    style={cellStyle}
-                                >
-                                    {d}
-                                    {dot}
-                                </Link>
-                            ) : (
-                                <span
-                                    key={di}
-                                    title={title}
-                                    className={cellClassName}
-                                    style={cellStyle}
-                                >
-                                    {d}
-                                    {dot}
-                                </span>
+                            return (
+                                <Tooltip key={di}>
+                                    <TooltipTrigger asChild>
+                                        {v > 0 ? (
+                                            <Link
+                                                to={txHref(key, nextDayKey)}
+                                                className={cellClassName}
+                                                style={cellStyle}
+                                            >
+                                                {d}
+                                                {dot}
+                                            </Link>
+                                        ) : (
+                                            <span className={cellClassName} style={cellStyle}>
+                                                {d}
+                                                {dot}
+                                            </span>
+                                        )}
+                                    </TooltipTrigger>
+                                    <TooltipContent>{tooltipBody}</TooltipContent>
+                                </Tooltip>
                             );
                         })}
                     </div>
@@ -939,9 +1265,7 @@ function MonthTile({
                         key={i}
                         className="flex-1 rounded-[1px]"
                         style={{
-                            height: `${
-                                v === 0 ? 8 : Math.max(8, (v / maxDaily) * 100)
-                            }%`,
+                            height: `${v === 0 ? 8 : Math.max(8, (v / maxDaily) * 100)}%`,
                             background:
                                 v === 0
                                     ? "var(--bg-elev-2)"
@@ -991,7 +1315,10 @@ function Legend({
     return (
         <span className="inline-flex items-center gap-1.5">
             <span
-                className={cn("inline-block", dot ? "size-1.5 rounded-full" : "size-2.5 rounded-sm")}
+                className={cn(
+                    "inline-block",
+                    dot ? "size-1.5 rounded-full" : "size-2.5 rounded-sm"
+                )}
                 style={{
                     background: color,
                     ...(ring
@@ -1021,4 +1348,96 @@ function findHeaviestWeekdayLabel(byWeekday: number[], bestIdx: number): string 
 
 function ymd(y: number, m: number, d: number): string {
     return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** Legend for the "Days by intensity" donut, rendered to its RIGHT —
+ *  the shared `Donut` component's own legend only moves beside the ring
+ *  once its container clears a width breakpoint that this card, squeezed
+ *  into a 3-up row, rarely reaches, so it renders its own list here
+ *  instead of relying on `Donut`'s (hidden via `hideLegend`). */
+function SlabLegend({
+    data,
+    activeId,
+    onActiveIdChange,
+}: {
+    data: DonutDatum[];
+    /** Currently-highlighted slice id (from either this legend or the
+     *  donut ring itself) — highlights the matching row here too. */
+    activeId?: string | null;
+    onActiveIdChange?: (id: string | null) => void;
+}) {
+    const shown = data.filter((d) => d.value > 0);
+    const total = shown.reduce((s, d) => s + d.value, 0);
+    if (shown.length === 0) return null;
+    return (
+        <ul
+            className="flex w-full min-w-0 flex-col gap-0.5 sm:max-w-[190px]"
+            onMouseLeave={() => onActiveIdChange?.(null)}
+        >
+            {shown.map((d) => {
+                const pct = total > 0 ? (d.value / total) * 100 : 0;
+                const isActive = activeId === d.id;
+                return (
+                    <li key={d.id}>
+                        <button
+                            type="button"
+                            onMouseEnter={() => onActiveIdChange?.(d.id)}
+                            onFocus={() => onActiveIdChange?.(d.id)}
+                            onBlur={() => onActiveIdChange?.(null)}
+                            className={cn(
+                                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors",
+                                isActive ? "bg-accent/50" : "hover:bg-accent/50"
+                            )}
+                        >
+                            <span
+                                className="size-2.5 shrink-0 rounded-sm"
+                                style={{ background: d.color }}
+                            />
+                            <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                                {formatMoney(d.value)} · {pct.toFixed(0)}%
+                            </span>
+                        </button>
+                    </li>
+                );
+            })}
+        </ul>
+    );
+}
+
+/** Hover tooltip for the "Spend by ___" bar chart — spells out the full
+ *  bucket (a week's Sun-Sat range, a day's full date, or a month's name)
+ *  plus its total, since the x-axis label alone is too terse (just a
+ *  start date, or a bare month name). */
+function BarChartTooltip({
+    active,
+    payload,
+    granularity,
+}: {
+    active?: boolean;
+    payload?: Array<{ payload: { label: string; total: number; start: Date } }>;
+    granularity: BarGranularity;
+}) {
+    if (!active || !payload?.length) return null;
+    const { start, total } = payload[0].payload;
+    let title: string;
+    if (granularity === "day") {
+        title = `${MONTH_NAMES[start.getMonth()]} ${start.getDate()}, ${start.getFullYear()}`;
+    } else if (granularity === "month") {
+        title = `${MONTH_NAMES[start.getMonth()]} ${start.getFullYear()}`;
+    } else {
+        const end = new Date(start);
+        end.setDate(start.getDate() + 6);
+        const sameMonth = start.getMonth() === end.getMonth();
+        const endLabel = sameMonth
+            ? `${end.getDate()}`
+            : `${MONTH_NAMES[end.getMonth()]} ${end.getDate()}`;
+        title = `${MONTH_NAMES[start.getMonth()]} ${start.getDate()}–${endLabel}`;
+    }
+    return (
+        <div className="rounded-md border border-border bg-popover p-2 text-xs shadow-lg">
+            <div className="font-medium">{title}</div>
+            <div className="mt-1 tabular-nums text-muted-foreground">{formatMoney(total)}</div>
+        </div>
+    );
 }

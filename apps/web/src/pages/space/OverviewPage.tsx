@@ -6,17 +6,21 @@ import { formatInAppTz } from "@/lib/formatDate";
 import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
 import { ROUTES } from "@/router/routes";
-import { addDays, addMonths, endOfMonth, startOfMonth } from "@/lib/dates";
-import { UNALLOCATED_COLOR } from "@/lib/entityStyle";
 import {
-    computeQuantileEdges,
-    bucketize,
-    ramp,
-    formatCompact,
-} from "@/lib/spendHeatmapColor";
+    addDays,
+    addMonths,
+    endOfMonth,
+    getAppTzDate,
+    getAppTzMonth,
+    getAppTzYear,
+    startOfMonth,
+} from "@/lib/dates";
+import { UNALLOCATED_COLOR } from "@/lib/entityStyle";
+import { computeQuantileEdges, bucketize, ramp, formatCompact } from "@/lib/spendHeatmapColor";
 import { useStore } from "@/stores/useStore";
 import { CumulativeRaceChart } from "@/pages/space/analytics/views/TrendsView";
-import { MetricToggle, useMetricMode } from "@/components/shared/MetricMode";
+import { MetricToggle, useMetricMode, type MetricMode } from "@/components/shared/MetricMode";
+import { Donut } from "@/components/shared/charts/Donut";
 
 /* =============================================================
    OVERVIEW PAGE — editorial-dark design (orbit-4)
@@ -71,7 +75,13 @@ export default observer(function OverviewPage() {
     const lastMonthSummary = isPersonal ? lastMonthPersonal : lastMonthSpace;
 
     const cashFlowSpace = trpc.analytics.cashFlow.useQuery(
-        { spaceId: space.id, periodStart: cashFlowStart, periodEnd: thisMonthEnd, bucket: "week", mode },
+        {
+            spaceId: space.id,
+            periodStart: cashFlowStart,
+            periodEnd: thisMonthEnd,
+            bucket: "week",
+            mode,
+        },
         { enabled: !isPersonal }
     );
     const cashFlowPersonal = trpc.personal.cashFlow.useQuery(
@@ -95,9 +105,7 @@ export default observer(function OverviewPage() {
         const byBucket = new Map<string, number>();
         for (const row of balanceTrend.data.series) {
             const key =
-                typeof row.bucket === "string"
-                    ? row.bucket
-                    : new Date(row.bucket).toISOString();
+                typeof row.bucket === "string" ? row.bucket : new Date(row.bucket).toISOString();
             byBucket.set(key, (byBucket.get(key) ?? 0) + row.balance);
         }
         return Array.from(byBucket.entries())
@@ -117,11 +125,6 @@ export default observer(function OverviewPage() {
 
     const priorityBreakdownQuery = trpc.analytics.priorityBreakdown.useQuery(
         { spaceId: space.id, periodStart: thisMonthStart, periodEnd: thisMonthEnd },
-        { enabled: !isPersonal }
-    );
-
-    const events = trpc.event.listBySpace.useQuery(
-        { spaceId: space.id },
         { enabled: !isPersonal }
     );
 
@@ -148,11 +151,11 @@ export default observer(function OverviewPage() {
      * renders this month's cells but needs the full year to compute color-
      * bucket edges on the same scale as the Spending calendar page. */
     const heatmapSpace = trpc.analytics.spendingHeatmap.useQuery(
-        { spaceId: space.id, periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd },
+        { spaceId: space.id, periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd, mode },
         { enabled: !isPersonal }
     );
     const heatmapPersonal = trpc.personal.spendingHeatmap.useQuery(
-        { periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd },
+        { periodStart: heatmapEdgesStart, periodEnd: thisMonthEnd, mode },
         { enabled: isPersonal }
     );
     const heatmap = isPersonal ? heatmapPersonal : heatmapSpace;
@@ -187,8 +190,7 @@ export default observer(function OverviewPage() {
         { anchor: now, limit: 6 },
         { enabled: isPersonal }
     );
-    const moversData =
-        (isPersonal ? moversPersonalQ.data : moversSpaceQ.data) ?? [];
+    const moversData = (isPersonal ? moversPersonalQ.data : moversSpaceQ.data) ?? [];
 
     /* Spending Trends powered by the same `dailyComparison` proc the
        /analytics/trends detail view uses — pinned to month granularity
@@ -209,72 +211,10 @@ export default observer(function OverviewPage() {
         { anchor: now, granularity: "month", mode },
         { enabled: isPersonal }
     );
-    const trendsData =
-        (isPersonal ? trendsPersonalQ.data : trendsSpaceQ.data) ?? null;
+    const trendsData = (isPersonal ? trendsPersonalQ.data : trendsSpaceQ.data) ?? null;
+    const trendsLoading = isPersonal ? trendsPersonalQ.isLoading : trendsSpaceQ.isLoading;
 
-    const incomeBreakdownSpaceQ = trpc.analytics.incomeBreakdown.useQuery(
-        {
-            spaceId: space.id,
-            periodStart: thisMonthStart,
-            periodEnd: thisMonthEnd,
-        },
-        { enabled: !isPersonal }
-    );
-    const incomeBreakdownPersonalQ = trpc.personal.incomeBreakdown.useQuery(
-        { periodStart: thisMonthStart, periodEnd: thisMonthEnd },
-        { enabled: isPersonal }
-    );
-    const incomeBreakdownData =
-        (isPersonal
-            ? incomeBreakdownPersonalQ.data
-            : incomeBreakdownSpaceQ.data) ?? [];
-
-    const recurringBillsSpaceQ = trpc.analytics.recurring.useQuery(
-        { spaceId: space.id, kind: "bill" },
-        { enabled: !isPersonal }
-    );
-    const recurringBillsPersonalQ = trpc.personal.recurring.useQuery(
-        { kind: "bill" },
-        { enabled: isPersonal }
-    );
-    const billsData =
-        (isPersonal
-            ? recurringBillsPersonalQ.data
-            : recurringBillsSpaceQ.data) ?? [];
-
-    const recurringSubsSpaceQ = trpc.analytics.recurring.useQuery(
-        { spaceId: space.id, kind: "subscription" },
-        { enabled: !isPersonal }
-    );
-    const recurringSubsPersonalQ = trpc.personal.recurring.useQuery(
-        { kind: "subscription" },
-        { enabled: isPersonal }
-    );
-    const subsData =
-        (isPersonal
-            ? recurringSubsPersonalQ.data
-            : recurringSubsSpaceQ.data) ?? [];
-
-    const merchantsSpaceQ = trpc.analytics.topMerchants.useQuery(
-        {
-            spaceId: space.id,
-            periodStart: thisMonthStart,
-            periodEnd: thisMonthEnd,
-            limit: 6,
-        },
-        { enabled: !isPersonal }
-    );
-    const merchantsPersonalQ = trpc.personal.topMerchants.useQuery(
-        { periodStart: thisMonthStart, periodEnd: thisMonthEnd, limit: 6 },
-        { enabled: isPersonal }
-    );
-    const merchantsData =
-        (isPersonal ? merchantsPersonalQ.data : merchantsSpaceQ.data) ?? [];
-
-    const netWorthHistStart = useMemo(
-        () => addMonths(thisMonthStart, -12),
-        [thisMonthStart]
-    );
+    const netWorthHistStart = useMemo(() => addMonths(thisMonthStart, -12), [thisMonthStart]);
     const netWorthHistSpaceQ = trpc.analytics.netWorthHistory.useQuery(
         {
             spaceId: space.id,
@@ -293,21 +233,10 @@ export default observer(function OverviewPage() {
         { enabled: isPersonal }
     );
     const netWorthHistData =
-        (isPersonal
-            ? netWorthHistPersonalQ.data
-            : netWorthHistSpaceQ.data) ?? [];
-
-    const upcomingEvents = useMemo(
-        () =>
-            (events.data ?? [])
-                .filter((e) => new Date(e.end_time).getTime() > now.getTime())
-                .slice(0, 4),
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        [events.data]
-    );
+        (isPersonal ? netWorthHistPersonalQ.data : netWorthHistSpaceQ.data) ?? [];
 
     /* ---------- Derived chart data ---------- */
-    const topCatsDonut = useMemo(
+    const topEnvelopesDonut = useMemo(
         () =>
             (utilization.data ?? [])
                 .filter((e) => e.consumed > 0)
@@ -316,7 +245,11 @@ export default observer(function OverviewPage() {
                     name: e.name,
                     value: e.consumed,
                     color: e.color,
-                })),
+                }))
+                // envelopeUtilization orders by created_at — sort by spend
+                // so `[0]` is actually the biggest spender, matching the
+                // "Top envelope" center-value label below.
+                .sort((a, b) => b.value - a.value),
         [utilization.data]
     );
 
@@ -349,7 +282,14 @@ export default observer(function OverviewPage() {
         const unallocated = summary.data?.unallocated ?? 0;
         const unSlice =
             unallocated > 0
-                ? [{ id: "unallocated", name: "Unallocated", value: unallocated, color: UNALLOCATED_COLOR }]
+                ? [
+                      {
+                          id: "unallocated",
+                          name: "Unallocated",
+                          value: unallocated,
+                          color: UNALLOCATED_COLOR,
+                      },
+                  ]
                 : [];
         return [...slices, ...unSlice];
     }, [utilization.data, summary.data]);
@@ -360,9 +300,8 @@ export default observer(function OverviewPage() {
        chart — that single number does follow `mode` because it sits
        inside the cash-flow card. The Position row above is static
        (shows both pairs unconditionally) so it doesn't need a picker. */
-    const pickNet = (
-        s?: { periodNet: number; operationalNet: number } | null
-    ) => (mode === "cash" ? s?.periodNet : s?.operationalNet);
+    const pickNet = (s?: { periodNet: number; operationalNet: number } | null) =>
+        mode === "cash" ? s?.periodNet : s?.operationalNet;
 
     /* MoM deltas for the operational Income / Expense tiles.
        Operational deltas mean "true earning / spending changed by X%"
@@ -377,14 +316,8 @@ export default observer(function OverviewPage() {
             return ((c - p) / Math.abs(p)) * 100;
         };
         return {
-            incomeDelta: delta(
-                cur?.operationalIncome,
-                prev?.operationalIncome
-            ),
-            expenseDelta: delta(
-                cur?.operationalExpense,
-                prev?.operationalExpense
-            ),
+            incomeDelta: delta(cur?.operationalIncome, prev?.operationalIncome),
+            expenseDelta: delta(cur?.operationalExpense, prev?.operationalExpense),
         };
     }, [summary.data, lastMonthSummary.data]);
 
@@ -422,7 +355,14 @@ export default observer(function OverviewPage() {
                     <p className="ov-sub">{subtitle}</p>
                 </div>
                 <div className="ov-topbar-actions">
-                    <button className="od-btn">
+                    {/* Static badge, not a filter — this page always shows
+                        the current month with no period switcher. Rendered
+                        `disabled` so it doesn't look clickable. */}
+                    <button
+                        className="od-btn"
+                        disabled
+                        title="Overview always shows the current month"
+                    >
                         <FilterIcon />
                         This month
                     </button>
@@ -441,14 +381,10 @@ export default observer(function OverviewPage() {
                             const planMonthSlug = formatInAppTz(now, "yyyy-MM");
                             const planMonthName = formatInAppTz(now, "MMMM");
                             const hasMoneyToBudget =
-                                summary.data !== undefined &&
-                                summary.data.unallocated > 0;
+                                summary.data !== undefined && summary.data.unallocated > 0;
                             return (
                                 <Link
-                                    to={ROUTES.spaceBudgetMonth(
-                                        space.id,
-                                        planMonthSlug
-                                    )}
+                                    to={ROUTES.spaceBudgetMonth(space.id, planMonthSlug)}
                                     className={
                                         hasMoneyToBudget
                                             ? "od-btn od-btn-primary ov-link-btn"
@@ -463,22 +399,13 @@ export default observer(function OverviewPage() {
                                     <DesignIcon
                                         name="calendar"
                                         size={13}
-                                        color={
-                                            hasMoneyToBudget
-                                                ? "var(--brand-fg)"
-                                                : "var(--fg-3)"
-                                        }
+                                        color={hasMoneyToBudget ? "var(--brand-fg)" : "var(--fg-3)"}
                                     />
                                     {`Budget ${planMonthName}`}
                                     {hasMoneyToBudget && summary.data && (
                                         <span className="ov-plan-free">
                                             ·{" "}
-                                            <Money
-                                                amount={
-                                                    summary.data.unallocated
-                                                }
-                                                size={11.5}
-                                            />{" "}
+                                            <Money amount={summary.data.unallocated} size={11.5} />{" "}
                                             free
                                         </span>
                                     )}
@@ -493,8 +420,7 @@ export default observer(function OverviewPage() {
                         <Link
                             to={ROUTES.spaceTransactions(space.id)}
                             className={
-                                summary.data !== undefined &&
-                                summary.data.unallocated > 0
+                                summary.data !== undefined && summary.data.unallocated > 0
                                     ? "od-btn ov-link-btn"
                                     : "od-btn od-btn-primary ov-link-btn"
                             }
@@ -529,7 +455,10 @@ export default observer(function OverviewPage() {
                             <div>
                                 <div className="ov-drift-title" style={{ color: "var(--expense)" }}>
                                     Over-allocated by{" "}
-                                    <Money amount={Math.abs(summary.data.unallocated)} variant="expense" />
+                                    <Money
+                                        amount={Math.abs(summary.data.unallocated)}
+                                        variant="expense"
+                                    />
                                 </div>
                                 <div className="ov-drift-sub">
                                     More money is allocated to envelopes than you actually have.
@@ -561,7 +490,12 @@ export default observer(function OverviewPage() {
                         delta={
                             summary.data && summary.data.lockedBalance > 0 ? (
                                 <>
-                                    <Money amount={summary.data.lockedBalance} size={11} variant="muted" /> locked
+                                    <Money
+                                        amount={summary.data.lockedBalance}
+                                        size={11}
+                                        variant="muted"
+                                    />{" "}
+                                    locked
                                 </>
                             ) : null
                         }
@@ -659,12 +593,13 @@ export default observer(function OverviewPage() {
 
                 {/* Net worth composition — assets minus liabilities, with
                     the 12-month trendline and per-category split bars.
-                    Derived from accountDistribution; YoY/12-month series
-                    is dummy until we add a multi-month query. */}
+                    Derived from accountDistribution; history comes from
+                    `analytics.netWorthHistory` / its personal twin. */}
                 <NetWorthComposition
                     accounts={accountDistribution.data ?? []}
                     loading={accountDistribution.isLoading}
                     history={netWorthHistData}
+                    spaceId={space.id}
                 />
 
                 <SectionEyebrow label="Composition" sub="How money is split, parked & spent" />
@@ -674,21 +609,27 @@ export default observer(function OverviewPage() {
                     <DonutCard
                         title={
                             <>
-                                <LayersIcon color="var(--fg-3)" /> Allocation map
+                                <LayersIcon color="var(--fg-3)" /> Where money sits
                             </>
                         }
-                        sub="Where money is parked"
+                        sub="Held in envelopes, or free to spend"
+                        // `/budgets` operates on a real space's envelopes and
+                        // doesn't work for the "me" virtual space — same
+                        // personal-parity gate as the Unallocated tile and
+                        // the "Budget {Month}" topbar button below.
                         action={
-                            <Link
-                                to={ROUTES.spaceAnalyticsDetail(space.id, "allocations")}
-                                className="ov-details-link"
-                            >
-                                Details →
-                            </Link>
+                            isPersonal ? undefined : (
+                                <Link
+                                    to={ROUTES.spaceBudgets(space.id)}
+                                    className="ov-details-link"
+                                >
+                                    Details →
+                                </Link>
+                            )
                         }
                         slices={allocationDonut}
                         centerLabel="Spendables"
-                        centerValue={formatShort(summary.data?.spendableBalance ?? 0)}
+                        centerValue={summary.data?.spendableBalance ?? 0}
                         loading={utilization.isLoading || summary.isLoading}
                     />
                     <DonutCard
@@ -700,19 +641,15 @@ export default observer(function OverviewPage() {
                         sub="This month's biggest spends. Click to drill."
                         action={
                             <Link
-                                to={ROUTES.spaceAnalyticsDetail(space.id, "categories")}
+                                to={ROUTES.spaceAnalyticsDetail(space.id, "envelopes")}
                                 className="ov-details-link"
                             >
                                 Details →
                             </Link>
                         }
-                        slices={topCatsDonut}
+                        slices={topEnvelopesDonut}
                         centerLabel="Top envelope"
-                        centerValue={
-                            topCatsDonut[0]
-                                ? formatShort(topCatsDonut[0].value)
-                                : "—"
-                        }
+                        centerValue={topEnvelopesDonut[0]?.value ?? 0}
                         loading={utilization.isLoading}
                     />
                     {!isPersonal && (
@@ -733,9 +670,7 @@ export default observer(function OverviewPage() {
                             }
                             slices={priorityDonut}
                             centerLabel="Total spent"
-                            centerValue={formatShort(
-                                priorityDonut.reduce((s, x) => s + x.value, 0)
-                            )}
+                            centerValue={priorityDonut.reduce((s, x) => s + x.value, 0)}
                             loading={priorityBreakdownQuery.isLoading}
                         />
                     )}
@@ -784,7 +719,10 @@ export default observer(function OverviewPage() {
                     ) : (
                         <CashFlow
                             data={cashFlow.data.map((d) => ({
-                                bucket: typeof d.bucket === "string" ? d.bucket : new Date(d.bucket).toISOString(),
+                                bucket:
+                                    typeof d.bucket === "string"
+                                        ? d.bucket
+                                        : new Date(d.bucket).toISOString(),
                                 income: d.income,
                                 expense: d.expense,
                             }))}
@@ -799,24 +737,25 @@ export default observer(function OverviewPage() {
                             <div className="ov-progress-bar-head">
                                 <span className="ov-progress-label">Month progress</span>
                                 <span className="ov-progress-meta">
-                                    {monthProgress.elapsed} / {monthProgress.total} days · {monthProgress.remaining} left
+                                    {monthProgress.elapsed} / {monthProgress.total} days ·{" "}
+                                    {monthProgress.remaining} left
                                 </span>
                             </div>
-                            <ProgressBar value={monthProgress.pct / 100} color="var(--brand)" height={6} />
+                            <ProgressBar
+                                value={monthProgress.pct / 100}
+                                color="var(--brand)"
+                                height={6}
+                            />
                         </div>
                         <div className="ov-progress-stats">
                             <div>
                                 <div className="ov-stat-eyebrow">
-                                    {mode === "cash"
-                                        ? "Net cash this month"
-                                        : "Net this month"}
+                                    {mode === "cash" ? "Net cash this month" : "Net this month"}
                                 </div>
                                 <Money
                                     amount={pickNet(summary.data) ?? 0}
                                     variant={
-                                        (pickNet(summary.data) ?? 0) < 0
-                                            ? "expense"
-                                            : "income"
+                                        (pickNet(summary.data) ?? 0) < 0 ? "expense" : "income"
                                     }
                                     size={14}
                                     weight={500}
@@ -843,9 +782,10 @@ export default observer(function OverviewPage() {
                         spaceId={space.id}
                         data={heatmapData}
                         loading={heatmap.isLoading}
+                        mode={mode}
                     />
                     {/* Top movers — week-over-week category shifts. */}
-                    <TopMovers movers={moversData} />
+                    <TopMovers movers={moversData} spaceId={space.id} />
                 </div>
 
                 <SectionEyebrow label="Targets" sub="Envelopes, goals, spending against budget" />
@@ -870,14 +810,21 @@ export default observer(function OverviewPage() {
                             }
                         />
                         <div className="ov-list-col">
-                            {utilization.isLoading
-                                ? Array.from({ length: 3 }).map((_, i) => (
-                                      <Skeleton key={i} height={32} />
-                                  ))
-                                : !utilization.data || utilization.data.length === 0
-                                  ? <EmptyHint compact>No envelopes yet</EmptyHint>
-                                  : utilization.data.slice(0, 5).map((e) => {
-                                        const rawPct = e.allocated > 0 ? e.consumed / e.allocated : 0;
+                            {utilization.isLoading ? (
+                                Array.from({ length: 3 }).map((_, i) => (
+                                    <Skeleton key={i} height={32} />
+                                ))
+                            ) : !utilization.data || utilization.data.length === 0 ? (
+                                <EmptyHint compact>No envelopes yet</EmptyHint>
+                            ) : (
+                                // envelopeUtilization orders by created_at — sort by spend
+                                // so this reads as "top envelopes," matching the donut above.
+                                [...utilization.data]
+                                    .sort((a, b) => b.consumed - a.consumed)
+                                    .slice(0, 5)
+                                    .map((e) => {
+                                        const rawPct =
+                                            e.allocated > 0 ? e.consumed / e.allocated : 0;
                                         const over = rawPct > 1;
                                         return (
                                             <Link
@@ -894,7 +841,9 @@ export default observer(function OverviewPage() {
                                                         />
                                                         {e.name}
                                                         {over && (
-                                                            <span className="ov-chip ov-chip-drift">over</span>
+                                                            <span className="ov-chip ov-chip-drift">
+                                                                over
+                                                            </span>
                                                         )}
                                                     </span>
                                                     <span className="ov-list-row-amt">
@@ -920,7 +869,8 @@ export default observer(function OverviewPage() {
                                                 />
                                             </Link>
                                         );
-                                    })}
+                                    })
+                            )}
                         </div>
                     </div>
 
@@ -932,8 +882,16 @@ export default observer(function OverviewPage() {
                                 </>
                             }
                             sub="Long-term goal progress"
+                            // The Envelope utilization analytics page (not
+                            // `/budgets`, which doesn't work for the "me"
+                            // virtual space) lists every active envelope
+                            // including goals — a real destination on both
+                            // a regular space and personal.
                             action={
-                                <Link to={ROUTES.spaceBudgets(space.id)} className="ov-details-link">
+                                <Link
+                                    to={ROUTES.spaceAnalyticsDetail(space.id, "envelopes")}
+                                    className="ov-details-link"
+                                >
                                     View all →
                                 </Link>
                             }
@@ -970,13 +928,8 @@ export default observer(function OverviewPage() {
                                     }}
                                     aria-label={`${totalSaved.toFixed(2)} saved toward ${totalTarget.toFixed(2)} across ${activeGoals.length} ${activeGoals.length === 1 ? "goal" : "goals"}`}
                                 >
-                                    <Money amount={totalSaved} size={12.5} />{" "}
-                                    saved toward{" "}
-                                    <Money
-                                        amount={totalTarget}
-                                        size={12.5}
-                                        variant="muted"
-                                    />{" "}
+                                    <Money amount={totalSaved} size={12.5} /> saved toward{" "}
+                                    <Money amount={totalTarget} size={12.5} variant="muted" />{" "}
                                     across {activeGoals.length}{" "}
                                     {activeGoals.length === 1 ? "goal" : "goals"}
                                 </div>
@@ -999,122 +952,142 @@ export default observer(function OverviewPage() {
                                       if (goals.length === 0) {
                                           return <EmptyHint compact>No goals yet</EmptyHint>;
                                       }
-                                      return goals.slice(0, 5).map((g) => {
-                                          const pctRaw = g.pctSaved ?? g.pctComplete;
-                                          const pct = pctRaw != null ? pctRaw / 100 : 0;
-                                          // Personal twin attaches spaceId/spaceName for
-                                          // per-row linking; in a real space they're absent
-                                          // and the link falls back to the active space.
-                                          const personalRow = g as {
-                                              spaceId?: string;
-                                              spaceName?: string;
-                                          };
-                                          const linkSpaceId = personalRow.spaceId ?? space.id;
-                                          const saved = g.lifetimeFunded ?? 0;
-                                          const target = g.targetAmount ?? 0;
-                                          return (
-                                              <Link
-                                                  key={g.envelopId}
-                                                  to={ROUTES.spaceBudgetDetail(linkSpaceId, g.envelopId)}
-                                                  className="ov-list-row"
-                                                  aria-label={
-                                                      g.targetAmount != null
-                                                          ? `${g.name}${personalRow.spaceName && isPersonal ? ` in ${personalRow.spaceName}` : ""}: ${saved.toFixed(2)} saved of ${target.toFixed(2)} target, ${Math.round(pctRaw ?? 0)}% complete`
-                                                          : `${g.name}${personalRow.spaceName && isPersonal ? ` in ${personalRow.spaceName}` : ""}`
-                                                  }
-                                              >
-                                                  <div className="ov-list-row-head">
-                                                      <span className="ov-list-row-name">
-                                                          <EntityAvatar
-                                                              icon={g.icon}
-                                                              colorVar={g.color}
-                                                              size={22}
-                                                          />
-                                                          {g.name}
-                                                          {personalRow.spaceName && isPersonal ? (
-                                                              <span
-                                                                  style={{
-                                                                      marginLeft: 6,
-                                                                      color: "var(--fg-4)",
-                                                                      fontSize: 11,
-                                                                  }}
-                                                              >
-                                                                  · {personalRow.spaceName}
-                                                              </span>
-                                                          ) : null}
-                                                      </span>
-                                                      <span className="ov-list-row-amt">
-                                                          <Money amount={saved} size={11.5} />
-                                                          {g.targetAmount ? (
-                                                              <>
-                                                                  {" "}
-                                                                  <span style={{ color: "var(--fg-4)" }}>
-                                                                      /{" "}
-                                                                      <Money
-                                                                          amount={g.targetAmount}
-                                                                          size={11.5}
-                                                                          variant="muted"
-                                                                      />
+                                      // envelopeUtilization orders by created_at — sort by
+                                      // progress so the goals closest to funded surface first.
+                                      return [...goals]
+                                          .sort(
+                                              (a, b) =>
+                                                  (b.pctSaved ?? b.pctComplete ?? 0) -
+                                                  (a.pctSaved ?? a.pctComplete ?? 0)
+                                          )
+                                          .slice(0, 5)
+                                          .map((g) => {
+                                              const pctRaw = g.pctSaved ?? g.pctComplete;
+                                              const pct = pctRaw != null ? pctRaw / 100 : 0;
+                                              // Personal twin attaches spaceId/spaceName for
+                                              // per-row linking; in a real space they're absent
+                                              // and the link falls back to the active space.
+                                              const personalRow = g as {
+                                                  spaceId?: string;
+                                                  spaceName?: string;
+                                              };
+                                              const linkSpaceId = personalRow.spaceId ?? space.id;
+                                              const saved = g.lifetimeFunded ?? 0;
+                                              const target = g.targetAmount ?? 0;
+                                              return (
+                                                  <Link
+                                                      key={g.envelopId}
+                                                      to={ROUTES.spaceBudgetDetail(
+                                                          linkSpaceId,
+                                                          g.envelopId
+                                                      )}
+                                                      className="ov-list-row"
+                                                      aria-label={
+                                                          g.targetAmount != null
+                                                              ? `${g.name}${personalRow.spaceName && isPersonal ? ` in ${personalRow.spaceName}` : ""}: ${saved.toFixed(2)} saved of ${target.toFixed(2)} target, ${Math.round(pctRaw ?? 0)}% complete`
+                                                              : `${g.name}${personalRow.spaceName && isPersonal ? ` in ${personalRow.spaceName}` : ""}`
+                                                      }
+                                                  >
+                                                      <div className="ov-list-row-head">
+                                                          <span className="ov-list-row-name">
+                                                              <EntityAvatar
+                                                                  icon={g.icon}
+                                                                  colorVar={g.color}
+                                                                  size={22}
+                                                              />
+                                                              {g.name}
+                                                              {personalRow.spaceName &&
+                                                              isPersonal ? (
+                                                                  <span
+                                                                      style={{
+                                                                          marginLeft: 6,
+                                                                          color: "var(--fg-4)",
+                                                                          fontSize: 11,
+                                                                      }}
+                                                                  >
+                                                                      · {personalRow.spaceName}
                                                                   </span>
-                                                              </>
-                                                          ) : null}
-                                                      </span>
-                                                  </div>
-                                                  {g.targetAmount && g.targetAmount > 0 ? (
-                                                      <ProgressBar value={pct} color={g.color} height={4} />
-                                                  ) : (
-                                                      <span style={{ fontSize: 11, color: "var(--fg-4)" }}>
-                                                          No target set
-                                                      </span>
-                                                  )}
-                                              </Link>
-                                          );
-                                      });
+                                                              ) : null}
+                                                          </span>
+                                                          <span className="ov-list-row-amt">
+                                                              <Money amount={saved} size={11.5} />
+                                                              {g.targetAmount ? (
+                                                                  <>
+                                                                      {" "}
+                                                                      <span
+                                                                          style={{
+                                                                              color: "var(--fg-4)",
+                                                                          }}
+                                                                      >
+                                                                          /{" "}
+                                                                          <Money
+                                                                              amount={
+                                                                                  g.targetAmount
+                                                                              }
+                                                                              size={11.5}
+                                                                              variant="muted"
+                                                                          />
+                                                                      </span>
+                                                                  </>
+                                                              ) : null}
+                                                          </span>
+                                                      </div>
+                                                      {g.targetAmount && g.targetAmount > 0 ? (
+                                                          <ProgressBar
+                                                              value={pct}
+                                                              color={g.color}
+                                                              height={4}
+                                                          />
+                                                      ) : (
+                                                          <span
+                                                              style={{
+                                                                  fontSize: 11,
+                                                                  color: "var(--fg-4)",
+                                                              }}
+                                                          >
+                                                              No target set
+                                                          </span>
+                                                      )}
+                                                  </Link>
+                                              );
+                                          });
                                   })()}
                         </div>
                     </div>
                 </div>
 
-                {/* Spending trends — cumulative spend vs last month + projection. */}
+                {/* Spending trends — cumulative spend vs last month + projection.
+                    `trendsData` (the chart's own cur/prev lines) comes from
+                    `trends.dailyComparison` in the active metric `mode`, so
+                    the stat-tile baselines must read the same-mode summary
+                    field — mixing cash `periodExpense` with an operational
+                    chart would compare unlike totals (cross-space transfer
+                    principal counted on one side only). */}
                 <SpendingTrends
-                    monthExpense={summary.data?.periodExpense ?? 0}
-                    lastMonthExpense={lastMonthSummary.data?.periodExpense ?? 0}
+                    monthExpense={
+                        (mode === "cash"
+                            ? summary.data?.periodExpense
+                            : summary.data?.operationalExpense) ?? 0
+                    }
+                    lastMonthExpense={
+                        (mode === "cash"
+                            ? lastMonthSummary.data?.periodExpense
+                            : lastMonthSummary.data?.operationalExpense) ?? 0
+                    }
                     trendsData={trendsData}
+                    loading={trendsLoading}
                     periodStart={thisMonthStart}
                     detailHref={ROUTES.spaceAnalyticsDetail(space.id, "trends")}
                 />
 
-                <SectionEyebrow
-                    label="Forward"
-                    sub="What's coming up — bills, recurring, events"
+                {/* Accounts at a glance */}
+                <AccountsGlance
+                    accounts={accountDistribution.data ?? []}
+                    loading={accountDistribution.isLoading}
+                    spaceId={space.id}
+                    isPersonal={isPersonal}
+                    balanceSeries={balanceTrend.data?.series ?? []}
                 />
-
-                {/* Income breakdown + Bills & due dates */}
-                <div className="ov-grid-2">
-                    <IncomeBreakdownCard
-                        totalIncome={summary.data?.periodIncome ?? 0}
-                        sources={incomeBreakdownData}
-                    />
-                    <BillsCard
-                        upcomingEvents={upcomingEvents}
-                        bills={billsData}
-                    />
-                </div>
-
-                {/* Subscriptions & recurring — auto-detected services. */}
-                <SubscriptionsGrid subscriptions={subsData} />
-
-                {/* Accounts at a glance + Top merchants */}
-                <div className="ov-grid-2">
-                    <AccountsGlance
-                        accounts={accountDistribution.data ?? []}
-                        loading={accountDistribution.isLoading}
-                        spaceId={space.id}
-                        isPersonal={isPersonal}
-                        balanceSeries={balanceTrend.data?.series ?? []}
-                    />
-                    <TopMerchants merchants={merchantsData} />
-                </div>
             </div>
         </div>
     );
@@ -1238,8 +1211,7 @@ function PersonalSpaceBand({
                             {data.spaces.length === 1 ? "" : "s"}
                         </div>
                         <div className="ov-personal-band-sub">
-                            Your share of every space you&apos;re in, plus accounts
-                            only you own.
+                            Your share of every space you&apos;re in, plus accounts only you own.
                         </div>
                     </div>
                 </div>
@@ -1270,38 +1242,21 @@ function PersonalSpaceBand({
             <div className="ov-personal-band-grid">
                 {cells.map((c) => {
                     const pct = total > 0 ? (c.balance / total) * 100 : 0;
-                    const target =
-                        c.kind === "personal"
-                            ? ROUTES.myAccounts
-                            : ROUTES.space(c.id);
+                    const target = c.kind === "personal" ? ROUTES.myAccounts : ROUTES.space(c.id);
                     return (
-                        <Link
-                            key={c.id}
-                            to={target}
-                            className="ov-personal-band-cell"
-                        >
+                        <Link key={c.id} to={target} className="ov-personal-band-cell">
                             <div className="ov-personal-band-cell-head">
                                 <span className="ov-personal-band-cell-name">
-                                    <EntityAvatar
-                                        icon={c.icon}
-                                        colorVar={c.color}
-                                        size={22}
-                                    />
-                                    <span className="ov-personal-band-cell-label">
-                                        {c.name}
-                                    </span>
+                                    <EntityAvatar icon={c.icon} colorVar={c.color} size={22} />
+                                    <span className="ov-personal-band-cell-label">{c.name}</span>
                                 </span>
                                 {c.share && (
-                                    <span className="ov-personal-band-chip">
-                                        your {c.share}
-                                    </span>
+                                    <span className="ov-personal-band-chip">your {c.share}</span>
                                 )}
                             </div>
                             <div className="ov-personal-band-cell-foot">
                                 <Money amount={c.balance} size={15} weight={500} />
-                                <span className="ov-personal-band-pct">
-                                    {pct.toFixed(0)}%
-                                </span>
+                                <span className="ov-personal-band-pct">{pct.toFixed(0)}%</span>
                             </div>
                         </Link>
                     );
@@ -1518,6 +1473,37 @@ function KpiCol({
 }
 
 /**
+ * Position an HTML dot overlay at an SVG-space coordinate from a chart
+ * using `preserveAspectRatio="none"` (which stretches width only — see
+ * `AreaChart`). `left` is percentage-based so it tracks the horizontal
+ * stretch; `top` is a literal px since the SVG's height isn't stretched.
+ * A native SVG `<circle>` at the same coordinate would have its radius
+ * squashed into an ellipse whenever the rendered width isn't exactly
+ * `viewBoxWidth`.
+ */
+function dotStyle(
+    viewBoxWidth: number,
+    svgX: number,
+    svgY: number,
+    diameter: number,
+    color: string,
+    opacity = 1
+): React.CSSProperties {
+    return {
+        position: "absolute",
+        left: `${(svgX / viewBoxWidth) * 100}%`,
+        top: svgY,
+        width: diameter,
+        height: diameter,
+        transform: "translate(-50%, -50%)",
+        borderRadius: "9999px",
+        background: color,
+        opacity,
+        pointerEvents: "none",
+    };
+}
+
+/**
  * Hand-rolled area chart with mouse-tracking hover. Uses two distinct
  * hues (warm gold line + cool green fill) to mirror the editorial
  * treatment from the Balance history detail view. On hover, snaps a
@@ -1541,8 +1527,7 @@ function AreaChart({
 }) {
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
-    if (series.length < 2)
-        return <EmptyHint>Not enough points yet.</EmptyHint>;
+    if (series.length < 2) return <EmptyHint>Not enough points yet.</EmptyHint>;
 
     const w = 800;
     const h = height;
@@ -1551,8 +1536,7 @@ function AreaChart({
     const max = Math.max(...data);
     const min = Math.min(...data);
     const sx = (i: number) => p + (i / (data.length - 1)) * (w - p * 2);
-    const sy = (v: number) =>
-        h - p - ((v - min) / (max - min || 1)) * (h - p * 2);
+    const sy = (v: number) => h - p - ((v - min) / (max - min || 1)) * (h - p * 2);
     const path = data
         .map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`)
         .join(" ");
@@ -1596,23 +1580,9 @@ function AreaChart({
                 style={{ display: "block" }}
             >
                 <defs>
-                    <linearGradient
-                        id="ov-area-grad"
-                        x1="0"
-                        x2="0"
-                        y1="0"
-                        y2="1"
-                    >
-                        <stop
-                            offset="0%"
-                            stopColor={fillColor}
-                            stopOpacity="0.5"
-                        />
-                        <stop
-                            offset="100%"
-                            stopColor={fillColor}
-                            stopOpacity="0"
-                        />
+                    <linearGradient id="ov-area-grad" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor={fillColor} stopOpacity="0.5" />
+                        <stop offset="100%" stopColor={fillColor} stopOpacity="0" />
                     </linearGradient>
                 </defs>
                 {[0, 1, 2, 3].map((i) => (
@@ -1629,53 +1599,40 @@ function AreaChart({
                 <path d={area} fill="url(#ov-area-grad)" />
                 <path d={path} fill="none" stroke={lineColor} strokeWidth="1.6" />
 
-                {/* Hover guide + dot */}
+                {/* Hover guide line only — the dots are HTML overlays below
+                    (see `dotStyle`); the SVG uses `preserveAspectRatio="none"`
+                    to stretch horizontally, which would squash a native
+                    `<circle>`'s radius into an ellipse on any width other
+                    than the `w=800` viewBox. */}
                 {hoverIdx !== null && (
-                    <>
-                        <line
-                            x1={activeX}
-                            x2={activeX}
-                            y1={p}
-                            y2={h - p}
-                            stroke={lineColor}
-                            strokeOpacity={0.4}
-                            strokeDasharray="3 4"
-                        />
-                        <circle
-                            cx={activeX}
-                            cy={activeY}
-                            r="7"
-                            fill={lineColor}
-                            opacity="0.22"
-                        />
-                        <circle
-                            cx={activeX}
-                            cy={activeY}
-                            r="3.5"
-                            fill={lineColor}
-                        />
-                    </>
-                )}
-
-                {/* End-point marker (only when not hovering somewhere else) */}
-                {hoverIdx === null && (
-                    <>
-                        <circle
-                            cx={sx(lastIdx)}
-                            cy={sy(data[lastIdx]!)}
-                            r="7"
-                            fill={lineColor}
-                            opacity="0.18"
-                        />
-                        <circle
-                            cx={sx(lastIdx)}
-                            cy={sy(data[lastIdx]!)}
-                            r="3.5"
-                            fill={lineColor}
-                        />
-                    </>
+                    <line
+                        x1={activeX}
+                        x2={activeX}
+                        y1={p}
+                        y2={h - p}
+                        stroke={lineColor}
+                        strokeOpacity={0.4}
+                        strokeDasharray="3 4"
+                    />
                 )}
             </svg>
+
+            {/* Hover dot (or end-point dot when not hovering) — HTML overlays,
+                not SVG circles, so they stay round regardless of how much
+                the SVG above stretches horizontally. */}
+            {hoverIdx !== null ? (
+                <>
+                    <span style={dotStyle(w, activeX, activeY, 14, lineColor, 0.22)} />
+                    <span style={dotStyle(w, activeX, activeY, 7, lineColor)} />
+                </>
+            ) : (
+                <>
+                    <span
+                        style={dotStyle(w, sx(lastIdx), sy(data[lastIdx]!), 14, lineColor, 0.18)}
+                    />
+                    <span style={dotStyle(w, sx(lastIdx), sy(data[lastIdx]!), 7, lineColor)} />
+                </>
+            )}
 
             {/* Tooltip — absolutely positioned over the wrapper. Pointer
                 events disabled so it doesn't steal hover from the SVG;
@@ -1718,11 +1675,7 @@ function AreaChart({
     );
 }
 
-function CashFlow({
-    data,
-}: {
-    data: Array<{ bucket: string; income: number; expense: number }>;
-}) {
+function CashFlow({ data }: { data: Array<{ bucket: string; income: number; expense: number }> }) {
     if (data.length === 0) return null;
     const w = 800;
     const h = 200;
@@ -1734,12 +1687,7 @@ function CashFlow({
     const sx = (i: number) => p + i * slot;
     const sy = (v: number) => h - p - 12 - (v / max) * (h - p * 2 - 12);
     return (
-        <svg
-            viewBox={`0 0 ${w} ${h}`}
-            width="100%"
-            height={h}
-            style={{ display: "block" }}
-        >
+        <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} style={{ display: "block" }}>
             {[0, 1, 2, 3].map((i) => (
                 <line
                     key={i}
@@ -1795,6 +1743,14 @@ function CashFlow({
     );
 }
 
+/**
+ * Wraps the shared `Donut` (`@/components/shared/charts/Donut` — the same
+ * recharts-based ring used on the envelope details page) in an Overview
+ * card shell. Previously this rendered a bespoke hand-rolled SVG ring
+ * with its own static legend markup; that's gone in favor of the shared
+ * component's hover-swappable center label, built-in scrollable legend,
+ * and tooltip, so every donut in the app now looks and behaves the same.
+ */
 function DonutCard({
     title,
     sub,
@@ -1809,124 +1765,25 @@ function DonutCard({
     action?: ReactNode;
     slices: Array<{ id: string; name: string; value: number; color: string }>;
     centerLabel: string;
-    centerValue: string;
+    centerValue: number;
     loading?: boolean;
 }) {
-    const total = slices.reduce((s, x) => s + x.value, 0);
     return (
         <div className="od-card ov-section ov-donut-card">
             <SectionHead title={title} sub={sub} action={action} />
             {loading ? (
                 <Skeleton height={200} />
-            ) : slices.length === 0 ? (
-                <EmptyHint>No data yet.</EmptyHint>
             ) : (
-                <>
-                    <div className="ov-donut-wrap">
-                        <Donut
-                            slices={slices}
-                            size={180}
-                            thickness={20}
-                            label={centerLabel}
-                            value={centerValue}
-                        />
-                    </div>
-                    <div className="ov-donut-legend">
-                        {slices.slice(0, 6).map((r) => {
-                            const pct = total > 0 ? (r.value / total) * 100 : 0;
-                            return (
-                                <div key={r.id} className="ov-donut-legend-row">
-                                    <span className="ov-donut-legend-name">
-                                        <span
-                                            className="ov-donut-dot"
-                                            style={{ background: r.color }}
-                                        />
-                                        <span className="ov-donut-text">{r.name}</span>
-                                    </span>
-                                    <span className="ov-donut-legend-val">
-                                        <Money amount={r.value} size={12} />
-                                        <span className="ov-donut-pct">{pct.toFixed(0)}%</span>
-                                    </span>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </>
+                <Donut
+                    data={slices}
+                    centerLabel={centerLabel}
+                    centerValue={centerValue}
+                    height={220}
+                    format={formatShort}
+                    emptyLabel="No data yet."
+                />
             )}
         </div>
-    );
-}
-
-function Donut({
-    slices,
-    size = 180,
-    label,
-    value,
-    thickness = 14,
-}: {
-    slices: Array<{ value: number; color: string }>;
-    size?: number;
-    label: string;
-    value: string;
-    thickness?: number;
-}) {
-    const r = (size - thickness) / 2;
-    const c = 2 * Math.PI * r;
-    const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-    let acc = 0;
-    return (
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-            <circle
-                cx={size / 2}
-                cy={size / 2}
-                r={r}
-                fill="none"
-                stroke="var(--bg-elev-3)"
-                strokeWidth={thickness}
-            />
-            {slices.map((s, i) => {
-                const len = (s.value / total) * c;
-                const off = c - acc;
-                acc += len;
-                return (
-                    <circle
-                        key={i}
-                        cx={size / 2}
-                        cy={size / 2}
-                        r={r}
-                        fill="none"
-                        stroke={s.color}
-                        strokeWidth={thickness}
-                        strokeDasharray={`${len} ${c - len}`}
-                        strokeDashoffset={off}
-                        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-                        strokeLinecap="butt"
-                    />
-                );
-            })}
-            <text
-                x="50%"
-                y="46%"
-                textAnchor="middle"
-                fill="var(--fg-3)"
-                fontSize="10"
-                letterSpacing="1.2"
-                style={{ textTransform: "uppercase" }}
-            >
-                {label}
-            </text>
-            <text
-                x="50%"
-                y="58%"
-                textAnchor="middle"
-                fill="var(--fg)"
-                fontSize="18"
-                fontWeight="500"
-                style={{ fontVariantNumeric: "tabular-nums", fontFamily: "Geist, sans-serif" }}
-            >
-                {value}
-            </text>
-        </svg>
     );
 }
 
@@ -1981,6 +1838,8 @@ const ICON_PATHS: Record<string, string> = {
     share: "M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4m4-4v13",
     music: "M9 18V5l11-2v13M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm11-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3z",
     camera: "M3 8h4l2-3h6l2 3h4v11H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    sparkle: "M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5z",
+    repeat: "M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5",
 };
 
 function DesignIcon({
@@ -2072,11 +1931,7 @@ function TodayBand({
     const cells: Array<{ label: string; value: ReactNode; tone?: string }> = [
         {
             label: "Today",
-            value: (
-                <span style={{ color: "var(--fg-2)" }}>
-                    {formatInAppTz(now, "MMM d")}
-                </span>
-            ),
+            value: <span style={{ color: "var(--fg-2)" }}>{formatInAppTz(now, "MMM d")}</span>,
         },
         {
             label: "Net today",
@@ -2121,7 +1976,9 @@ function NetWorthComposition({
     accounts,
     loading,
     history,
+    spaceId,
 }: {
+    spaceId: string;
     accounts: Array<{
         accountId: string;
         name: string;
@@ -2137,9 +1994,7 @@ function NetWorthComposition({
         netWorth: number;
     }>;
 }) {
-    const assets = accounts.filter(
-        (a) => a.accountType === "asset" || a.accountType === "locked"
-    );
+    const assets = accounts.filter((a) => a.accountType === "asset" || a.accountType === "locked");
     const liabs = accounts.filter((a) => a.accountType === "liability");
     const assetTotal = assets.reduce((s, x) => s + x.balance, 0);
     const liabTotal = liabs.reduce((s, x) => s + x.balance, 0);
@@ -2168,9 +2023,9 @@ function NetWorthComposition({
                 }
                 sub="Assets minus liabilities · 12-month trend"
                 action={
-                    <a className="ov-details-link" href="#">
+                    <Link className="ov-details-link" to={ROUTES.spaceAccounts(spaceId)}>
                         Open breakdown →
-                    </a>
+                    </Link>
                 }
             />
             {loading ? (
@@ -2186,22 +2041,16 @@ function NetWorthComposition({
                             <div
                                 style={{
                                     fontSize: 11.5,
-                                    color:
-                                        yoy.delta >= 0
-                                            ? "var(--income)"
-                                            : "var(--expense)",
+                                    color: yoy.delta >= 0 ? "var(--income)" : "var(--expense)",
                                     marginTop: 2,
                                 }}
                             >
                                 {yoy.delta >= 0 ? "+" : ""}
-                                {yoy.pct.toFixed(1)}% YoY ·{" "}
-                                {yoy.delta >= 0 ? "+" : "−"}
+                                {yoy.pct.toFixed(1)}% YoY · {yoy.delta >= 0 ? "+" : "−"}
                                 <Money
                                     amount={Math.abs(yoy.delta)}
                                     size={11.5}
-                                    variant={
-                                        yoy.delta >= 0 ? "income" : "expense"
-                                    }
+                                    variant={yoy.delta >= 0 ? "income" : "expense"}
                                 />
                             </div>
                         ) : (
@@ -2301,14 +2150,9 @@ function NwcSplitBar({
                     const pct = total > 0 ? (it.balance / total) * 100 : 0;
                     return (
                         <span key={it.accountId} className="ov-nwc-split-legend-cell">
-                            <span
-                                className="ov-donut-dot"
-                                style={{ background: it.color }}
-                            />
+                            <span className="ov-donut-dot" style={{ background: it.color }} />
                             <span style={{ color: "var(--fg-2)" }}>{it.name}</span>
-                            <span style={{ color: "var(--fg-4)" }}>
-                                · {pct.toFixed(0)}%
-                            </span>
+                            <span style={{ color: "var(--fg-4)" }}>· {pct.toFixed(0)}%</span>
                         </span>
                     );
                 })}
@@ -2318,8 +2162,18 @@ function NwcSplitBar({
 }
 
 const MONTH_ABBR = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 ];
 
 /**
@@ -2335,24 +2189,37 @@ const MONTH_ABBR = [
  * has no filters of its own). Colors are drawn from the shared `AMBER`
  * palette so the two calendars are the same system, not just a
  * similar-looking one.
+ *
+ * `mode` (the page-level Cash/Operational toggle, same URL-persisted
+ * state the "Operational flow" chart below reads) is threaded straight
+ * into the `spendingHeatmap` query: `operational` counts only true
+ * expenses, `cash` also counts cross-space outbound transfer principal.
+ * A transfer to your own savings account isn't spending, so it
+ * shouldn't paint a calendar day as a heavy one by default.
  */
 function DailyHeatmap({
     now,
     data,
     loading,
     spaceId,
+    mode,
 }: {
     now: Date;
     data: Array<{ day: Date; total: number }>;
     loading?: boolean;
     spaceId: string;
+    mode: MetricMode;
 }) {
     const monthLabel = formatInAppTz(now, "MMMM yyyy");
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstWeekday = new Date(year, month, 1).getDay(); // 0 = Sun
-    const today = now.getDate();
+    // App-tz fields throughout — `byDay` below is keyed off `formatInAppTz`,
+    // so the grid frame (which day is "today", how many cells, which
+    // weekday the 1st falls on) must use the same wall-clock, not the
+    // browser's local tz.
+    const year = getAppTzYear(now);
+    const month = getAppTzMonth(now); // 0-indexed, matches MONTH_ABBR below
+    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay(); // 0 = Sun
+    const today = getAppTzDate(now);
 
     /* `r.day` is an absolute instant (an app-tz day boundary from the
      * server), not a date-only value — reading it with native
@@ -2382,10 +2249,7 @@ function DailyHeatmap({
      * rendered days as more of the month's data arrives. `byDay` above
      * stays scoped to this month — it drives the grid and this month's
      * stats, not the color scale. */
-    const edges = useMemo(
-        () => computeQuantileEdges(data.map((r) => r.total)),
-        [data]
-    );
+    const edges = useMemo(() => computeQuantileEdges(data.map((r) => r.total)), [data]);
     const totalMonth = Array.from(byDay.values()).reduce((s, x) => s + x, 0);
     const noSpendDays = Array.from({ length: today }, (_, i) => i + 1).filter(
         (d) => !byDay.has(d) || byDay.get(d) === 0
@@ -2412,11 +2276,15 @@ function DailyHeatmap({
             <SectionHead
                 title={
                     <>
-                        <DesignIcon name="calendar" size={13} color="var(--gold)" /> Daily
-                        spend heatmap
+                        <DesignIcon name="calendar" size={13} color="var(--gold)" /> Daily spend
+                        heatmap
                     </>
                 }
-                sub={`${monthLabel} · brighter = heavier day for you`}
+                sub={
+                    mode === "cash"
+                        ? `${monthLabel} · brighter = heavier day (incl. transfers out)`
+                        : `${monthLabel} · brighter = heavier day for you`
+                }
                 action={
                     <Link
                         className="ov-details-link"
@@ -2478,11 +2346,7 @@ function DailyHeatmap({
                                             {c.v > 0 && (
                                                 <span
                                                     className="ov-heatmap-damt"
-                                                    style={
-                                                        !isFuture
-                                                            ? { color: r.fg }
-                                                            : undefined
-                                                    }
+                                                    style={!isFuture ? { color: r.fg } : undefined}
                                                 >
                                                     {formatCompact(c.v)}
                                                 </span>
@@ -2515,16 +2379,6 @@ function DailyHeatmap({
                             <div className="ov-stat-eyebrow">Peak day</div>
                             {peakDay ? (
                                 <span style={{ fontSize: 14 }}>
-                                    {/* `year`/`month`/`peakDay` are all read via native
-                                        getters off browser-local Dates, so re-projecting
-                                        through `formatInAppTz` here could drift the label
-                                        a day off the ringed cell (which is also placed via
-                                        native getters) for any browser timezone east of
-                                        +6 — same class of bug already fixed on the
-                                        Spending calendar page's peak/heaviest-week
-                                        labels. Read the native month name directly
-                                        instead of round-tripping through an app-tz
-                                        formatter. */}
                                     {MONTH_ABBR[month]} {peakDay}
                                     {" · "}
                                     <Money
@@ -2548,7 +2402,9 @@ function DailyHeatmap({
 /** Top movers — biggest week-over-week category shifts. */
 function TopMovers({
     movers,
+    spaceId,
 }: {
+    spaceId: string;
     movers: Array<{
         categoryId: string;
         name: string;
@@ -2573,15 +2429,17 @@ function TopMovers({
             <SectionHead
                 title={
                     <>
-                        <DesignIcon name="repeat" size={13} color="var(--brand)" /> Top
-                        movers
+                        <DesignIcon name="repeat" size={13} color="var(--brand)" /> Top movers
                     </>
                 }
                 sub="Biggest week-over-week shifts"
                 action={
-                    <a className="ov-details-link" href="#">
+                    <Link
+                        className="ov-details-link"
+                        to={ROUTES.spaceAnalyticsDetail(spaceId, "categories")}
+                    >
                         View all →
-                    </a>
+                    </Link>
                 }
             />
             <div className="ov-list-col">
@@ -2589,15 +2447,15 @@ function TopMovers({
                     <EmptyHint>No category movement vs last week.</EmptyHint>
                 ) : null}
                 {rows.map((r) => {
+                    // No spend last week means "% change" isn't a real number —
+                    // show "New" instead of a misleading "▲ 0%" for a category
+                    // that only started showing up this week.
+                    const isNew = r.prev <= 0 && r.cur > 0;
                     const pct = r.prev > 0 ? ((r.cur - r.prev) / r.prev) * 100 : 0;
                     const isUp = r.cur > r.prev;
                     const isDown = r.cur < r.prev;
                     const arrow = isUp ? "▲" : isDown ? "▼" : "•";
-                    const tone = isUp
-                        ? "var(--expense)"
-                        : isDown
-                          ? "var(--income)"
-                          : "var(--fg-3)";
+                    const tone = isUp ? "var(--expense)" : isDown ? "var(--income)" : "var(--fg-3)";
                     return (
                         <div key={r.name} className="ov-mover-row">
                             <EntityAvatar icon={r.icon} colorVar={r.color} size={26} />
@@ -2622,7 +2480,7 @@ function TopMovers({
                                 className="ov-mover-delta"
                                 style={{ color: tone, fontSize: 12, fontWeight: 500 }}
                             >
-                                {arrow} {Math.abs(pct).toFixed(0)}%
+                                {isNew ? "New" : `${arrow} ${Math.abs(pct).toFixed(0)}%`}
                             </div>
                         </div>
                     );
@@ -2639,6 +2497,7 @@ function SpendingTrends({
     monthExpense,
     lastMonthExpense,
     trendsData,
+    loading,
     periodStart,
     detailHref,
 }: {
@@ -2653,6 +2512,12 @@ function SpendingTrends({
         bucketDays: number;
         bucketUnit: "day" | "week" | "month";
     } | null;
+    /** True while the underlying `dailyComparison` query is still in
+     *  flight — `trendsData` is also `null` once it's errored out, so
+     *  this only covers the load, not a permanent error state. Without
+     *  this the cumulative math below quietly degrades to "Day 1 of 30"
+     *  and a −100% pace instead of a loading skeleton. */
+    loading?: boolean;
     /** Start of the current period — month start for the overview
      *  card. Passed straight through to the chart for date labelling. */
     periodStart: Date;
@@ -2693,17 +2558,14 @@ function SpendingTrends({
     const dailyAvg = TODAY > 0 ? monthSoFar / TODAY : 0;
     const projectedTotal = Math.max(monthSoFar, dailyAvg * DAYS_IN_MONTH);
     const paceDelta =
-        lastMonthExpense > 0
-            ? ((projectedTotal - lastMonthExpense) / lastMonthExpense) * 100
-            : 0;
+        lastMonthExpense > 0 ? ((projectedTotal - lastMonthExpense) / lastMonthExpense) * 100 : 0;
 
     return (
         <div className="od-card ov-section ov-trends">
             <SectionHead
                 title={
                     <>
-                        <DesignIcon name="chart" size={13} color="var(--gold)" /> Spending
-                        trends
+                        <DesignIcon name="chart" size={13} color="var(--gold)" /> Spending trends
                     </>
                 }
                 sub={`Day ${TODAY} of ${DAYS_IN_MONTH} · cumulative spend vs last month`}
@@ -2713,369 +2575,118 @@ function SpendingTrends({
                     </Link>
                 }
             />
-            <div className="ov-trends-body">
-                <div className="ov-trends-chart">
-                    <CumulativeRaceChart
-                        cur={cumulative.cur}
-                        prv={cumulative.prv}
-                        avg={cumulative.avg}
-                        today={TODAY}
-                        daysInMonth={DAYS_IN_MONTH}
-                        projection={projectedTotal}
-                        bucketUnit={BUCKET_UNIT}
-                        periodStart={periodStart}
-                    />
-                    <div className="ov-trends-legend">
-                        <span>
-                            <span
-                                style={{
-                                    width: 14,
-                                    height: 2,
-                                    background: "var(--warning)",
-                                    display: "inline-block",
-                                    verticalAlign: "middle",
-                                    marginRight: 4,
-                                }}
-                            />
-                            This month
-                        </span>
-                        <span>
-                            <span
-                                style={{
-                                    width: 14,
-                                    height: 2,
-                                    borderTop: "1px dashed var(--fg-3)",
-                                    display: "inline-block",
-                                    verticalAlign: "middle",
-                                    marginRight: 4,
-                                }}
-                            />
-                            Last month
-                        </span>
-                        <span>
-                            <span
-                                style={{
-                                    width: 14,
-                                    height: 2,
-                                    borderTop: "1px dotted var(--warning)",
-                                    display: "inline-block",
-                                    verticalAlign: "middle",
-                                    marginRight: 4,
-                                }}
-                            />
-                            Projection
-                        </span>
-                    </div>
+            {loading ? (
+                <div className="ov-trends-body">
+                    {/* Matches `CumulativeRaceChart`'s own rendered footprint
+                        (fixed SVG height + date-axis row) — a shorter
+                        placeholder here would make every card below this
+                        one jump down once the real (taller) chart replaces
+                        it. */}
+                    <Skeleton height={478} />
                 </div>
-                <div className="ov-trends-stats">
-                    <div className="od-card ov-trends-stat">
-                        <div className="ov-stat-eyebrow">Spent so far</div>
-                        <div className="ov-trends-stat-amt">
-                            <Money amount={monthSoFar} size={26} weight={500} />
-                        </div>
-                        <div className="ov-trends-stat-sub">
-                            Day {TODAY} ·{" "}
-                            <Money amount={dailyAvg} size={11.5} variant="muted" />
-                            /day avg
-                        </div>
-                    </div>
-                    <div className="od-card ov-trends-stat">
-                        <div className="ov-stat-eyebrow">Projected month</div>
-                        <div className="ov-trends-stat-amt">
-                            <Money amount={projectedTotal} size={26} weight={500} />
-                        </div>
-                        <div className="ov-trends-stat-sub">
-                            vs <Money amount={lastMonthExpense} size={11.5} variant="muted" />{" "}
-                            last month
-                        </div>
-                    </div>
-                    <div className="od-card ov-trends-stat">
-                        <div className="ov-stat-eyebrow">Pace ahead</div>
-                        <div
-                            className="ov-trends-stat-amt"
-                            style={{ color: paceDelta > 0 ? "var(--expense)" : "var(--income)" }}
-                        >
-                            {paceDelta >= 0 ? "+" : "−"}
-                            {Math.abs(paceDelta).toFixed(1)}
-                            <span style={{ fontSize: 16 }}>%</span>
-                        </div>
-                        <div className="ov-trends-stat-sub">
-                            % {paceDelta > 0 ? "faster" : "slower"} than last month
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-
-/** Income breakdown — sources of income.
- * Source = normalized description (no first-class income_category column
- * yet, see plans/orbit-v2-backend-gaps.md §2.4). */
-function IncomeBreakdownCard({
-    totalIncome,
-    sources: backendSources,
-}: {
-    totalIncome: number;
-    sources: Array<{ source: string; amount: number; count: number }>;
-}) {
-    const total = totalIncome > 0 ? totalIncome : 0;
-    const palette = [
-        "var(--income)",
-        "var(--ent-2)",
-        "var(--ent-3)",
-        "var(--ent-4)",
-        "var(--ent-5)",
-        "var(--ent-6)",
-        "var(--ent-7)",
-    ];
-    const sources = backendSources.slice(0, 7).map((s, i) => ({
-        name: s.source,
-        sub: `${s.count} transaction${s.count === 1 ? "" : "s"}`,
-        v: s.amount,
-        c: palette[i % palette.length],
-    }));
-    return (
-        <div className="od-card ov-section ov-income">
-            <SectionHead
-                title={
-                    <>
-                        <DesignIcon name="arrowDown" size={13} color="var(--income)" /> Income
-                        breakdown
-                    </>
-                }
-                sub="Where money came from this month"
-                action={
-                    <a className="ov-details-link" href="#">
-                        Details →
-                    </a>
-                }
-            />
-            <div className="ov-income-headline">
-                <Money amount={total} size={26} weight={500} variant="income" signed />
-                <span className="ov-income-sub">
-                    across {sources.length} source{sources.length === 1 ? "" : "s"}
-                </span>
-            </div>
-            {sources.length === 0 ? (
-                <EmptyHint>No income recorded this period.</EmptyHint>
-            ) : null}
-            <div className="ov-income-bar">
-                {sources.map((s) => {
-                    const pct = total > 0 ? (s.v / total) * 100 : 0;
-                    return (
-                        <span
-                            key={s.name}
-                            style={{ width: `${pct}%`, background: s.c }}
+            ) : (
+                <div className="ov-trends-body">
+                    <div className="ov-trends-chart">
+                        <CumulativeRaceChart
+                            cur={cumulative.cur}
+                            prv={cumulative.prv}
+                            avg={cumulative.avg}
+                            today={TODAY}
+                            daysInMonth={DAYS_IN_MONTH}
+                            projection={projectedTotal}
+                            bucketUnit={BUCKET_UNIT}
+                            periodStart={periodStart}
                         />
-                    );
-                })}
-            </div>
-            <div className="ov-list-col" style={{ gap: 10 }}>
-                {sources.map((s) => {
-                    const pct = total > 0 ? (s.v / total) * 100 : 0;
-                    return (
-                        <div key={s.name} className="ov-income-row">
-                            <span
-                                className="ov-donut-dot"
-                                style={{ background: s.c }}
-                            />
-                            <div className="ov-income-row-text">
-                                <div className="ov-income-row-name">{s.name}</div>
-                                <div className="ov-income-row-sub">{s.sub}</div>
+                        <div className="ov-trends-legend">
+                            <span>
+                                <span
+                                    style={{
+                                        width: 14,
+                                        height: 2,
+                                        background: "var(--warning)",
+                                        display: "inline-block",
+                                        verticalAlign: "middle",
+                                        marginRight: 4,
+                                    }}
+                                />
+                                This month
+                            </span>
+                            <span>
+                                <span
+                                    style={{
+                                        width: 14,
+                                        height: 2,
+                                        borderTop: "1px dashed var(--fg-3)",
+                                        display: "inline-block",
+                                        verticalAlign: "middle",
+                                        marginRight: 4,
+                                    }}
+                                />
+                                Last month
+                            </span>
+                            <span>
+                                <span
+                                    style={{
+                                        width: 14,
+                                        height: 2,
+                                        borderTop: "1px dotted var(--warning)",
+                                        display: "inline-block",
+                                        verticalAlign: "middle",
+                                        marginRight: 4,
+                                    }}
+                                />
+                                Projection
+                            </span>
+                        </div>
+                    </div>
+                    <div className="ov-trends-stats">
+                        <div className="od-card ov-trends-stat">
+                            <div className="ov-stat-eyebrow">Spent so far</div>
+                            <div className="ov-trends-stat-amt">
+                                <Money amount={monthSoFar} size={26} weight={500} />
                             </div>
-                            <Money amount={s.v} size={13} variant="income" signed />
-                            <span className="ov-income-row-pct">{pct.toFixed(0)}%</span>
+                            <div className="ov-trends-stat-sub">
+                                Day {TODAY} ·{" "}
+                                <Money amount={dailyAvg} size={11.5} variant="muted" />
+                                /day avg
+                            </div>
                         </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-}
-
-/** Bills & due dates — upcoming recurring bills detected from the ledger. */
-function BillsCard({
-    upcomingEvents,
-    bills,
-}: {
-    upcomingEvents: Array<{
-        id: string;
-        name: string;
-        color: string;
-        icon: string;
-        start_time: string;
-    }>;
-    bills: Array<{
-        merchant: string;
-        merchantKey: string;
-        cadence: "weekly" | "biweekly" | "monthly" | "yearly";
-        avgAmount: number;
-        lastAmount: number;
-        nextExpectedDate: Date | string | null;
-    }>;
-}) {
-    void upcomingEvents;
-    const now = Date.now();
-    const sorted = bills
-        .filter((b) => b.nextExpectedDate != null)
-        .map((b) => {
-            const next = new Date(b.nextExpectedDate as Date | string);
-            const days = Math.round(
-                (next.getTime() - now) / (1000 * 60 * 60 * 24)
-            );
-            return { ...b, next, days };
-        })
-        .filter((b) => b.days <= 14 && b.days >= -3)
-        .sort((a, b) => a.next.getTime() - b.next.getTime())
-        .slice(0, 6);
-    const due7 = sorted
-        .filter((b) => b.days <= 7)
-        .reduce((s, x) => s + x.lastAmount, 0);
-    const total = sorted.reduce((s, x) => s + x.lastAmount, 0);
-    return (
-        <div className="od-card ov-section ov-bills">
-            <SectionHead
-                title={
-                    <>
-                        <DesignIcon name="bell" size={13} color="var(--gold)" /> Bills & due
-                        dates
-                    </>
-                }
-                sub="Next 14 days"
-                action={
-                    <span className="ov-bills-totals">
-                        <span>
-                            due in 7d <Money amount={due7} size={12} variant="warn" />
-                        </span>
-                        <span>
-                            · total <Money amount={total} size={12} />
-                        </span>
-                    </span>
-                }
-            />
-            {sorted.length === 0 ? (
-                <EmptyHint>No bills detected in the next 14 days.</EmptyHint>
-            ) : (
-                <div className="ov-list-col" style={{ gap: 10 }}>
-                    {sorted.map((b) => (
-                        <div key={b.merchantKey} className="ov-bill-row">
-                            <EntityAvatar
-                                icon="repeat"
-                                colorVar="var(--ent-3)"
-                                size={28}
-                            />
-                            <span className="ov-bill-sub">
-                                <span className="ov-bill-date">
-                                    {formatInAppTz(b.next, "MMM dd")}
-                                </span>
-                                <span className="ov-bill-when">
-                                    {b.days < 0
-                                        ? `${Math.abs(b.days)}d overdue`
-                                        : b.days === 0
-                                          ? "today"
-                                          : `in ${b.days}d`}
-                                </span>
-                            </span>
-                            <span className="ov-bill-name">{b.merchant}</span>
-                            <span className="ov-chip ov-chip-transfer">
-                                {b.cadence}
-                            </span>
-                            <Money amount={b.lastAmount} size={13} variant="warn" />
+                        <div className="od-card ov-trends-stat">
+                            <div className="ov-stat-eyebrow">Projected month</div>
+                            <div className="ov-trends-stat-amt">
+                                <Money amount={projectedTotal} size={26} weight={500} />
+                            </div>
+                            <div className="ov-trends-stat-sub">
+                                vs <Money amount={lastMonthExpense} size={11.5} variant="muted" />{" "}
+                                last month
+                            </div>
                         </div>
-                    ))}
+                        <div className="od-card ov-trends-stat">
+                            <div className="ov-stat-eyebrow">Pace ahead</div>
+                            <div
+                                className="ov-trends-stat-amt"
+                                style={{
+                                    color: paceDelta > 0 ? "var(--expense)" : "var(--income)",
+                                }}
+                            >
+                                {paceDelta >= 0 ? "+" : "−"}
+                                {Math.abs(paceDelta).toFixed(1)}
+                                <span style={{ fontSize: 16 }}>%</span>
+                            </div>
+                            <div className="ov-trends-stat-sub">
+                                % {paceDelta > 0 ? "faster" : "slower"} than last month
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
     );
 }
 
-/** Subscriptions & recurring — auto-detected services grid. */
-function SubscriptionsGrid({
-    subscriptions,
-}: {
-    subscriptions: Array<{
-        merchant: string;
-        merchantKey: string;
-        cadence: "weekly" | "biweekly" | "monthly" | "yearly";
-        avgAmount: number;
-        lastAmount: number;
-        nextExpectedDate: Date | string | null;
-    }>;
-}) {
-    const subs = subscriptions.slice(0, 8);
-    const annualMultiplier = (c: string) =>
-        c === "weekly" ? 52 : c === "biweekly" ? 26 : c === "yearly" ? 1 : 12;
-    const monthly = subs
-        .filter((s) => s.cadence === "monthly")
-        .reduce((sum, x) => sum + x.lastAmount, 0);
-    const annualized = subs.reduce(
-        (sum, x) => sum + x.lastAmount * annualMultiplier(x.cadence),
-        0
-    );
-    return (
-        <div className="od-card ov-section ov-subs">
-            <SectionHead
-                title={
-                    <>
-                        <DesignIcon name="repeat" size={13} color="var(--ent-3)" /> Subscriptions
-                        &amp; recurring
-                    </>
-                }
-                sub={`${subs.length} active service${subs.length === 1 ? "" : "s"} · auto-detected from ledger`}
-                action={
-                    <span className="ov-subs-totals">
-                        <span>
-                            monthly{" "}
-                            <Money amount={monthly} size={12} weight={500} />
-                        </span>
-                        <span>
-                            · annualized{" "}
-                            <Money amount={annualized} size={12} weight={500} />
-                        </span>
-                    </span>
-                }
-            />
-            {subs.length === 0 ? (
-                <EmptyHint>No recurring services detected yet.</EmptyHint>
-            ) : (
-                <div className="ov-subs-grid">
-                    {subs.map((s) => (
-                        <div key={s.merchantKey} className="ov-sub-cell">
-                            <EntityAvatar
-                                icon="repeat"
-                                colorVar="var(--ent-3)"
-                                size={32}
-                            />
-                            <div className="ov-sub-text">
-                                <div className="ov-sub-name">{s.merchant}</div>
-                                <div className="ov-sub-sub">
-                                    {s.cadence}
-                                    {s.nextExpectedDate
-                                        ? ` · next ${formatInAppTz(
-                                              new Date(s.nextExpectedDate),
-                                              "MMM dd"
-                                          )}`
-                                        : ""}
-                                </div>
-                            </div>
-                            <Money
-                                amount={s.lastAmount}
-                                size={13}
-                                weight={500}
-                            />
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-/** Accounts at a glance — list of accounts with 7-day micro-trends.
- *  Real data via accountDistribution; sparklines are dummy until we
- *  add a per-account 7-day balance series query. */
+/** Accounts at a glance — list of accounts with 7-day micro-trends,
+ *  sourced from `accountDistribution` and the per-account balance
+ *  series (`analytics.balanceHistory` / its personal twin). */
 function AccountsGlance({
     accounts,
     loading,
@@ -3104,24 +2715,21 @@ function AccountsGlance({
        sparkline arrays. Slice the trailing 7 days per account. */
     const seriesByAccount = useMemo(() => {
         const map = new Map<string, number[]>();
-        const grouped = new Map<
-            string,
-            Array<{ bucket: Date; balance: number }>
-        >();
+        const grouped = new Map<string, Array<{ bucket: Date; balance: number }>>();
         for (const row of balanceSeries) {
             const list = grouped.get(row.accountId) ?? [];
             list.push({
-                bucket:
-                    row.bucket instanceof Date
-                        ? row.bucket
-                        : new Date(row.bucket),
+                bucket: row.bucket instanceof Date ? row.bucket : new Date(row.bucket),
                 balance: row.balance,
             });
             grouped.set(row.accountId, list);
         }
         for (const [id, rows] of grouped) {
             rows.sort((a, b) => a.bucket.getTime() - b.bucket.getTime());
-            map.set(id, rows.slice(-7).map((r) => r.balance));
+            map.set(
+                id,
+                rows.slice(-7).map((r) => r.balance)
+            );
         }
         return map;
     }, [balanceSeries]);
@@ -3130,8 +2738,8 @@ function AccountsGlance({
             <SectionHead
                 title={
                     <>
-                        <DesignIcon name="wallet" size={13} color="var(--brand)" /> Accounts at
-                        a glance
+                        <DesignIcon name="wallet" size={13} color="var(--brand)" /> Accounts at a
+                        glance
                     </>
                 }
                 sub="Live balances · 7-day micro-trend"
@@ -3157,11 +2765,23 @@ function AccountsGlance({
                     {accounts.slice(0, 5).map((a) => {
                         const real = seriesByAccount.get(a.accountId);
                         const series =
-                            real && real.length > 1
-                                ? real
-                                : new Array(7).fill(a.balance);
+                            real && real.length > 1 ? real : new Array(7).fill(a.balance);
                         const liability = a.accountType === "liability";
-                        const delta = (series[series.length - 1]! - series[0]!) / Math.max(1, series[0]!) * 100;
+                        // Sign-adjust liabilities the same way the headline
+                        // `Money` amount below does, so a growing debt reads
+                        // as a *worsening* (red, not green) delta instead of
+                        // contradicting the headline's own sign flip.
+                        const signedSeries = liability ? series.map((v) => -v) : series;
+                        // A near-zero (or negative) 7-day-ago balance makes
+                        // the percentage meaningless (or, with a raw floor,
+                        // makes it blow up arbitrarily for a newly-funded
+                        // account) — show "New" instead of a number then.
+                        const base = Math.abs(signedSeries[0]!);
+                        const delta =
+                            base < 1
+                                ? null
+                                : ((signedSeries[series.length - 1]! - signedSeries[0]!) / base) *
+                                  100;
                         return (
                             <div key={a.accountId} className="ov-glance-row">
                                 <EntityAvatar
@@ -3176,20 +2796,24 @@ function AccountsGlance({
                                 <div className="ov-glance-spark">
                                     <Sparkline
                                         data={series}
-                                        color={
-                                            liability ? "var(--expense)" : "var(--income)"
-                                        }
+                                        color={liability ? "var(--expense)" : "var(--income)"}
                                     />
                                 </div>
                                 <span
                                     className="tabular"
                                     style={{
                                         fontSize: 11,
-                                        color: delta >= 0 ? "var(--income)" : "var(--expense)",
+                                        color:
+                                            delta == null
+                                                ? "var(--fg-3)"
+                                                : delta >= 0
+                                                  ? "var(--income)"
+                                                  : "var(--expense)",
                                     }}
                                 >
-                                    {delta >= 0 ? "+" : "−"}
-                                    {Math.abs(delta).toFixed(1)}%
+                                    {delta == null
+                                        ? "New"
+                                        : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toFixed(1)}%`}
                                 </span>
                                 <Money
                                     amount={liability ? -a.balance : a.balance}
@@ -3205,13 +2829,7 @@ function AccountsGlance({
     );
 }
 
-function Sparkline({
-    data,
-    color = "var(--brand)",
-}: {
-    data: number[];
-    color?: string;
-}) {
+function Sparkline({ data, color = "var(--brand)" }: { data: number[]; color?: string }) {
     if (data.length < 2) return null;
     const w = 80;
     const h = 22;
@@ -3219,115 +2837,14 @@ function Sparkline({
     const max = Math.max(...data);
     const min = Math.min(...data);
     const sx = (i: number) => p + (i / (data.length - 1)) * (w - p * 2);
-    const sy = (v: number) =>
-        h - p - ((v - min) / (max - min || 1)) * (h - p * 2);
+    const sy = (v: number) => h - p - ((v - min) / (max - min || 1)) * (h - p * 2);
     const path = data
         .map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`)
         .join(" ");
     return (
-        <svg
-            viewBox={`0 0 ${w} ${h}`}
-            width={w}
-            height={h}
-            style={{ display: "block" }}
-        >
+        <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} style={{ display: "block" }}>
             <path d={path} fill="none" stroke={color} strokeWidth="1.4" />
         </svg>
-    );
-}
-
-/** Top merchants — biggest merchants this month. */
-function TopMerchants({
-    merchants,
-}: {
-    merchants: Array<{
-        merchant: string;
-        merchantKey: string;
-        total: number;
-        previousTotal: number;
-        count: number;
-        deltaPct: number;
-    }>;
-}) {
-    /* Cycle a small palette across rows so the bars vary visually without
-       knowing anything about the merchant identity (descriptions don't
-       carry color metadata). */
-    const palette = [
-        "var(--ent-2)",
-        "var(--ent-3)",
-        "var(--ent-5)",
-        "var(--ent-6)",
-        "var(--ent-7)",
-        "var(--ent-4)",
-    ];
-    const rows = merchants.map((m, i) => ({
-        name: m.merchant,
-        icon: "shopping-bag",
-        color: palette[i % palette.length],
-        txns: m.count,
-        v: m.total,
-        delta: m.deltaPct * 100,
-    }));
-    const max = Math.max(1, ...rows.map((r) => r.v));
-    return (
-        <div className="od-card ov-section ov-merchants">
-            <SectionHead
-                title={
-                    <>
-                        <DesignIcon name="hash" size={13} color="var(--ent-5)" /> Top
-                        merchants
-                    </>
-                }
-                sub="Where money went this month"
-                action={
-                    <a className="ov-details-link" href="#">
-                        View all →
-                    </a>
-                }
-            />
-            {rows.length === 0 ? (
-                <EmptyHint>No merchant data this period.</EmptyHint>
-            ) : (
-                <div className="ov-list-col" style={{ gap: 12 }}>
-                    {rows.map((r) => {
-                        const isUp = r.delta > 0;
-                        return (
-                            <div key={r.name} className="ov-merchant-row">
-                                <EntityAvatar
-                                    icon={r.icon}
-                                    colorVar={r.color}
-                                    size={26}
-                                />
-                                <div className="ov-merchant-text">
-                                    <div className="ov-merchant-name">{r.name}</div>
-                                    <div className="ov-merchant-bar">
-                                        <span
-                                            style={{
-                                                width: `${(r.v / max) * 100}%`,
-                                                background: r.color,
-                                            }}
-                                        />
-                                    </div>
-                                </div>
-                                <span className="ov-merchant-meta">{r.txns} txns</span>
-                                <Money amount={r.v} size={13} weight={500} />
-                                <span
-                                    className="tabular"
-                                    style={{
-                                        fontSize: 11,
-                                        color: isUp
-                                            ? "var(--expense)"
-                                            : "var(--income)",
-                                    }}
-                                >
-                                    {isUp ? "▲" : "▼"} {Math.abs(r.delta).toFixed(0)}%
-                                </span>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
     );
 }
 
@@ -3348,10 +2865,6 @@ const OV_STYLES = `
     .ov-root { margin: -2rem; }
 }
 
-.ov-root @keyframes ov-shimmer {
-    0%   { background-position: 100% 0; }
-    100% { background-position: -100% 0; }
-}
 @keyframes ov-shimmer {
     0%   { background-position: 100% 0; }
     100% { background-position: -100% 0; }
@@ -3679,43 +3192,11 @@ const OV_STYLES = `
     .ov-trio-2 { grid-template-columns: 1fr; }
 }
 .ov-donut-card { display: flex; flex-direction: column; gap: 16px; }
-.ov-donut-wrap { display: flex; justify-content: center; }
-.ov-donut-legend { display: flex; flex-direction: column; gap: 8px; }
-.ov-donut-legend-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 12px;
-}
-.ov-donut-legend-name {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--fg-2);
-    min-width: 0;
-}
-.ov-donut-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 .ov-donut-dot {
     width: 7px;
     height: 7px;
     border-radius: 99px;
     flex-shrink: 0;
-}
-.ov-donut-legend-val {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 8px;
-}
-.ov-donut-pct {
-    font-size: 10.5px;
-    color: var(--fg-4);
-    font-variant-numeric: tabular-nums;
-    width: 32px;
-    text-align: right;
 }
 
 /* Trend KPI row */
@@ -3789,11 +3270,6 @@ const OV_STYLES = `
     grid-template-columns: 1.4fr 1fr;
     gap: 14px;
 }
-.ov-grid-full {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 14px;
-}
 @media (max-width: 1100px) {
     .ov-grid-2,
     .ov-grid-7-5 { grid-template-columns: 1fr; }
@@ -3865,74 +3341,6 @@ const OV_STYLES = `
     border-color: color-mix(in oklab, var(--expense) 30%, transparent);
     background: transparent;
 }
-.ov-chip-income {
-    color: var(--income);
-    border-color: color-mix(in oklab, var(--income) 30%, transparent);
-    background: transparent;
-    height: 20px;
-    font-size: 9.5px;
-    padding: 0 7px;
-}
-.ov-chip-expense {
-    color: var(--expense);
-    border-color: color-mix(in oklab, var(--expense) 30%, transparent);
-    background: transparent;
-    height: 20px;
-    font-size: 9.5px;
-    padding: 0 7px;
-}
-.ov-chip-transfer {
-    color: var(--transfer);
-    border-color: color-mix(in oklab, var(--transfer) 30%, transparent);
-    background: transparent;
-    height: 20px;
-    font-size: 9.5px;
-    padding: 0 7px;
-}
-
-/* Transactions list */
-.ov-tx-list { display: flex; flex-direction: column; }
-.ov-tx-row {
-    display: grid;
-    grid-template-columns: auto auto 1fr auto;
-    align-items: center;
-    gap: 14px;
-    padding: 11px 0;
-}
-.ov-tx-date {
-    font-size: 11px;
-    color: var(--fg-4);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0.02em;
-    width: 44px;
-}
-.ov-tx-desc {
-    font-size: 13px;
-    color: var(--fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-/* Events */
-.ov-events-col { display: flex; flex-direction: column; gap: 12px; }
-.ov-event {
-    padding: 12px;
-    border-radius: 10px;
-    background: var(--bg-elev-2);
-    border: 1px solid var(--line-soft);
-}
-.ov-event-head { display: flex; align-items: center; gap: 10px; }
-.ov-event-text {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-}
-.ov-event-name { font-size: 13px; font-weight: 500; color: var(--fg); }
-.ov-event-date { font-size: 11px; color: var(--fg-4); }
-
 /* ===== Section eyebrows (POSITION / COMPOSITION / FLOW / etc.) ===== */
 .ov-section-eyebrow {
     display: flex;
@@ -4179,134 +3587,6 @@ const OV_STYLES = `
 }
 .ov-trends-stat-sub { font-size: 11px; color: var(--fg-4); }
 
-/* ===== Income breakdown ===== */
-.ov-income-headline {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: 12px;
-}
-.ov-income-sub { font-size: 12px; color: var(--fg-3); }
-.ov-income-bar {
-    display: flex;
-    height: 8px;
-    border-radius: 999px;
-    overflow: hidden;
-    background: var(--bg-elev-3);
-    margin-bottom: 12px;
-}
-.ov-income-row {
-    display: grid;
-    grid-template-columns: auto 1fr auto auto;
-    align-items: center;
-    gap: 12px;
-}
-.ov-income-row-text { min-width: 0; }
-.ov-income-row-name {
-    font-size: 13px;
-    color: var(--fg);
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.ov-income-row-sub {
-    font-size: 11px;
-    color: var(--fg-4);
-}
-.ov-income-row-pct {
-    font-size: 11px;
-    color: var(--fg-4);
-    font-variant-numeric: tabular-nums;
-    width: 28px;
-    text-align: right;
-}
-
-/* ===== Bills & due dates ===== */
-.ov-bills-totals {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 11px;
-    color: var(--fg-3);
-    letter-spacing: 0.04em;
-}
-.ov-bill-row {
-    display: grid;
-    grid-template-columns: auto auto 1fr auto auto;
-    align-items: center;
-    gap: 12px;
-}
-.ov-bill-sub {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-    min-width: 60px;
-}
-.ov-bill-date {
-    font-size: 11px;
-    color: var(--warn);
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-}
-.ov-bill-when { font-size: 10px; color: var(--fg-4); }
-.ov-bill-name {
-    font-size: 13px;
-    color: var(--fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* ===== Subscriptions grid ===== */
-.ov-subs-totals {
-    display: inline-flex;
-    gap: 12px;
-    font-size: 11px;
-    color: var(--fg-3);
-    align-items: center;
-    flex-wrap: wrap;
-}
-.ov-subs-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-}
-@media (max-width: 1100px) {
-    .ov-subs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 600px) {
-    .ov-subs-grid { grid-template-columns: 1fr; }
-}
-.ov-sub-cell {
-    padding: 12px;
-    border-radius: 10px;
-    background: var(--bg-elev-2);
-    border: 1px solid var(--line-soft);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.ov-sub-text {
-    flex: 1;
-    min-width: 0;
-}
-.ov-sub-name {
-    font-size: 12.5px;
-    font-weight: 500;
-    color: var(--fg);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.ov-sub-sub {
-    font-size: 10.5px;
-    color: var(--fg-4);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* ===== Accounts at a glance ===== */
 .ov-glance-row {
     display: grid;
@@ -4329,39 +3609,6 @@ const OV_STYLES = `
     font-variant-numeric: tabular-nums;
 }
 .ov-glance-spark { width: 80px; height: 22px; }
-
-/* ===== Top merchants ===== */
-.ov-merchant-row {
-    display: grid;
-    grid-template-columns: auto 1fr auto auto auto;
-    align-items: center;
-    gap: 12px;
-}
-.ov-merchant-text { min-width: 0; }
-.ov-merchant-name {
-    font-size: 13px;
-    color: var(--fg);
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.ov-merchant-bar {
-    height: 4px;
-    border-radius: 999px;
-    background: var(--bg-elev-3);
-    overflow: hidden;
-    margin-top: 4px;
-}
-.ov-merchant-bar > span {
-    display: block;
-    height: 100%;
-    border-radius: 999px;
-}
-.ov-merchant-meta {
-    font-size: 11px;
-    color: var(--fg-4);
-}
 
 /* ============================================================
    MOBILE — phone (<640px) tightening for the Overview page
@@ -4410,24 +3657,12 @@ const OV_STYLES = `
         gap: 12px;
     }
 
-    /* Transaction list / bills / movers / income / merchants / glance:
-       drop the bar/spark/meta auto column to keep names readable. */
-    .ov-tx-row { grid-template-columns: auto 1fr auto; gap: 10px; }
-    .ov-tx-row .ov-chip-income,
-    .ov-tx-row .ov-chip-expense,
-    .ov-tx-row .ov-chip-transfer { display: none; }
-
-    .ov-bill-row { grid-template-columns: auto 1fr auto; gap: 10px; }
-    .ov-bill-row .ov-bill-sub { display: none; }
-    .ov-bill-name { font-size: 12.5px; }
-
+    /* Movers / glance: drop the bar/spark/meta auto column to keep
+       names readable. */
     .ov-mover-row,
-    .ov-merchant-row,
-    .ov-income-row,
     .ov-glance-row { grid-template-columns: auto 1fr auto; gap: 10px; }
     .ov-glance-spark { display: none; }
-    .ov-mover-delta,
-    .ov-income-row-pct { display: none; }
+    .ov-mover-delta { display: none; }
 
     /* Net worth composition */
     .ov-nwc { padding: 16px; }
