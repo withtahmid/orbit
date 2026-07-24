@@ -20,22 +20,24 @@
  * - 8 users — primary + partner + 6 collaborators across spaces
  * - 5 spaces (Family Budget, Personal, Roommates, Side Business, Travel)
  * - 16 accounts across asset / liability / locked
- * - 30+ envelopes (monthly reset + rolling lifetime-pool cadences)
+ * - 30+ envelopes (monthly reset + rolling lifetime-pool cadences),
+ *   including one archived envelope so the "Archived" section has a row
  * - 4 goals (house, emergency, vacation, laptop) seeded as cadence='none' envelopes with targets
  * - 120+ expense categories, most two levels deep
  * - 24 events — trips, weddings, conferences, renovations, celebrations;
  *   past events marked closed with closed_at; some have estimated_amount
  * - 3 pending space invites so the invite-by-email flow has visible data
- * - 2 transaction-entry pins on the family space (Account: Joint
- *   Checking for Alex; Envelope: Groceries shared) so the new-transaction
- *   form shows the "pinned" affordance out of the box
+ * - 3 transaction-entry pins (family: per-user Account pin for Alex +
+ *   space-wide Envelope pin; travel: space-wide Event pin) so the
+ *   new-transaction form shows the "pinned" affordance out of the box
  * - ~18 months of history ending today
  * - ~8,000+ transactions, with realistic monthly bills, weekly grocery
  *   runs, daily coffee, freelance income, bonuses, tax refunds, foreign
  *   transaction fees, credit card payoffs, salary progression, seasonal
  *   holiday spikes and event-tagged clusters
- * - ~500+ envelope allocations, with intentional drift, rebalances,
- *   and account-pinned allocations to surface the 2D matrix idea
+ * - ~500+ envelope allocations in the simplified (migration 048) model:
+ *   exactly one absolute row per (envelope, month) for monthly cadences,
+ *   one lifetime row (period_start NULL) for rolling/goal envelopes
  *
  * Primary user credentials are printed at the end.
  */
@@ -507,6 +509,20 @@ const ENVELOPES = [
         cadence: "monthly" as const,
         color: "#6366f1",
         icon: "laptop",
+    },
+    // Archived (migration 033) — an envelope that fell out of use, so the
+    // envelopes UI's "Archived" state has a live row. It only receives
+    // allocations for the first few history months (see
+    // seedEnvelopeAllocations) and no ongoing transactions reference it.
+    {
+        key: "per_gym_old",
+        space: "personal" as SpaceKey,
+        name: "Gym Membership (old)",
+        cadence: "monthly" as const,
+        color: "#64748b",
+        icon: "dumbbell",
+        archived: true,
+        description: "Cancelled the gym contract — superseded by the Fitness envelope.",
     },
 
     // Roommates
@@ -2953,6 +2969,7 @@ const MONTHLY_ALLOCATION: Partial<Record<EnvelopeKey, number>> = {
     per_coffee: 140,
     per_fitness: 120,
     per_tech: 180,
+    per_gym_old: 45,
     room_groceries: 380,
     room_utilities: 180,
     room_cleaning: 140,
@@ -3054,7 +3071,7 @@ export async function seedDatabase() {
             events
         );
         const inviteCount = await seedSpaceInvites(db, users, spaces);
-        const pinCount = await seedPins(db, users, spaces, accounts, envelopes);
+        const pinCount = await seedPins(db, users, spaces, accounts, envelopes, events);
 
         logger.info("Seed complete ✅");
         console.log("");
@@ -3068,7 +3085,7 @@ export async function seedDatabase() {
         console.log(`  categories:    ${Object.keys(categories).length}`);
         console.log(`  events:        ${Object.keys(events).length}`);
         console.log(`  invites:       ${inviteCount} pending`);
-        console.log(`  pins:          ${pinCount} (account + envelope, family space)`);
+        console.log(`  pins:          ${pinCount} (account + envelope on family, event on travel)`);
         console.log(`  transactions:  ${txCount}`);
         console.log("");
         console.log(" Log in with:");
@@ -3093,6 +3110,11 @@ async function wipe(db: ReturnType<typeof createQueryBuilder>) {
         "event_attachments",
         "exported_reports",
         "files",
+        // Pins (migration 043) would be truncated transitively via CASCADE
+        // (they FK into spaces/users), but list them explicitly so the wipe
+        // doesn't silently depend on FK topology.
+        "user_space_pin",
+        "space_pin",
         "envelop_allocations",
         "transactions",
         "expense_categories",
@@ -3267,6 +3289,7 @@ async function seedEnvelopes(
                 cadence: e.cadence,
                 target_amount: hasTarget ? String(e.target) : null,
                 target_date: targetDate,
+                archived: "archived" in e ? e.archived : false,
             })
             .returning("id")
             .executeTakeFirstOrThrow();
@@ -3428,9 +3451,10 @@ async function seedSpaceInvites(
 }
 
 // ---------------------------------------------------------------------
-// Transaction-entry pins (migration 043). One per-user Account pin for
-// Alex in the family space, and one space-wide Envelope pin so the new
-// transaction form has visible "pinned" state on first open.
+// Transaction-entry pins (migrations 043/044). One per-user Account pin
+// for Alex in the family space, one space-wide Envelope pin (family),
+// and one space-wide Event pin (travel) so the new-transaction form has
+// visible "pinned" state for every pinnable field on first open.
 // ---------------------------------------------------------------------
 
 async function seedPins(
@@ -3438,7 +3462,8 @@ async function seedPins(
     users: Record<UserKey, string>,
     spaces: Record<SpaceKey, string>,
     accounts: Record<AccountKey, string>,
-    envelopes: Record<EnvelopeKey, string>
+    envelopes: Record<EnvelopeKey, string>,
+    events: Record<EventKey, string>
 ) {
     logger.info("Pins…");
     // Alex's personal account pin in the family space — Joint Checking
@@ -3465,12 +3490,29 @@ async function seedPins(
             set_by_user_id: users.primary,
         })
         .execute();
-    return 2;
+    // Space-wide event pin for the travel space — the planned getaway is
+    // what most new travel expenses will be tagged with, so pre-pinning
+    // it exercises the third pinnable field.
+    await db
+        .insertInto("space_pin")
+        .values({
+            space_id: spaces.travel,
+            field: "event" as unknown as SpacePin["field"],
+            envelop_id: null,
+            event_id: events.e_upcoming_trip,
+            set_by_user_id: users.primary,
+        })
+        .execute();
+    return 3;
 }
 
 // ---------------------------------------------------------------------
-// Envelope allocations — one per (envelope, period) for monthly, with a
-// few account-pinned allocations sprinkled in to exercise the 2D matrix.
+// Envelope allocations — the simplified (migration 048) model: exactly
+// one absolute row per (envelope, month) for monthly cadences, and a
+// single lifetime row (period_start NULL) for rolling envelopes. Goals
+// get their lifetime row in seedGoalAllocations. The unique index
+// envelop_allocations_envelop_period_uq (NULLS NOT DISTINCT) enforces
+// the one-row-per-period shape, so nothing here may double up.
 // ---------------------------------------------------------------------
 
 async function seedEnvelopeAllocations(
@@ -3507,7 +3549,11 @@ async function seedEnvelopeAllocations(
                 created_at: atHour(periodStarts[1], 9, 0),
             });
         } else {
-            for (const ps of periodStarts) {
+            // Archived envelopes stopped being budgeted at some point —
+            // fund only the first few history months so current periods
+            // show no live money on them.
+            const starts = "archived" in e && e.archived ? periodStarts.slice(0, 6) : periodStarts;
+            for (const ps of starts) {
                 // Base monthly allocation; nudge some months with small drift.
                 const drift = maybe(0.2) ? Math.round(base * (rng() * 0.2 - 0.1)) : 0;
                 rows.push({

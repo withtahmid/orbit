@@ -57,4 +57,4 @@ Feature dialogs:
 ## Cross-references
 - Server: `apps/server/src/procedures/account/*` (one-per-file convention).
 - Web: shares the create-account dialog with the app-shell `MyAccountsPage`; transactions tab depends on `pages/space/transactions/TransactionsPage.tsx`; balance history reuses `analytics.balanceHistory` consumed in `analytics/views/BalanceHistoryView.tsx` and `OverviewPage.tsx`.
-- Account distribution moved here from analytics: `analytics/views/AccountsView.tsx` and the `analytics/accounts` route/tile were removed (see `web/analytics.md`); the analytics catalog is now nine views. The `analytics.accountDistribution` / `personal.accountDistribution` procs remain in use by `OverviewPage`.
+- Account distribution moved here from analytics: `analytics/views/AccountsView.tsx` and the `analytics/accounts` route/tile were removed (see `web/analytics.md`); the analytics catalog is now eight views (`AllocationsView` was later removed too). The `analytics.accountDistribution` / `personal.accountDistribution` procs remain in use by `OverviewPage`.

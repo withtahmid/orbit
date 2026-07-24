@@ -9,7 +9,7 @@
 - Guards (`apps/web/src/router/guards/`):
   - `GuestOnlyRoute.tsx` — for `/login`, `/signup`, `/forgot-password`. Redirects authenticated users away (honoring `?from=` if present, else `/`).
   - `ProtectedRoute.tsx` — for everything inside `/spaces`, `/s/:spaceId/*`, `/settings/*`, `/accounts`, `/me`. Redirects guests to `/login?from=<encoded current url>`.
-  - **No `PublicRoute` guard exists** — public routes (`/`, `/docs`, `*`) are simply un-wrapped.
+  - **No `PublicRoute` guard exists** — public routes (`/`, `/docs`, `/invite/:token`, `*`) are simply un-wrapped.
 - Layouts (`apps/web/src/layouts/`):
   - `RootLayout.tsx` — single `<Outlet/>` plus app-wide chrome: `TooltipProvider`, `ScrollRestoration`, `DemoBanner`, `Toaster`. Wraps every route.
   - `AuthLayout.tsx` — passthrough `<Outlet/>`; auth pages render their own full-viewport chrome (`AuthShell`).
@@ -28,12 +28,13 @@
 RootLayout (errorElement: ErrorBoundaryPage)
 ├── /                  RootRedirect
 ├── /docs              DocsPage (no guard, no layout)
+├── /invite/:token     AcceptInvitePage (public — renders space metadata pre-login, bounces guests to /login?from=… before the auth-only accept mutation)
 ├── GuestOnlyRoute → AuthLayout
 │   ├── /login         LoginPage
 │   ├── /signup        SignupPage   (lazy)
 │   └── /forgot-password ForgotPasswordPage (lazy)
 └── ProtectedRoute
-    ├── /spaces        SpaceSelectorPage (NO AppShellLayout — renders its own chrome, see comment at index.tsx:108-110)
+    ├── /spaces        SpaceSelectorPage (NO AppShellLayout — renders its own chrome, see comment at index.tsx:102-105)
     ├── AppShellLayout
     │   ├── /settings           → redirect to /settings/profile
     │   ├── /settings/profile   ProfilePage
@@ -49,7 +50,7 @@ RootLayout (errorElement: ErrorBoundaryPage)
             ├── year/:year
             ├── categories
             ├── events, events/:eventId
-            ├── analytics + analytics/{cash-flow,categories,envelopes,balance,accounts,heatmap,allocations,trends,anomalies,priority}
+            ├── analytics + analytics/{cash-flow,categories,envelopes,balance,heatmap,trends,anomalies,priority}
             └── settings
 * → NotFoundPage
 ```
@@ -68,13 +69,13 @@ RootLayout (errorElement: ErrorBoundaryPage)
 
 ### Lazy loading
 
-All space-scoped pages plus `SignupPage`, `ForgotPasswordPage`, `DocsPage` are `lazy()`-imported with a shared `withSuspense` wrapper that renders `<FullPageSpinner/>` (`router/index.tsx:75-77`). `LoginPage` is eager so the cold-start login is instant.
+All space-scoped pages plus `SignupPage`, `ForgotPasswordPage`, `DocsPage`, `AcceptInvitePage` are `lazy()`-imported with a shared `withSuspense` wrapper that renders `<FullPageSpinner/>` (`router/index.tsx:64-66`). `LoginPage` is eager so the cold-start login is instant.
 
 ## Conventions & gotchas
 
 - **Never hardcode paths.** Use `ROUTES.spaceTransactions(spaceId)`, not `` `/s/${spaceId}/transactions` ``.
-- **`/me` is a redirect, not a page.** The virtual space lives at `/s/me`; the old `/me` URL is preserved by `<Navigate to="/s/me" replace />` (`index.tsx:138-140`).
-- **`/spaces` sits outside `AppShellLayout`** intentionally (`index.tsx:108-114`): it renders its own full-viewport chrome (logo header + grid). Wrapping it in the shell would double-render the header.
+- **`/me` is a redirect, not a page.** The virtual space lives at `/s/me`; the old `/me` URL is preserved by `<Navigate to="/s/me" replace />` (`index.tsx:131-134`).
+- **`/spaces` sits outside `AppShellLayout`** intentionally (`index.tsx:102-107`): it renders its own full-viewport chrome (logo header + grid). Wrapping it in the shell would double-render the header.
 - **`isPersonal` flips read-only:** `CurrentSpaceProvider` forces `myRole:"viewer"` so every existing `PermissionGate` in space-scoped pages hides mutation CTAs. The `SpaceLayout` nav is also trimmed to `Overview / Accounts / Transactions / Analytics`.
 - **`?from=` is the only way to deep-link after login.** `ProtectedRoute` writes it; `GuestOnlyRoute` reads it. Login pages don't manipulate it explicitly.
 - **`LAST_SPACE_KEY` lives in `CurrentSpaceProvider.tsx:33`**, not in `personalSpace.ts`. Importers reach into the provider module to share the key.

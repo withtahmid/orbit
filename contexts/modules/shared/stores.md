@@ -9,7 +9,7 @@
 - `apps/web/src/stores/ForgotPasswordStore.ts` — same shape as `SignupStore` but for password reset.
 - `apps/web/src/stores/RootStore.ts` — composes the three; exports `rootStore` singleton.
 - `apps/web/src/stores/useStore.ts` — `StoreContext = createContext<RootStore>(rootStore)`, `StoreProvider = StoreContext.Provider`, `useStore()` hook.
-- Wired in `apps/web/src/App.tsx:26` as `<StoreProvider value={rootStore}>` inside the `QueryClientProvider`.
+- Wired in `apps/web/src/App.tsx:52` as `<StoreProvider value={rootStore}>` inside the `QueryClientProvider`.
 
 There is no separate `providers/StoreProvider.tsx` — the provider lives in `stores/useStore.ts`.
 

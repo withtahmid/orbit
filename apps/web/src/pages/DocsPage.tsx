@@ -297,7 +297,10 @@ function Overview() {
                 view of the household finances — no spreadsheets to merge, no &quot;did you pay the
                 internet bill?&quot; in the group chat.
             </Paragraph>
-            <ScreenshotPlaceholder label="Overview dashboard — balance trend, allocation donut, recent transactions, upcoming events" />
+            <ScreenshotPlaceholder
+                src="/docs/overview.png"
+                label="Overview dashboard — net worth, balance trend, allocation donuts, cash flow, spending heatmap, goals"
+            />
             <FeatureGrid
                 items={[
                     {
@@ -460,7 +463,10 @@ function GettingStarted() {
                     body="From space settings, invite by email and assign owner, editor, or viewer role."
                 />
             </ol>
-            <ScreenshotPlaceholder label="Signup flow + first space creation" />
+            <ScreenshotPlaceholder
+                src="/docs/signup.png"
+                label="Signup flow + first space creation"
+            />
         </section>
     );
 }
@@ -494,7 +500,10 @@ function Spaces() {
                 you&apos;re the sole owner, you have to either transfer ownership to another member
                 or delete the space first.
             </CalloutCard>
-            <ScreenshotPlaceholder label="Space picker + space settings — members table, pending invites, danger tab" />
+            <ScreenshotPlaceholder
+                src="/docs/space-settings.png"
+                label="Space settings — members table, invite by email, pending invites"
+            />
         </section>
     );
 }
@@ -523,16 +532,21 @@ function Accounts() {
                 wallet shared into the household space, visible to my partner as a viewer&quot;
                 possible.
             </CalloutCard>
-            <ScreenshotPlaceholder label="Account detail tabs: Allocations · Transactions · Shared with · Members · Settings" />
+            <ScreenshotPlaceholder
+                src="/docs/account-detail.png"
+                label="Account detail tabs: Allocations · Transactions · Shared with · Members · Settings"
+            />
             <Paragraph>
-                The top-level{" "}
+                Each space&apos;s <strong>Accounts</strong> page opens with a ledger header — net
+                worth as the hero number, with assets / locked / liabilities totals beside it — over
+                a full-width distribution bar showing where your holdings sit; click a segment to
+                jump into that account. The top-level{" "}
                 <Link to={ROUTES.myAccounts} className="od-link">
                     My Accounts
                 </Link>{" "}
-                page shows every account you can access across every space you&apos;re in, grouped
-                by owner, with links straight into each space&apos;s detail view. Its summary strip
-                carries your net worth, per-type totals, and a distribution bar showing where your
-                holdings sit.
+                page lists every account you can access across every space you&apos;re in, grouped
+                by type, each showing your role and chips linking straight into each space&apos;s
+                detail view.
             </Paragraph>
         </section>
     );
@@ -590,7 +604,10 @@ function Envelopes() {
                     body="True indulgences and big one-off upgrades: premium electronics, non-essential furniture, expensive leisure."
                 />
             </div>
-            <ScreenshotPlaceholder label="Envelopes page — cards showing utilization, cadence, remaining" />
+            <ScreenshotPlaceholder
+                src="/docs/budgets.png"
+                label="Budgets page — envelope gauges with cadence badges, goal progress, and month summary"
+            />
         </section>
     );
 }
@@ -606,12 +623,18 @@ function Categories() {
                 The two are recorded independently on every transaction.
             </Paragraph>
             <Paragraph>
-                You can rename a category, restyle it, or move it to a different parent. All of it
-                is non-destructive: existing transactions keep both the category and the envelope
-                they were saved with, so reorganizing your category tree never rewrites historical
-                analytics.
+                The Categories page is a two-pane workbench: a searchable tree on the left, an
+                inspector on the right. Rename a category, restyle its color and icon, set its
+                priority tier, or move it under a different parent — by drag-and-drop or from the
+                inspector. All of it is non-destructive: existing transactions keep both the
+                category and the envelope they were saved with, so reorganizing your tree never
+                rewrites historical analytics. Deleting is reserved for never-used leaf categories —
+                anything with history gets renamed or re-nested instead.
             </Paragraph>
-            <ScreenshotPlaceholder label="Categories tree with edit / move-parent actions" />
+            <ScreenshotPlaceholder
+                src="/docs/categories.png"
+                label="Categories workbench — searchable tree with drag-and-drop re-parenting and inspector panel"
+            />
         </section>
     );
 }
@@ -636,13 +659,15 @@ function Transactions() {
                 />
                 <TxTypeCard
                     type="Adjustment"
-                    body="Reconcile a balance discrepancy. Enter the correct new balance and Orbit computes + records the delta."
+                    body="Reconcile a balance discrepancy. Enter the correct new balance and Orbit computes + records the delta, tagged with a reason (bank correction, missed transaction, rounding/FX)."
                 />
             </div>
             <Paragraph>
-                Everything is editable after the fact — click the pencil icon on any row in the
-                Transactions page. Delete-permission is the creator or a space editor/owner. Balance
-                and envelope numbers recompute automatically.
+                Click any row to open its full detail sheet. If you recorded the transaction, a
+                pencil lets you edit everything — amount, date, accounts, category, envelope, event
+                — and delete it; balances and envelope numbers recompute automatically. The one
+                exception: a transfer&apos;s fee row is locked on its own — edit the parent transfer
+                to change the fee.
             </Paragraph>
             <div className="od-grid-2">
                 <InfoCard
@@ -661,7 +686,21 @@ function Transactions() {
                     title="Cash flow follows the accounts"
                     body="Cash flow, period net, balance trend, and the spending heatmap all read from the accounts shared into the space you're viewing. If an account is shared into two spaces, both spaces see every inflow and outflow on that account. An account you didn't share stays private — no info leaks to spaces that can't see it."
                 />
+                <InfoCard
+                    title="Dates in app time"
+                    body="The date picker defaults to right now, with Now / Yesterday quick chips, a calendar, and steppable hour/minute controls. Every timestamp is wall-clock in the app timezone, so all members see the same date on the same transaction."
+                />
+                <InfoCard
+                    title="Balance after"
+                    body="Every row on the Transactions page shows the account balance after that transaction (transfers show both legs). Filter to a single account and the list becomes a statement — one clean running balance per row, always reflecting the account's full history."
+                />
             </div>
+            <Paragraph>
+                The Transactions page itself is a filterable statement: search by description,
+                location, or amount; narrow by period, type, envelope, account, category, event, or
+                amount range; and scroll an infinite day-grouped list with in / out / net totals for
+                whatever slice you&apos;ve filtered to.
+            </Paragraph>
             <CalloutCard title="Pinned defaults">
                 Pin the values you reach for most so the new-transaction form opens pre-filled. Your{" "}
                 <strong>account</strong> pin is personal — every member keeps their own default
@@ -670,13 +709,16 @@ function Transactions() {
                 a field to set or clear a default; clear it anytime.
             </CalloutCard>
             <Paragraph>
-                You can attach image receipts to any transaction. See{" "}
+                You can attach receipts (images or PDFs) to any transaction. See{" "}
                 <a href="#attachments" className="od-link">
                     Attachments &amp; receipts
                 </a>{" "}
                 below for how the upload flow works and who can see what.
             </Paragraph>
-            <ScreenshotPlaceholder label="Transactions page with filter bar, edit sheet, receipt attachments, spent-by column" />
+            <ScreenshotPlaceholder
+                src="/docs/transactions.png"
+                label="Transactions page — search, period and type filters, envelope/account/category chips, balance-after column"
+            />
         </section>
     );
 }
@@ -688,8 +730,8 @@ function Events() {
             <Paragraph>
                 Events are named time-bound groupings — a wedding, a trip, a renovation. Attach any
                 transaction to an event and later slice the ledger by it to see the full cost and
-                cashflow of the occasion. You can also attach image files directly to an event
-                (tickets, confirmations, photos) — see{" "}
+                cashflow of the occasion. You can also attach files directly to an event (tickets,
+                confirmations, photos) — see{" "}
                 <a href="#attachments" className="od-link">
                     Attachments
                 </a>
@@ -703,17 +745,29 @@ function Events() {
                 a late receipt comes in.
             </CalloutCard>
             <CalloutCard title="Estimated budget">
-                Optionally set an <strong>estimated amount</strong> on the event. The event detail
-                page tracks total spend vs estimate with an over/under chip, so you can answer
-                &quot;how badly did we blow the wedding budget&quot; without doing arithmetic in
-                your head. Leave it blank for events you&apos;re not tracking against a target.
+                Optionally set an <strong>estimated amount</strong> on the event. The events list
+                shows a progress bar with how much is left (or how far over you went), and the
+                detail page adds a radial budget gauge plus a pace line on the spending timeline —
+                so you can answer &quot;how badly did we blow the wedding budget&quot; at a glance.
+                Leave it blank for events you&apos;re not tracking against a target.
             </CalloutCard>
             <Paragraph>
-                The dedicated <strong>event detail</strong> page shows every transaction tagged to
-                the event in one place, with totals broken down by income / expense and a quick
-                close / reopen toggle in the corner.
+                The dedicated <strong>event detail</strong> page rolls the whole occasion up: stat
+                tiles (spent, received, net, average per day, busiest day), a drillable category
+                donut, a cumulative spending timeline with daily volume bars, top spending
+                locations, and a searchable, filterable list of every transaction tagged to the
+                event — with a quick close / reopen toggle in the corner. The events list itself
+                adds a year timeline, an All / Active / Closed filter, and per-event spend and
+                estimate chips.
             </Paragraph>
-            <ScreenshotPlaceholder label="Events page — active and closed events with estimate chips; detail page with transaction roll-up" />
+            <ScreenshotPlaceholder
+                src="/docs/events.png"
+                label="Events page — year timeline, estimate progress bars, and All / Active / Closed filter"
+            />
+            <ScreenshotPlaceholder
+                src="/docs/event-detail.png"
+                label="Event detail — budget gauge, category donut, and cumulative spending timeline"
+            />
         </section>
     );
 }
@@ -728,18 +782,18 @@ function Attachments() {
                 icon={Paperclip}
             />
             <Paragraph>
-                Attach images to transactions (receipts) and to events (tickets, confirmations,
-                photos). Uploads go straight from your browser to secure storage, so they don&apos;t
-                slow the app down.
+                Attach images or PDFs to transactions (receipts) and to events (tickets,
+                confirmations, photos). Uploads go straight from your browser to secure storage, so
+                they don&apos;t slow the app down.
             </Paragraph>
             <div className="od-grid-3">
                 <InfoCard
                     title="Transaction receipts"
-                    body="Images up to 10 MB each. Visible to any member of the transaction's space."
+                    body="Images or PDFs up to 20 MB each. Visible to any member of the transaction's space."
                 />
                 <InfoCard
                     title="Event attachments"
-                    body="Images up to 10 MB each. Visible to any member of the event's space."
+                    body="Images or PDFs up to 20 MB each. Visible to any member of the event's space."
                 />
                 <InfoCard
                     title="Profile avatars"
@@ -751,7 +805,10 @@ function Attachments() {
                 time you view an attachment, so sharing a link outside the app won&apos;t leak
                 access. Remove an attachment and the file is deleted straight away.
             </Paragraph>
-            <ScreenshotPlaceholder label="Transaction detail sheet — receipt thumbnails with add / remove controls" />
+            <ScreenshotPlaceholder
+                src="/docs/transaction-sheet.png"
+                label="Transaction detail sheet — full details with the attachments area and add-file control"
+            />
         </section>
     );
 }
@@ -787,12 +844,18 @@ function Allocations() {
                 accounts independently reflect where the cash actually moved.
             </Paragraph>
             <Paragraph>
-                The <strong>Budget this month</strong> page gives you a single screen to set every
-                envelope at once — last month&apos;s actual, last month&apos;s budget, and a fresh
-                column for this month. Envelopes are space-wide budget intent; you never have to pin
-                them to a particular account.
+                The <strong>Budget this month</strong> page gives you a single screen to plan every
+                monthly envelope at once. Each card shows last month&apos;s spend against its plan
+                and your three-month average, with one-tap chips to copy either into this
+                month&apos;s amount — plus a live verdict of how much stays free (or how far
+                over-budgeted you are) after you save. Past months open in review mode, with an
+                unlock step for reconciliation. Envelopes are space-wide budget intent; you never
+                have to pin them to a particular account.
             </Paragraph>
-            <ScreenshotPlaceholder label="Budget this month — bulk-edit screen with last actual / last budget / this budget columns" />
+            <ScreenshotPlaceholder
+                src="/docs/budget-month.png"
+                label="Budget this month — per-envelope planning cards with last month, average, and quick-set chips"
+            />
         </section>
     );
 }
@@ -824,41 +887,62 @@ function Analytics() {
     return (
         <section className="od-section">
             <SectionHeader id="analytics" title="Analytics" icon={BarChart3} />
-            <Paragraph>Eight dedicated analytics views, all period-filterable:</Paragraph>
+            <Paragraph>
+                Eight dedicated analytics views, each with its own period selector:
+            </Paragraph>
             <ul className="od-list">
                 <li>
-                    <strong>Cash flow</strong> — income vs expense by day / week / month
+                    <strong>Cash flow</strong> — income vs expense by month, with a savings-rate
+                    trend and a per-month top-category breakdown
                 </li>
                 <li>
-                    <strong>Categories</strong> — spend by category with subtree roll-up
+                    <strong>Spending trends</strong> — cumulative pace vs last period and your
+                    typical shape, projection to period end, daily burn, YoY
                 </li>
                 <li>
-                    <strong>Envelopes</strong> — utilization across your buckets
+                    <strong>Category spending</strong> — drillable donut with subtree roll-up, tree
+                    or flat mode, per-category trend lines
                 </li>
                 <li>
-                    <strong>Balance</strong> — running total balance over time
+                    <strong>Envelope utilization</strong> — liquid-fill gauges, on-pace vs
+                    trending-over, cumulative and year-to-date trends
                 </li>
                 <li>
-                    <strong>Heatmap</strong> — daily expense calendar
+                    <strong>Balance history</strong> — total or per-account balance over time, with
+                    day / week / month / year buckets
                 </li>
                 <li>
-                    <strong>Trends</strong> — projection vs prior period, daily burn rate, YoY
+                    <strong>Spending calendar</strong> — twelve months of daily intensity with
+                    recurring-bill markers, weekday and heaviest-week breakdowns
                 </li>
                 <li>
-                    <strong>Anomalies</strong> — recurring-bill changes, category outliers, spending
-                    shape
+                    <strong>Anomalies &amp; signals</strong> — outlier transactions,
+                    recurring-charge changes, broken patterns, streaks
                 </li>
                 <li>
-                    <strong>By priority</strong> — essential / important / discretionary / luxury
-                    split
+                    <strong>By priority</strong> — must-spend vs want-spend from the essential /
+                    important / discretionary / luxury tiers
                 </li>
             </ul>
+            <Paragraph>
+                Most views add a <strong>cash vs operational</strong> toggle (count transfer
+                principal, or true income/expense only) and shareable envelope / account / category
+                filters, and the charts drill straight through — click a donut slice, a calendar
+                day, or a table row to land on exactly those transactions.
+            </Paragraph>
             <Paragraph>
                 A standalone <strong>Year report</strong> lives outside the analytics index — a
                 12-column envelope × month grid showing planned vs spent for every envelope across
                 the year, with the overspend total per row.
             </Paragraph>
-            <ScreenshotPlaceholder label="Analytics index with the 8 sub-view cards" />
+            <ScreenshotPlaceholder
+                src="/docs/analytics.png"
+                label="Analytics index with the 8 sub-view cards"
+            />
+            <ScreenshotPlaceholder
+                src="/docs/analytics-heatmap.png"
+                label="Spending calendar — twelve months at a glance with intensity shading, recurring-bill dots, and the year-peak ring"
+            />
         </section>
     );
 }
@@ -900,7 +984,10 @@ function MyMoney() {
                 something, jump into a real space via the switcher (or click any row&apos;s space
                 chip).
             </Paragraph>
-            <ScreenshotPlaceholder label="My money virtual space — overview, analytics, and transactions unioned across every space you're in" />
+            <ScreenshotPlaceholder
+                src="/docs/my-money.png"
+                label="My money virtual space — overview, analytics, and transactions unioned across every space you're in"
+            />
         </section>
     );
 }
@@ -962,7 +1049,10 @@ function Profile() {
                 The one refusal: if you&apos;re the sole owner of any space, transfer ownership or
                 delete that space first. Spaces with another owner continue to exist without you.
             </CalloutCard>
-            <ScreenshotPlaceholder label="Profile settings — avatar uploader, name/email forms, password card, delete-account flow" />
+            <ScreenshotPlaceholder
+                src="/docs/profile.png"
+                label="Profile settings — avatar uploader, name/email forms, password card, delete-account flow"
+            />
         </section>
     );
 }
@@ -992,7 +1082,7 @@ function Faq() {
                 />
                 <FaqItem
                     q="Can I edit a transaction after recording it?"
-                    a="Yes. Everything is editable — amount, date, account, category, envelope, event, description. Balances and envelope usage recompute automatically."
+                    a="Yes — if you recorded it. Open the row's detail sheet and hit the pencil: amount, date, account, category, envelope, event, and description are all editable, and balances and envelope usage recompute automatically. Transfer-fee rows are edited through their parent transfer."
                 />
                 <FaqItem
                     q="What happens when I delete an account?"
@@ -1008,7 +1098,7 @@ function Faq() {
                 />
                 <FaqItem
                     q="How big can a receipt attachment be?"
-                    a="Images up to 10 MB for each transaction or event attachment; profile avatars up to 5 MB. Uploads go directly from your browser, so the app stays fast even on larger files."
+                    a="Images or PDFs up to 20 MB for each transaction or event attachment; profile avatars up to 5 MB. Uploads go directly from your browser, so the app stays fast even on larger files."
                 />
                 <FaqItem
                     q="Who can see a receipt I attach to a transaction?"
