@@ -36,12 +36,8 @@ const RING_RATIO = 0.62;
 /**
  * Editorial-dark donut chart, recharts-based (same `Pie`/`Cell`/`Sector`
  * primitives as the shared `Donut` and the event category donut) — same
- * geometry, same rounded/padded look, so this one no longer stands out as
- * a separate, thicker, sharp-edged implementation. Drillable slices get a
- * thin outer halo ring (a second `Pie` layer sharing the same angular
- * partitioning as the main ring, so it always lines up) that brightens on
- * hover, signalling "click to descend." Pairs with a chip-style legend
- * below the chart that surfaces a `>` chevron for drillable items.
+ * geometry, same rounded/padded look. Pairs with a chip-style legend below
+ * the chart that surfaces a `>` chevron for drillable items.
  */
 export function DrillableDonut({
     slices,
@@ -124,33 +120,6 @@ export function DrillableDonut({
                                     style={{
                                         cursor: s.drillable || onSelect ? "pointer" : "default",
                                     }}
-                                />
-                            ))}
-                        </Pie>
-                        {/* Drillable halo — a thin hint ring just outside the
-                            main ring (mirrors the original hand-rolled
-                            version's 1.5px stroke, not a thick second band —
-                            a wide filled arc reads as a duplicate donut when
-                            several adjacent slices are all drillable).
-                            Shares the exact same `data`/`paddingAngle` as the
-                            main ring so its slices' angles always line up;
-                            only drillable cells get a visible fill. */}
-                        <Pie
-                            data={slices}
-                            dataKey="value"
-                            nameKey="name"
-                            innerRadius="90%"
-                            outerRadius="91.5%"
-                            paddingAngle={1.5}
-                            stroke="none"
-                            isAnimationActive={false}
-                        >
-                            {slices.map((s) => (
-                                <Cell
-                                    key={s.id}
-                                    fill={s.drillable ? s.color : "transparent"}
-                                    fillOpacity={s.drillable ? (hoverId === s.id ? 0.75 : 0.3) : 0}
-                                    stroke="none"
                                 />
                             ))}
                         </Pie>

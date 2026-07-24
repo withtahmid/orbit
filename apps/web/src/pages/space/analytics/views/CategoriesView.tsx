@@ -249,7 +249,9 @@ export default function CategoriesView() {
                 });
             }
         }
-        return slices;
+        // Match `rankRows`' ordering — largest share first, so the donut
+        // and the ranked list next to it always agree on order.
+        return slices.sort((a, b) => b.value - a.value);
     }, [focus, focusChildren, rootRows, childrenByParent]);
 
     const centerValue = focus ? focus.subtreeTotal : rootTotal;
