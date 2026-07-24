@@ -6,7 +6,8 @@
 > fact here contradicts the code, the code wins — flag the drift so the
 > spec gets updated.
 
-**Last rewritten:** 2026-04-21. Orbit is deployed to production at
+**Last rewritten:** 2026-04-21. **Last synced:** 2026-07-24. Orbit is
+deployed to production at
 [orbit.withtahmid.com](https://orbit.withtahmid.com).
 
 ---
@@ -20,7 +21,7 @@ Orbit is split across three managed platforms, each doing one job well:
 | Web app | Cloudflare Pages | Pre-built Vite bundle from `apps/web/dist` | [orbit.withtahmid.com](https://orbit.withtahmid.com) |
 | tRPC API | Vercel (serverless) | `apps/server` compiled ESM, exported from [`index.mts`](../apps/server/src/index.mts) as `export default app` | `VITE_BACKEND_URL` (injected at web build) |
 | Object storage | Cloudflare R2 | Avatars, attachments, exported reports — bucketed by `purpose/<uuid>` R2 keys | `R2_BUCKET`, optional public base via `R2_PUBLIC_URL_BASE` |
-| Database | Managed Postgres 18 | All tables in `apps/server/src/db/kysely/migrations/` | `DATABASE_URL` |
+| Database | Managed Postgres (Neon, **pooled** `-pooler` endpoint) | All tables in `apps/server/src/db/kysely/migrations/` (through 050) | `DATABASE_URL` |
 | Email | SMTP provider | Transactional (verification, welcome, password reset) | `SMTP_*` env |
 
 **Why this split**: the web bundle is pure static, so Pages is the right
@@ -56,7 +57,8 @@ migrations — migrations are a human-initiated step.
 apps/server          tRPC API
 apps/web             Vite/React SPA
 packages/*           workspace stubs (eslint, tsconfig, ui) — intentionally thin
-contexts/            non-code context (product spec, engineering spec)
+contexts/            non-code context (product spec, engineering spec,
+                     modules/ per-feature deep-dives, router-context.md)
 .github/workflows/   deploy-server.yml, deploy-web.yml
 docker-compose.yml   orbit + postgres + maildev + metabase
 ```
@@ -120,10 +122,28 @@ Reads skip the transaction wrapper; they use `ctx.services.qb` directly.
 
 ### 3.6 Postgres session setup
 
-Every pool connection runs `SET TIME ZONE <APP_TIMEZONE>` so
-`DATE_TRUNC('month', NOW())` and `::date` casts all resolve in the app
-zone. `APP_TIMEZONE` default is `Asia/Dhaka` (UTC+06:00, no DST).
-Changing the env requires a cold restart.
+The session timezone is applied via the **libpq startup `options`
+parameter** (`-c timezone=<APP_TIMEZONE>`) in
+[`db/index.mts`](../apps/server/src/db/index.mts) — **not** a
+post-connect `SET TIME ZONE`. Neon's transaction-pooling `-pooler`
+endpoint multiplexes sessions, so a post-connect `SET` lands on
+whatever backend happened to serve that query and silently doesn't
+stick; startup `options` are baked into each backend at connect time
+and the pooler honors them. This distinction caused a real production
+bug: allocation `period_start` dates written under a GMT session
+drifted to the previous month's last day (repaired by migration 049).
+`APP_TIMEZONE` is validated against a plain-IANA-name pattern before
+interpolation, and the pool verifies the effective session zone after
+setup, logging loudly on mismatch. With the zone pinned,
+`DATE_TRUNC('month', NOW())` and `timestamptz::date` casts resolve in
+the app zone. Default is `Asia/Dhaka` (UTC+06:00, no DST); changing
+the env requires a cold restart.
+
+Related read-side rule: SQL that matches a JS `Date` param against a
+`date` column must cast `${param}::timestamptz::date`, never bare
+`::date` — pg serializes the param as text, and text→date truncates
+with **no** tz conversion (see `resolveEnvelopePeriodBalance`,
+`spaceSummary`, `personal.summary`).
 
 ### 3.7 Triggers & computed state
 
@@ -206,6 +226,14 @@ Enforced in-DB (not just app code):
 
 - `transactions` CHECK constraints gate the four type shapes (see
   product spec §3.6).
+- `transactions_envelop_check` (migration 041): an expense must carry
+  an `envelop_id`; other types may not require one. The envelope lives
+  on the transaction, frozen at insert — categories carry no envelope
+  (041 decoupled, 050 dropped the `default_envelop_id` prefill hint).
+- `transactions.envelop_id` is `ON DELETE RESTRICT`;
+  `transactions.parent_transfer_id` (migration 042 — set on a
+  transfer's fee expense row) is `ON DELETE CASCADE`, so deleting a
+  transfer deletes its fee row.
 - `events` CHECK `end_time > start_time`.
 - `envelops.cadence` CHECK `in ('none', 'monthly')`.
 - `envelops` CHECK `(target_amount IS NULL AND target_date IS NULL) OR
@@ -223,8 +251,8 @@ Enforced in-DB (not just app code):
   `envelop_allocations.created_by`
   (migration 027) — users who authored ledger rows cannot be silently
   deleted.
-- `ON DELETE RESTRICT` on `expense_categories.parent_id` and
-  `.envelop_id`.
+- `ON DELETE RESTRICT` on `expense_categories.parent_id` (categories
+  reference no envelope — see above).
 
 ### 4.5 Budgeting model (envelopes, allocations, goals)
 
@@ -259,13 +287,20 @@ the one-row rule. Dropped columns vs. the old schema:
 
 **Allocate / deallocate** —
 [`envelop.createAllocation`](../apps/server/src/procedures/envelop/createAllocation.mts)
-takes a signed `amount` (positive allocates, negative deallocates) and
-performs an **accumulating UPSERT** (`amount = amount + delta`) on the
-single period row, under a `FOR UPDATE` lock on the envelope row so two
-concurrent pulls can't both pass the deallocation guard against a stale
-balance. Allocating is unguarded (over-allocation is intent, surfaced as
-a soft "planned > funded" status); deallocating can't pull below the
-period's current remaining.
+takes a signed `amount` (positive allocates, negative deallocates) plus
+an optional `periodStart` (the month-budget editor writes non-current
+months) and performs an **accumulating UPSERT** (`amount = amount +
+delta`) on the single period row, under a `FOR UPDATE` lock on the
+envelope row so two concurrent pulls can't both pass the deallocation
+guard against a stale balance. Allocating is unguarded (over-allocation
+is intent, surfaced as a soft "planned > funded" status); deallocating
+is guarded only by `allocated ≥ 0` — pulling the budget below what's
+already *spent* is a legal planning edit (an overspent envelope holds
+no cash, so the `GREATEST(0, …)` clamp keeps the unallocated pool
+correct regardless). The stored `period_start` is written as an
+explicit APP_TZ month-start **date string** (`appTzMonthStartString`)
+so it can't drift with the session timezone (see §3.6 and migration
+049); reads match it via `::timestamptz::date`.
 
 **Transfer** —
 [`allocation.transfer`](../apps/server/src/procedures/allocation/transfer.mts)
@@ -335,6 +370,13 @@ tRPC serializes `Date → string` over HTTP. Always `new Date(resp.field)`
 before handing to `date-fns`. For display, prefer
 [`formatInAppTz`](../apps/web/src/lib/formatDate.ts) which applies
 `APP_TIMEZONE` wall-clock so everyone sees the same month boundaries.
+For *reading or constructing* wall-clock fields from an absolute `Date`
+(date pickers, month math), use the APP_TZ getters in
+[`@/lib/dates`](../apps/web/src/lib/dates.ts) —
+`getAppTzYear/Month/Date/Day/Hours/Minutes`, `makeAppTzDate`,
+`addMonthsClamped` — never native `Date.getHours()` / `setFullYear()`,
+which run in the browser's zone and drift for users outside Asia/Dhaka
+(`TransactionDatePicker` is the reference implementation).
 
 ### 5.5 Routing
 
@@ -430,13 +472,17 @@ caller's owned-account spend — "my slice" of each shared envelope.
 [`procedures/personal/`](../apps/server/src/procedures/personal/),
 composed by
 [`routers/personal.mts`](../apps/server/src/routers/personal.mts)):
-`summary`, `cashFlow`, `topCategories`, `categoryBreakdown`,
-`envelopeUtilization`, `balanceHistory`,
-`spendingHeatmap`, `accountDistribution`,
-`transactions` (full filter parity with `transaction.list`,
-snake-case shape matching `transaction.listBySpace` so consumers
-render unchanged), `listCategories`, `ownedAccounts` — alongside the
-overview-card, `trends.*`, and `anomalies.*` twins. There is **no**
+`summary`, `todaySummary`, `cashFlow`, `topCategories`,
+`categoryBreakdown`, `categoryMonthlyTrend`, `envelopeUtilization`,
+`balanceHistory`, `spendingHeatmap` (with the same
+`cash`/`operational` mode as the analytics twin), `accountDistribution`,
+`spaceBreakdown` (personal-only, no analytics twin — per-space split of
+owned-account net worth for the My-money overview band),
+`transactions` + `transactionFilteredTotals` (full filter parity with
+`transaction.list` / `transaction.filteredTotals`, snake-case shape
+matching `transaction.listBySpace` so consumers render unchanged),
+`listCategories`, `ownedAccounts` — alongside the overview-card,
+`trends.*`, and `anomalies.*` twins. There is **no**
 `planProgress` or `accountAllocation` twin (plans and per-account
 allocation were removed in migrations 046/048), and no reckoning
 procedures.
@@ -616,6 +662,7 @@ Source of truth is
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | `""` | R2 IAM creds |
 | `R2_BUCKET` | `""` | R2 bucket name |
 | `R2_PUBLIC_URL_BASE` | optional | Public CDN base — if unset, signed URLs are used for GET |
+| `WEB_URL` | `http://localhost:5173` | Web-app origin used to build invite-acceptance links in emails |
 
 Web build picks up `VITE_BACKEND_URL` at `pnpm --filter web build` time
 (injected as a GitHub Actions secret).
@@ -680,9 +727,11 @@ Web build picks up `VITE_BACKEND_URL` at `pnpm --filter web build` time
   (018), balance resolvers, `allocation.transfer` atomicity.
 - **No error tracker.** Sentry or similar on both API and web would pay
   back quickly.
-- **Cold-start cost on Vercel** is fine today but grows with the pg
-  pool; consider a managed pooler (PgBouncer / Neon) if latency p99
-  creeps up.
+- **Pooled DB endpoint quirks** — production runs against Neon's
+  transaction-pooling `-pooler` endpoint. Session state set after
+  connect does **not** stick (the `SET TIME ZONE` incident, §3.6 /
+  migration 049); any future session-level setting must go through the
+  libpq startup `options` parameter in `db/index.mts`.
 - **Orphan `pending` files** — no GC yet; pick them off with a nightly
   task that deletes files stuck in pending > 24h.
 - **Per-space timezone** — schema would need a `spaces.tz` column and

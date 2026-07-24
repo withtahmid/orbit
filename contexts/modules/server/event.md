@@ -70,6 +70,8 @@ Generated types: `Events` at `db/kysely/types.mts:98`, `EventAttachments` at `db
 ## Cross-references
 
 - `analytics.eventTotals` (`procedures/analytics/eventTotals.mts:9`) — per-event spend/income aggregates, returns `estimated_amount`, `status`, `closed_at` alongside totals. Documented in the analytics module.
-- `analytics.eventCategoryBreakdown` (`procedures/analytics/eventCategoryBreakdown.mts:13`) — per-leaf-category sums for a single event. Documented in the analytics module.
+- `analytics.eventCategoryBreakdown` (`procedures/analytics/eventCategoryBreakdown.mts`) — per-leaf-category sums for a single event. Documented in the analytics module.
+- `analytics.eventDailySpend` (`procedures/analytics/eventDailySpend.mts:20`) — per-APP_TZ-day expense/income totals for one event; powers the spend-timeline and day-of-week strip on the event detail page. Documented in the analytics module.
+- `analytics.eventTopLocations` (`procedures/analytics/eventTopLocations.mts:13`) — top spending locations for one event (case-insensitive grouping on trimmed `location`); powers the "Where it went" section. Documented in the analytics module.
 - Transaction create/update procedures call `resolveEventBelongsToSpace` and write `transactions.event_id` (`procedures/transaction/expense.mts:68`, `transfer.mts:77`, `income.mts:50`). See the transaction module doc.
 - File attachment plumbing: `procedures/file/attach.mts` exposes `attachFilesToEvent` (used at `create.mts:68` and `update.mts:100`).

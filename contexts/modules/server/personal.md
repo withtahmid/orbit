@@ -4,9 +4,9 @@
 
 ## Router
 
-- File: `apps/server/src/routers/personal.mts:42`. Top-level keys plus `trends` and `anomalies` sub-routers (mirrors `analytics`).
+- File: `apps/server/src/routers/personal.mts:43`. Top-level keys plus `trends` and `anomalies` sub-routers (mirrors `analytics`).
 
-The router docstring (`personal.mts:38-45`) states the anchoring rule explicitly: every procedure is anchored on `user_accounts.role = 'owner'` (the caller's personally-owned accounts) unioned across every space they're currently a member of.
+The router docstring (`personal.mts:35-42`) states the anchoring rule explicitly: every procedure is anchored on `user_accounts.role = 'owner'` (the caller's personally-owned accounts) unioned across every space they're currently a member of.
 
 ## Procedures
 
@@ -19,7 +19,7 @@ All `.query`, all `authorizedProcedure`. Roughly parallel to `analytics.*` but i
 
 ### Summary cards
 
-- **`personalSummary`** (`procedures/personal/summary.mts:27`) — Same shape as `analytics.spaceSummary` (`totalBalance`/`spendableBalance`/`lockedBalance` from owned accounts; envelope `allocated/consumed/remaining` with consumption restricted to owned accounts (allocations are space-wide); dual `period*`/`operational*` flow). Extras: `ownedAccountsCount`, `memberSpacesCount`. Early-return zeros when `owned.length === 0 || memberSpaces.length === 0` (`summary.mts:46`).
+- **`personalSummary`** (`procedures/personal/summary.mts:33`) — Same shape as `analytics.spaceSummary` (`totalBalance`/`spendableBalance`/`lockedBalance` from owned accounts; envelope `allocated/consumed/remaining` with consumption restricted to owned accounts (allocations are space-wide); dual `period*`/`operational*` flow). Extras: `ownedAccountsCount`, `memberSpacesCount`. Early-return zeros when `owned.length === 0 || memberSpaces.length === 0` (`summary.mts:52`).
 - **`personalTodaySummary`** (`procedures/personal/todaySummary.mts`) — Today's IN/OUT/count across owned accounts.
 
 ### Cash flow
@@ -31,7 +31,8 @@ All `.query`, all `authorizedProcedure`. Roughly parallel to `analytics.*` but i
 
 - **`personalTopCategories`** (`procedures/personal/topCategories.mts`)
 - **`personalTopCategoriesByBucket`** (`procedures/personal/topCategoriesByBucket.mts`)
-- **`personalCategoryBreakdown`** (`procedures/personal/categoryBreakdown.mts`)
+- **`personalCategoryBreakdown`** (`procedures/personal/categoryBreakdown.mts`) — Categories are space-scoped, so rows carry `spaceId`/`spaceName` rather than being merged into one cross-space tree. Recursive tree walk is cycle-guarded with a `path` array, same as the analytics twin.
+- **`personalCategoryMonthlyTrend`** (`procedures/personal/categoryMonthlyTrend.mts:16`) — Monthly time series behind `personalCategoryBreakdown` (same shape/caveats, rows also carry `month: 'YYYY-MM-DD'`, `directTotal`, `subtreeTotal`), bucketed by calendar month over `[periodStart, periodEnd)`. Input: `{ periodStart, periodEnd, accountIds? }`.
 - **`personalCategoryWoW`** (`procedures/personal/categoryWoW.mts`)
 - **`personalIncomeBreakdown`** (`procedures/personal/incomeBreakdown.mts`)
 - **`personalTopMerchants`** (`procedures/personal/topMerchants.mts`)
@@ -41,7 +42,6 @@ All `.query`, all `authorizedProcedure`. Roughly parallel to `analytics.*` but i
 
 - **`personalEnvelopeUtilization`** (`procedures/personal/envelopeUtilization.mts`) — Personal-slice envelope utilization. Allocations are space-wide (the single per-envelope+period row, monthly window-scoped or the rolling lifetime pool); consumption restricted to `source_account_id = ANY(owned)`. No carry-over. Mirrors `analytics.envelopeUtilization`.
 - **`personalEnvelopeRecentAverages`** (`procedures/personal/envelopeRecentAverages.mts`)
-- **`personalUnbudgetedTrend`** (`procedures/personal/unbudgetedTrend.mts`)
 
 ### Accounts
 
@@ -53,7 +53,7 @@ All `.query`, all `authorizedProcedure`. Roughly parallel to `analytics.*` but i
 ### Transactions
 
 - **`personalTransactions`** (`procedures/personal/transactions.mts`) — Personal twin of `transaction.listBySpace`. Input drops `spaceId` (required there) into an optional filter and adds the same set of filters: `type`, `expenseCategoryId`/`expenseCategoryIds` (+ `includeDescendants`), `envelopId`/`envelopIds`, `eventId`, `accountId`/`accountIds`, `userId`, `search`, `amountMin`/`amountMax`, `dateFrom`/`dateTo`, plus cursor + limit — same plural-wins-over-singular precedence as `transaction.listBySpace` (see that module's doc). The WHERE clause restricts to `space_id = ANY(memberSpaces)` AND at least one leg in `owned`. Account filters are additionally intersected with `ownedSet`: a requested `accountId(s)` that isn't owned by the caller is dropped, and if every requested id gets dropped the query short-circuits to an empty page rather than silently ignoring the filter. Each returned item also carries `account_balances_after` (see `transaction.md`'s balance-after helper) computed via the same `computeBalanceAfter`/`computeRowAccountBalances` helpers, but scoped to owned accounts only — the leak boundary for this feed.
-- **`personalTransactionFilteredTotals`** (`procedures/personal/transactionFilteredTotals.mts`) — Twin of `transaction.filteredTotals`, same plural/singular filter set as `personalTransactions` above (no cursor/limit/balance). Returns `{ inTotal, outTotal, net, count, avgPerDay, days }`. Same fee-folded outflow definition (transfer fees on owned-source rows count as outflow regardless of cash/operational mode).
+- **`personalTransactionFilteredTotals`** (`procedures/personal/transactionFilteredTotals.mts`) — Twin of `transaction.filteredTotals`, same plural/singular filter set as `personalTransactions` above (no cursor/limit/balance). Returns `{ inTotal, outTotal, net, count, avgPerDay, days }`. `inTotal` sums `type='income'` rows, `outTotal` sums `type='expense'` rows — transfer fees are their own expense rows since migration `042`, so they land in `outTotal` naturally.
 
 ### Spaces
 
@@ -61,7 +61,7 @@ All `.query`, all `authorizedProcedure`. Roughly parallel to `analytics.*` but i
 
 ### Heatmaps & report
 
-- **`personalSpendingHeatmap`** (`procedures/personal/spendingHeatmap.mts`)
+- **`personalSpendingHeatmap`** (`procedures/personal/spendingHeatmap.mts`) — Daily spend totals across member spaces, restricted to owned accounts. Input `{ periodStart, periodEnd, accountIds?, mode: "cash"|"operational" = "cash" }`. `cash` counts expenses plus owned-outbound cross-space transfer principal (source owned, destination NOT owned — a transfer out of your own accounts reduced your personal cash); `operational` multiplies the transfer branch to 0 so only true `type='expense'` debits count. Mirrors `personalCashFlow`'s mode split.
 - **`personalYearReport`** (`procedures/personal/yearReport.mts`)
 
 ### Recurring & anomalies
@@ -93,34 +93,34 @@ WHERE space_id = ANY(:memberSpaces)
   )
 ```
 
-(`cashFlow.mts:122-128`, `summary.mts:332-338`). The `space_id` clause prevents removed-from spaces from bleeding back in; the account clause restricts to legs the caller personally owns.
+(`cashFlow.mts:122-128`, `summary.mts:264-270`). The `space_id` clause prevents removed-from spaces from bleeding back in; the account clause restricts to legs the caller personally owns.
 
 ### Internal-transfer rule
 
-A transfer where `source_account_id = ANY(owned) AND destination_account_id = ANY(owned)` is an **internal rebalance** and is excluded from personal cash flow entirely (`cashFlow.mts:93-105`, `summary.mts:289-303`). Only the fee on such transfers counts (as outflow), because the fee money actually leaves the user's hands. This applies regardless of `mode` — internal transfers are always excluded; the `mode` switch only affects cross-space transfer principal.
+A transfer where `source_account_id = ANY(owned) AND destination_account_id = ANY(owned)` is an **internal rebalance** and is excluded from personal cash flow entirely (`cashFlow.mts:93-105`, `summary.mts:212-230`). Only the fee on such transfers counts (as outflow), because the fee money actually leaves the user's hands. This applies regardless of `mode` — internal transfers are always excluded; the `mode` switch only affects cross-space transfer principal.
 
 ### Cash vs operational
 
 Same dual semantics as `analytics.spaceSummary` / `analytics.cashFlow`:
 
 - **cash**: cross-space transfer principal counts directionally (`owned ↔ non-owned`).
-- **operational**: ALL transfer principal excluded; only `type='income'`, `type='expense'`, `type='adjustment'`, plus transfer fees.
+- **operational**: ALL transfer principal excluded; only `type='income'`, `type='expense'`, `type='adjustment'` (transfer fees are expense rows, so they always count as outflow).
 
-See `summary.mts:269-281` for the inline reference.
+See `summary.mts:212-224` for the inline reference.
 
 ### Envelope partitions
 
-Envelope `allocated` is the single space-wide allocation row for the envelope's period — monthly window-scoped, rolling/goal the lifetime NULL-period pool (`summary.mts:127-156`). Consumption is restricted to `source_account_id = ANY(owned)`. Monthly envelopes reset each period (no carry-over); held is `GREATEST(0, allocated − consumed)`. Matches the analytics module.
+Envelope `allocated` is the single space-wide allocation row for the envelope's period — monthly window-scoped, rolling/goal the lifetime NULL-period pool (`summary.mts:136-206`). Consumption is restricted to `source_account_id = ANY(owned)`. Monthly envelopes reset each period (no carry-over); held is `GREATEST(0, allocated − consumed)`. Matches the analytics module.
 
 ### Liability handling
 
-Mirrors analytics: `account_type = 'liability'` balances are sign-flipped in `total_balance`/`spendable_balance` sums (`summary.mts:76-78`). `account_type = 'locked'` is excluded from `spendable_balance` and accumulated in `locked_balance` separately.
+Mirrors analytics: `account_type = 'liability'` balances are sign-flipped in `total_balance`/`spendable_balance` sums (`summary.mts:79-90`). `account_type = 'locked'` is excluded from `spendable_balance` and accumulated in `locked_balance` separately.
 
 ## Conventions & gotchas
 
 - Personal procedures do NOT go through `resolveSpaceMembership` — the caller's identity IS the auth surface. Make sure new procedures still gate by `owned` / `memberSpaces` lookups rather than directly trusting a client-supplied `spaceId`.
 - Empty result early-return: when `owned.length === 0 || memberSpaces.length === 0`, several procedures (`personalSummary`, `personalCashFlow`) return zero-filled or empty shapes. New procedures should follow the same convention so the UI doesn't break on a fresh account.
-- Where the SQL needs a non-empty array parameter (e.g. `ANY(:ownedParam::uuid[])`), the code injects a sentinel UUID `00000000-0000-0000-0000-000000000000` rather than letting the query receive an empty array (`yearReport.mts:38-40`, `envelopeRecentAverages.mts:35-37`, `unbudgetedTrend.mts:40-42`). Postgres `ANY(empty array)` doesn't error but the alternative form sometimes does — keep the sentinel pattern.
+- Where the SQL needs a non-empty array parameter (e.g. `ANY(:ownedParam::uuid[])`), the code injects a sentinel UUID `00000000-0000-0000-0000-000000000000` rather than letting the query receive an empty array (`yearReport.mts:38-40`, `envelopeRecentAverages.mts:35-37`). Postgres `ANY(empty array)` doesn't error but the alternative form sometimes does — keep the sentinel pattern.
 - The internal-transfer exclusion uses `<>= ALL(:owned)` rather than `NOT = ANY(:owned)` because SQL's three-valued logic makes the latter behave wrong with nulls (`cashFlow.mts:96`). Don't simplify.
 - `personalListCategories`, `personalOwnedAccounts`, `personalSpaceBreakdown`, `personalAccountDistribution` have NO input arg — they read everything from `ctx.auth.user.id`. Don't add params unless you mean it.
 - `personalTransactions` filters can target a single `spaceId`. When the UI is in personal scope but wants "transactions in Space X" the same procedure serves — don't switch to `transaction.listBySpace` for that path because the personal procedure additionally applies the owned-account filter.

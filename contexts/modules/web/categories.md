@@ -1,40 +1,37 @@
 # Categories (web)
 
-> The category tree page — every expense category, pinned to an envelope, with usage-this-period and a trend delta vs the prior identical-length period. Tree-shaped CRUD (create, rename, re-parent, re-pin, delete).
+> The category workbench — every expense category in a drag-to-re-nest tree pane with a side inspector for rename / restyle / priority / re-parent / delete and an inline create form. Categories are no longer pinned to envelopes (that relation was dropped in migration 050).
 
 ## Route(s)
 - Path: `ROUTES.spaceCategories(id)` -> `/s/:spaceId/categories` (`apps/web/src/router/routes.ts:23`).
-- Lazy-imported in `apps/web/src/router/index.tsx:36`, mounted at `apps/web/src/router/index.tsx:191-194` under `SpaceLayout`.
-- Guards: `ProtectedRoute` -> `CurrentSpaceProvider` -> `SpaceLayout`. Real-space only — `SpaceLayout` hides the Categories tab in personal mode (`apps/web/src/layouts/SpaceLayout.tsx:74-77`).
+- Lazy-imported and mounted under `SpaceLayout` in `apps/web/src/router/index.tsx`.
+- Guards: `ProtectedRoute` -> `CurrentSpaceProvider` -> `SpaceLayout`. Real-space only — `SpaceLayout` hides the Categories tab in personal mode, and the page itself hard-redirects `/s/me/categories` back to the space overview (`CategoriesPage.tsx:162`), so a typed URL can't land here.
 
 ## Files
-- Main page: `apps/web/src/pages/space/categories/CategoriesPage.tsx` (~1917 lines). One big file containing the tree component, the period selector chip, all four mutation dialogs (create, edit, change parent, change envelop), and the inline `CA_STYLES` CSS. Wraps in `.orbit-design ca-root`.
+- Main page: `apps/web/src/pages/space/categories/CategoriesPage.tsx` (~2430 lines). One big file containing the `CategoriesWorkbench` (left tree pane + right inspector/create panel), the drag-and-drop re-nesting logic, the create form, and the inline CSS. Wraps in `.orbit-design ct-root` (`:536`).
 
 ## tRPC procedures consumed
-- `envelop.listBySpace` — list of envelopes for the "pinned envelope" selector (`:177`).
-- `expenseCategory.listBySpaceWithUsage` — flat list with `{ spent_total, tx_count, parent_id, envelopId, priority, ... }` for the current period (`:180`).
-- `expenseCategory.listBySpaceWithUsage` again for the previous identical-length period to compute trend deltas (`:197`); `prevById` keyed map at `:202-206`.
+- `expenseCategory.listBySpaceWithUsage` — flat list with `{ parent_id, color, icon, priority, tx_count, last_used }` (`:171`). Called once with just `{ spaceId }` — there is no period selector and no prev-period trend delta on this page anymore.
 - Mutations:
-  - `expenseCategory.create` (`:914`).
-  - `expenseCategory.update` (`:1285`) — rename + color/icon + priority.
-  - `expenseCategory.delete` (`:793`).
-  - `expenseCategory.changeParent` (`:1436`) — re-parent in the tree.
-  - `expenseCategory.changeEnvelop` (`:1541`) — re-pin to a different envelope.
+  - `expenseCategory.create` (`:1504`).
+  - `expenseCategory.update` (`:1118`) — rename + color/icon + priority (inspector).
+  - `expenseCategory.changeParent` (`:356` drag-and-drop, `:1119` inspector) — re-parent in the tree.
+  - `expenseCategory.delete` (`:1120`).
 
 ## State & mutations
-- Period state from `usePeriod()` (URL-persisted). Trend delta is computed against an "equal-span" window immediately before the current period (`:188-201`).
-- Tree assembly: `buildTree` flattens the parent_id graph into roots + children with subtree spend/tx counts; `maxDepth` controls the chevron expand affordance.
-- Totals aggregate per priority (`essential` / `important` / `discretionary` / `luxury`) using effective-priority inheritance — children inherit the nearest ancestor's `priority` (`:222-241`).
-- Every mutation runs `useInvalidateAnalytics(space.id)` (`@/lib/invalidate`) instead of hand-listing caches — this batches the cross-cutting invalidations the page needs (`:788,912,1284,1435,1540`).
-- Permission gating: `PermissionGate roles={["owner"]}` on every mutation CTA — create (`:270`), edit/delete row actions (`:606`).
+- Tree assembly: `buildTree` (`:73`) flattens the `parent_id` graph into roots + a `byId` map; orphaned `parent_id`s are treated as roots. `VisibleRow` carries `effectivePriority` / `priorityInherited` computed by walking up the ancestor chain (`:315-320`).
+- Selection model: `selectedId` opens the inspector; `creating: { parentId, seq }` swaps the panel to the create form (`seq` remounts it so "+" always starts fresh). On narrow viewports (`max-width: 1079px`) the panel becomes an overlay.
+- Dirty guard: unsaved inspector edits park navigation in `pendingAction` and require confirmation before unmounting (`guardDirty`, ~`:196`) — don't bypass it when adding new panel-switching affordances.
+- Drag-and-drop: rows are `draggable={isOwner}`; dropping on a row (or the `__root__` drop zone) fires `changeParent`. Blocked while a `changeParent` is pending (`:375`).
+- Every mutation runs `useInvalidateAnalytics()` (`@/lib/invalidate`) instead of hand-listing caches — category edits cascade through several analytics surfaces.
+- Permission gating: plain `useIsOwner()` booleans (`:168`) gate the create button, drag affordance, and inspector edit controls — this page does not use `PermissionGate`.
 
 ## Conventions & gotchas
-- A category MUST be pinned to an envelope — `changeEnvelop` is mandatory at create time and the row dropdown surface it as the primary action.
-- `priority` is optional per category; rendering uses *effective* priority via parent walk. Don't sum `byPriority` over leaves only — every node's `spent_total` contributes (`:235-238`).
-- Trend deltas hide when the previous-period span is empty; `prevById` returns `0` for missing keys, so render gating should check both the current and prev totals.
-- `useInvalidateAnalytics` is preferred here over hand-listing tRPC caches because tree edits cascade through several analytics surfaces (envelope utilization, priority breakdown, recent transactions).
-- Tree edits use `OrbitModalShell` / `OrbitField` from `@/components/orbit/OrbitModalShell` — keep new dialogs on the same shell so the visual language stays consistent inside this page.
+- **Categories are not pinned to envelopes anymore.** Migration 050 dropped the category→envelope default; there is no `expenseCategory.changeEnvelop` procedure and no envelope selector anywhere on this page. Expense forms pick the envelope directly.
+- `priority` is optional per category; rendering uses *effective* priority via parent walk — the priority dot shows an `is-inherited` style when it came from an ancestor (`:973-977`).
+- `listBySpaceWithUsage` returns usage as `tx_count` + `last_used` (all-time), not period spend — don't reintroduce period math against this proc without changing the server side.
+- The inspector uses `OrbitField` from `@/components/orbit/OrbitModalShell` — keep new form fields on the same primitives so the visual language stays consistent inside this page.
 
 ## Cross-references
-- Server: `apps/server/src/procedures/expenseCategory/*`.
-- Web: `pages/space/envelopes/*` consumes the envelopes side of the pinning relation; `lib/invalidate.ts` centralizes the cross-cutting cache-bust set used here.
+- Server: `apps/server/src/procedures/expenseCategory/*` (`changeParent`, `create`, `delete`, `listBySpace`, `listBySpaceWithUsage`, `update`).
+- Web: expense entry (`features/transactions/NewTransactionSheet.tsx`) consumes the same category list; `lib/invalidate.ts` centralizes the cross-cutting cache-bust set used here.

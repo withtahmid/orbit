@@ -29,11 +29,41 @@ Two later changes reshaped budgeting:
   now **shown** in analytics, never blocked or nagged; the primary
   remedy is a transfer between envelopes.
 
+Two structural changes from the 041–045 batch that the earlier rewrite
+under-documented:
+- **The envelope rides on the transaction, not the category**
+  (migrations 041/050). `transactions.envelop_id` is the source of
+  truth for which envelope an expense belongs to, frozen at insert
+  time. Categories are pure labels — the transitional
+  `default_envelop_id` prefill hint was dropped in migration 050;
+  reorganizing categories never rewrites spending history.
+- **Transfer fees are their own expense rows** (migration 042). The
+  inline `fee_amount` / `fee_expense_category_id` columns are gone; a
+  fee is a paired `type='expense'` transaction with
+  `parent_transfer_id` pointing at the transfer. See §11.6.
+
+Also from that batch: transaction-entry **pins** (migrations 043/044,
+§11.8) and the allocation `period_start` tz-drift repair (049).
+
 Also: full self-service account surface (`profile`, `security` pages
 with change-email / change-password / delete-account), the public
 invite-acceptance route at `/invite/:token`, the year-report page, and
 three analytics views (`trends`, `anomalies`, `priority`). Orbit is
 deployed to production at [orbit.withtahmid.com](https://orbit.withtahmid.com).
+
+**Last synced:** 2026-07-24. Since the previous sync: the Overview page
+was rebuilt as an editorial, eyebrow-sectioned dashboard (§13.5); the
+event detail page became a full dashboard (hero, stat tiles, spend
+timeline, category donut, top locations — backed by new
+`analytics.eventDailySpend` / `eventTopLocations`); the Spending
+calendar (heatmap) view was rebuilt around data-derived quantile
+buckets and a `mode: 'cash' | 'operational'` toggle;
+`analytics.categoryMonthlyTrend` + `envelopeMonthlyAllocations` were
+added; the `allocations` analytics view and `analytics.allocations` /
+`unbudgetedTrend` procedures were removed; and a family of APP_TZ date
+bugs was fixed (allocation-row matching now casts
+`::timestamptz::date`, the transaction date picker uses APP_TZ-aware
+getters — §14.2).
 
 ---
 
@@ -45,8 +75,10 @@ into a single coherent ledger:
 
 - **Ledger accounting** — accounts hold real money, transactions move it.
 - **Envelope budgeting** — named buckets (Groceries, Rent…) hold a
-  logical allocation of that money; spending is routed to envelopes via
-  categories.
+  logical allocation of that money; every expense is stamped with an
+  envelope at entry time (`transactions.envelop_id`). Categories are
+  independent labels for *what* the money bought; the envelope says
+  *which budget* it came from.
 - **Goal-based saving** — a rolling (`cadence='none'`) envelope can carry
   an optional `target_amount` / `target_date`, turning it into a goal
   bucket for long-horizon targets (House down-payment, Vacation). Goals
@@ -221,10 +253,18 @@ pages in the web app.
 ### 3.5 Categories
 
 - **`expense_categories`** — `id`, `space_id`, `parent_id` (self-FK,
-  nullable, RESTRICT on delete), `envelop_id` (NOT NULL, RESTRICT), `name`,
-  `color`, `icon`, `priority text NULL` ∈ `'essential' | 'important' |
+  nullable, RESTRICT on delete), `name`, `color`, `icon`,
+  `priority text NULL` ∈ `'essential' | 'important' |
   'discretionary' | 'luxury'` (CHECK-constrained; migration 031),
   timestamps.
+
+**Categories are pure labels — no envelope column.** Migration 041
+moved the envelope onto the transaction (`transactions.envelop_id`,
+frozen at insert time) and demoted the category's `envelop_id` to a
+`default_envelop_id` entry-form prefill hint; migration 050 dropped
+that hint entirely (pins — §11.8 — and per-form defaults prefill
+better). Reorganizing the category tree therefore never rewrites
+spending history.
 
 **Priority inheritance.** A category with `priority = NULL` inherits
 from the nearest ancestor that has a non-NULL value. A root with NULL
@@ -235,28 +275,34 @@ luxury even though its ancestor is essential). `priorityBreakdown`
 (§12) resolves the effective tier via a recursive CTE walking
 `parent_id`.
 
-**Invariant:** all categories in a subtree share the same `envelop_id`. The
-`envelop.create` and `envelop.update` procedures enforce this; the
-[`expenseCategory.changeEnvelop`](../apps/server/src/procedures/expenseCategory/changeEnvelop.mts)
-procedure atomically rewrites an entire subtree's envelope.
+There is no `changeEnvelop` procedure anymore (nothing to change —
+categories don't carry envelopes). The surviving surface is `create`,
+`update`, `delete`, `changeParent`, `listBySpace`, and
+`listBySpaceWithUsage` (list annotated with transaction usage counts
+for the Categories page).
 
 ### 3.6 Transactions
 
 - **`transactions`** — `id`, `space_id`, `created_by`, `type` ∈ `'income' |
   'expense' | 'transfer' | 'adjustment'`, `amount > 0`, `source_account_id`,
   `destination_account_id`, `description`, `location`, `expense_category_id`,
-  `event_id`, `transaction_datetime` (when it happened),
-  `created_at` (when it was recorded), `fee_amount` + `fee_expense_category_id`
-  (optional, transfers only — see §11.6).
+  `envelop_id` (migration 041 — REQUIRED for expenses, RESTRICT; the
+  envelope the money came from, frozen at insert time), `event_id`,
+  `transaction_datetime` (when it happened), `created_at` (when it was
+  recorded), and `parent_transfer_id` (migration 042, CASCADE — set on
+  the fee expense row that a transfer spawned; see §11.6).
 
 CHECK constraints (enforced in the DB):
 
-| type | source | destination | category | fee |
+| type | source | destination | category | envelope |
 | --- | --- | --- | --- | --- |
 | income | NULL | set | ignored | — |
-| expense | set | NULL | REQUIRED | — |
-| transfer | set | set, ≠ source | ignored | optional (both or neither of `fee_amount` / `fee_expense_category_id`) |
+| expense | set | NULL | REQUIRED | REQUIRED (`transactions_envelop_check`) |
+| transfer | set | set, ≠ source | ignored | — |
 | adjustment | exactly one of source/destination | | ignored | — |
+
+There are no inline fee columns — a transfer's fee is its own
+`type='expense'` row linked back via `parent_transfer_id` (§11.6).
 
 ### 3.7 Events (grouping)
 
@@ -359,7 +405,7 @@ Migrations are append-only; each has an `up` and `down`. Apply with
 | 027 | tightens `ON DELETE` to `RESTRICT` on `created_by` / `updated_by` FKs across ledger tables so users who created transactions/spaces/allocations can't be silently deleted. |
 | 028 | `files` table + `__type_file_purpose` / `__type_file_status` enums + `files_uploaded_by_idx`. Foundation for R2-backed object storage. |
 | 029 | swaps `users.avatar_url` for `users.avatar_file_id` (FK → `files`, SET NULL); adds `transaction_attachments`, `event_attachments`, `exported_reports`. |
-| 030 | transfer fees: `transactions.fee_amount` + `fee_expense_category_id`, CHECK gating to `type='transfer'`, balance-sync trigger updated so a fee debits source by `amount + fee_amount`. See §11.6. |
+| 030 | transfer fees: `transactions.fee_amount` + `fee_expense_category_id`, CHECK gating to `type='transfer'`, balance-sync trigger updated so a fee debits source by `amount + fee_amount`. **Replaced by 042** (fees became their own expense rows). See §11.6. |
 | 031 | `expense_categories.priority` CHECK in `('essential','important','discretionary','luxury')`. NULL inherits from the nearest non-NULL ancestor via recursive CTE in `priorityBreakdown`. |
 | 032 | `envelop_allocations.borrowed_link_id uuid` — groups the two rows of a "borrow from next month" pair (+amount in current period, −amount in next period of the same envelope). Partial index on non-NULL values. **Reversed by 048** (borrowing removed). |
 | 033 | `envelops.archived boolean DEFAULT false` + partial index `idx_envelops_active`. Soft-retire envelopes — they disappear from default lists / can't accept new categories / transactions, but historical data stays intact for past-period analytics. |
@@ -370,12 +416,20 @@ Migrations are append-only; each has an `up` and `down`. Apply with
 | 038 | `events.status` (`active`/`closed`), `estimated_amount`, `closed_at`. Closed events drop out of the picker but stay in history. Partial index over active events. |
 | 039 | `space_invites` table — token-credentialed invitations with rotating partial-unique index on pending rows. See §6.6. |
 | 040 | `users.deleted_at` + `users.token_version`. Soft-delete tombstone + per-user JWT-invalidation. See §3.1 + §6.7. |
+| 041 | **Decouples envelope from category.** Adds `transactions.envelop_id` (RESTRICT) + CHECK `transactions_envelop_check` (expenses must carry an envelope), backfills from the category's envelope, renames `expense_categories.envelop_id` → `default_envelop_id` (a prefill hint, later dropped by 050). See §3.5, §3.6. |
+| 042 | **Fees as expense transactions.** Adds `transactions.parent_transfer_id` (CASCADE), backfills every fee-bearing transfer into a paired `type='expense'` row, drops `fee_amount` / `fee_expense_category_id`, and swaps the balance trigger for a fee-blind version. See §11.6. |
+| 043 | `transaction_entry_pins` — per-entity pinned defaults for the transaction entry form (Account pins per-user-per-space; Envelope/Event pins space-wide). See §11.8. |
+| 044 | pin `set_by` FK → SET NULL so deleting a user doesn't strand space pins. |
+| 045 | `envelop_allocations.kind` + `effective_at` — typed-ledger experiment. **Reversed by 048** (both columns dropped). |
 | 046 | **Drops `plans` + `plan_allocations`** (goals fold into envelopes) and **adds `envelops.target_amount` + `envelops.target_date`**. `down` intentionally throws — the plans subtree isn't reconstituted. See §3.3, §3.4. |
 | 047 | CHECK `envelops_target_only_on_rolling_check` — a target may be set only when `cadence = 'none'`. Makes a stale target on a monthly envelope unrepresentable. |
 | 048 | **Simplify budgeting.** Collapses `envelop_allocations` to one absolute row per (envelope, period) — unique `(envelop_id, period_start) NULLS NOT DISTINCT`; drops `account_id` / `kind` / `effective_at` / `borrowed_link_id` (allocations now space-wide, no history); drops `envelops.carry_over` + `carry_policy` (no carry-over); drops `spaces.budget_mode` (no strict mode); drops `reckoning_acknowledgments`. Reverses 032/035/036/037. `down` is structural only — lost data is not recoverable. |
+| 049 | **Repairs tz-drifted `period_start` rows.** Rows written while a pooled session ran in GMT landed on the previous month's last day; this folds/shifts them back onto the month's 1st. Data-only, idempotent, `down` is a no-op. The going-forward fix is in `db/index.mts` (session tz via libpq startup `options` — Neon's pooler drops a post-connect `SET TIME ZONE`). |
+| 050 | **Drops `expense_categories.default_envelop_id`.** Categories become pure labels; envelope prefill now comes from pins / per-form defaults. Completes what 041 started. |
 
-**Account balance** is still maintained by the trigger from migration 018.
-Envelope balances are computed on-read only.
+**Account balance** is still maintained by the trigger from migration
+018 (rewritten fee-blind in 042 — fee rows debit through the ordinary
+expense path). Envelope balances are computed on-read only.
 
 ---
 
@@ -396,10 +450,16 @@ period. Given the envelope's cadence:
 `allocated` is read directly from the **single** allocation row for the
 period (one row per envelope per period — see §3.3), so it's the absolute
 allocated total, not a sum of deltas. `consumed` is the sum of
-`transactions` with `type = 'expense'` whose category rolls up to this
-envelope and whose `transaction_datetime` falls in the window (plus any
-transfer fees whose `fee_expense_category_id` rolls up to it).
-`remaining = allocated − consumed`.
+`transactions` with `type = 'expense'` whose `envelop_id` is this
+envelope and whose `transaction_datetime` falls in the window. Transfer
+fees need no special handling — a fee is its own expense row stamped
+with its own envelope (§11.6). `remaining = allocated − consumed`.
+
+The monthly allocation-row match casts `::timestamptz::date` (not a
+bare `::date`): pg serializes a JS `Date` param as text, and text→date
+truncates with **no** tz conversion, so an APP_TZ month-start instant
+would land on the previous month's last day and silently read
+`allocated = 0`. Going via `timestamptz` honors the session zone.
 
 There is **no carry-over and no `carriedIn`**: monthly envelopes reset
 each period; rolling envelopes are a single open window. When `consumed >
@@ -574,8 +634,12 @@ Every analytics procedure has a personal counterpart:
 | `categoryBreakdown` | `categoryBreakdown` (flat rows across spaces, tagged with space) |
 | `envelopeUtilization` | `envelopeUtilization` ("my slice" — owned-account expenses, tagged with space) |
 | `balanceHistory` | `balanceHistory` |
-| `spendingHeatmap` | `spendingHeatmap` |
+| `spendingHeatmap` | `spendingHeatmap` (same `cash`/`operational` mode — §12) |
 | `accountDistribution` | `accountDistribution` |
+| `todaySummary` | `todaySummary` |
+| `categoryMonthlyTrend` | `categoryMonthlyTrend` |
+| `transaction.filteredTotals` | `transactionFilteredTotals` |
+| — | `spaceBreakdown` (per-space split of the caller's owned-account net worth; powers the "Across N spaces" band on the My-money overview) |
 | `transaction.listBySpace` | `transactions` (snake-case shape parity, full filter parity with `transaction.list`: type, category, envelope, event, account, user, amount range, search, date range, cursor — plus `is_internal_transfer` / `direction` / space annotations) |
 | `expenseCategory.listBySpace` | `listCategories` |
 | — | `ownedAccounts` (used by the virtual `AccountsPage`) |
@@ -693,22 +757,31 @@ place**, never appended — there is no per-change history.
 ([`envelop.allocationCreate`](../apps/server/src/procedures/envelop/createAllocation.mts))
 
 The procedure takes a **signed delta** (`amount`: positive allocates,
-negative deallocates) and applies it as an **accumulating UPSERT** under a
-row lock on the period's allocation row:
+negative deallocates) plus an optional `periodStart` (so the
+month-budget editor can write past/future months) and applies it as an
+**accumulating UPSERT** under a `FOR UPDATE` lock on the envelope row:
 
-- **Positive delta** (allocating): the space's signed unallocated (§5.2)
-  must be ≥ the delta — you can't earmark cash you don't have.
-- **Negative delta** (deallocating): the envelope period's current
-  `remaining` must be ≥ |delta|, so the row never goes artificially
-  negative from a pull.
+- **Positive delta** (allocating): **no guard.** Over-allocation is
+  intent — allocating more than the space's spendable cash surfaces as
+  the soft "over-allocated" banner (§5.2's signed `unallocated` goes
+  negative), never as an error.
+- **Negative delta** (deallocating): the only guard is that the
+  period's `allocated` can't go below zero. Pulling the budget below
+  what's already spent is a legal edit of a planning number — an
+  overspent envelope holds no cash anyway (`held = GREATEST(0,
+  allocated − consumed)` is already 0), so the unallocated pool stays
+  correct.
 
-The UPSERT keys on `(envelop_id, period_start)`; a repeated idempotency
-key reads the cached response instead of applying the delta twice.
+The UPSERT keys on `(envelop_id, period_start)`; the stored
+`period_start` is written as an explicit APP_TZ month-start date string
+so it can't drift with the session timezone (see migration 049). A
+repeated idempotency key reads the cached response instead of applying
+the delta twice.
 
 ### 7.3 Consumption rule (for expense transactions)
 
-When an `expense` with `expense_category_id = C` (rolling up to envelope
-`E`) lands in period `P`, it adds to `E`'s `consumed` for `P`. If
+When an `expense` stamped with `envelop_id = E` lands in period `P`, it
+adds to `E`'s `consumed` for `P`. If
 `consumed > allocated`, the envelope's `remaining` for that period goes
 **negative** — overspend. This is a shown state, never blocked (§5.1).
 
@@ -720,9 +793,12 @@ When an `expense` with `expense_category_id = C` (rolling up to envelope
 It is **surfaced as a UI state, never blocked or nagged** — Orbit shows it
 in analytics and on envelope cards and lets the user decide.
 
-- Badge on envelope cards on the [`BudgetsPage`](../apps/web/src/pages/space/budgets/BudgetsPage.tsx).
-- Overspend alerts card on the [`OverviewPage`](../apps/web/src/pages/space/OverviewPage.tsx)
-  lists the worst offenders.
+- "N% over budget" badges and a "needs attention" strip on the
+  [`BudgetsPage`](../apps/web/src/pages/space/budgets/BudgetsPage.tsx).
+- The [`OverviewPage`](../apps/web/src/pages/space/OverviewPage.tsx)
+  surfaces overspent envelopes in its Targets → Envelope utilization
+  section, and an over-*allocation* banner when the space's signed
+  unallocated goes negative.
 - The [`BudgetDetailPage`](../apps/web/src/pages/space/budgets/BudgetDetailPage.tsx)
   shows the period's allocated / consumed / remaining with a "Transfer"
   action.
@@ -793,7 +869,7 @@ standalone `plans` table was dropped). Characteristics:
   the envelope's lifetime `allocated`.
 - `target_date` optional — UI shows "N days left" / "N days overdue."
 - Like any envelope, a goal can't be spent from directly: spend lands via
-  an expense whose category rolls up to the envelope.
+  an expense stamped with the envelope's `envelop_id`.
 
 ---
 
@@ -806,10 +882,15 @@ procedure:
 
 - [`transaction.income`](../apps/server/src/procedures/transaction/income.mts)
 - [`transaction.expense`](../apps/server/src/procedures/transaction/expense.mts)
-  — requires `expense_category_id`, validates source account isn't locked.
+  — requires `expense_category_id` **and** `envelopId` (the envelope is
+  chosen at entry time — prefilled from pins §11.8 but editable — and
+  frozen on the row), validates source account isn't locked and the
+  envelope is active.
 - [`transaction.transfer`](../apps/server/src/procedures/transaction/transfer.mts)
   — requires both accounts in the same space, source not locked, source
-  has enough balance.
+  has enough balance. Optional fee triple (`feeAmount`,
+  `feeExpenseCategoryId`, `feeEnvelopId` — all three or none) spawns a
+  paired fee expense row (§11.6).
 - [`transaction.adjust`](../apps/server/src/procedures/transaction/adjust.mts)
   — takes a target `newBalance` and writes an `adjustment` row with
   the delta.
@@ -863,58 +944,74 @@ thumbnail variants). Other purposes store the original bytes untouched.
 
 ### 11.5 Filtering ([`transaction.list`](../apps/server/src/procedures/transaction/list.mts))
 
-Supports: space, user, type, envelope (rolls up from category),
-category (with `includeDescendants` flag, default true), event, account
-(either side), search (ILIKE on description + location), amount min/max,
-date range, cursor-paginated (limit 1–200, default 50). Returns
-`{items, nextCursor}`.
+Supports: space, user, type, envelope (matched directly on
+`transactions.envelop_id`; singular `envelopId` accepts the `"__none"`
+sentinel for no-envelope rows, and a multi-select `envelopIds` array
+takes precedence), category (`expenseCategoryId` / multi-select
+`expenseCategoryIds`, with `includeDescendants` flag, default true),
+event, account (either side), search (ILIKE on description + location),
+amount min/max, date range, cursor-paginated (limit 1–200, default 50).
+Returns `{items, nextCursor}`.
+
+[`transaction.filteredTotals`](../apps/server/src/procedures/transaction/filteredTotals.mts)
+takes the same filter shape and returns aggregate income/expense/count
+totals for the current filter set (the summary strip above the
+transactions table). `personal.transactionFilteredTotals` is its
+cross-space twin.
 
 ### 11.6 Transfer fees
 
 Real-world transfers cost money: wire fees, ATM withdrawal fees, FX
-margins, card processor cuts. Orbit models these as **first-class fee
-columns on the transfer row** rather than forcing the user to record
-two transactions (a transfer plus an expense that's easy to forget and
-easy to mis-sign).
+margins, card processor cuts. Orbit records a fee as a **paired
+first-class expense transaction** spawned by the transfer — the user
+still enters it in one form, but the ledger holds two rows.
 
-**Schema** (migration 030):
+History: migration 030 first modeled fees as inline `fee_amount` /
+`fee_expense_category_id` columns on the transfer row; migration 042
+**replaced** that with the paired-row model because the inline columns
+re-introduced the category→envelope coupling eliminated by 041 and
+forced `UNION ALL` fee branches into every spend analytics query.
 
-- `transactions.fee_amount numeric(12, 2) NULL`
-- `transactions.fee_expense_category_id uuid NULL REFERENCES expense_categories(id) ON DELETE RESTRICT`
-- CHECK constraint `transactions_fee_shape_check`: both columns NULL, or
-  both populated with `fee_amount > 0 AND type = 'transfer'`.
+**Schema** (migration 042):
 
-**Balance semantics** — the
-[balance-sync trigger](../apps/server/src/db/kysely/migrations/030_add_transfer_fees.mts)
-is updated so a transfer with a fee debits the source by `amount + fee_amount`
-and credits the destination the plain `amount`. The fee is money
-leaving Orbit's books entirely (it went to the bank / ATM / processor)
-and the ledger stays internally consistent. INSERT / UPDATE / DELETE
-all respect the fee (swap OLD for NEW on updates, reverse on delete).
+- Transfers are **amount-only** — no fee columns.
+- The fee is its own `type='expense'` row with its own
+  `expense_category_id`, `envelop_id`, `source_account_id` (same as the
+  transfer's source), datetime, and `parent_transfer_id uuid REFERENCES
+  transactions(id) ON DELETE CASCADE` pointing back at the transfer —
+  deleting the transfer deletes its fee row.
 
-**Analytics** — every expense-centric analytics procedure folds
-`fee_amount` into its category sums:
+**Balance semantics** — the balance-sync trigger is **fee-blind**: the
+fee expense row debits the source through the ordinary expense path,
+so a transfer with a fee still debits the source `amount + fee` in
+total and credits the destination the plain `amount`. The fee is money
+leaving Orbit's books entirely (bank / ATM / processor).
 
-| Procedure | Where the fee lands |
-|---|---|
-| `topCategories`, `categoryBreakdown` | added to totals under `fee_expense_category_id` |
-| `envelopeUtilization` | consumed includes fees on the envelope their category rolls up to |
-| `cashFlow`, `spendingHeatmap`, `spaceSummary` (`periodExpense`) | fees count as period expense alongside regular `type='expense'` rows, **gated to transfers whose source is in the space** (see §12) |
-
-**Personal twins** — same additions on every `personal.*` counterpart.
-A transfer fee only counts as the caller's personal outflow if the
-transfer's source account is one they own (including owned → owned
+**Analytics** — no special-casing needed. A fee is an ordinary expense
+row, so `topCategories` / `categoryBreakdown` see it under its own
+category, `envelopeUtilization` counts it against its own envelope,
+and `cashFlow` / `spendingHeatmap` / `spaceSummary` count it as period
+expense scoped by its own `source_account_id` / `space_id`. Same for
+every `personal.*` twin: the fee counts as personal outflow exactly
+when its source account is caller-owned (including owned → owned
 internal transfers — the bank still took the fee).
+
+**Write path** —
+[`transaction.transfer`](../apps/server/src/procedures/transaction/transfer.mts)
+accepts an optional fee triple (`feeAmount`, `feeExpenseCategoryId`,
+`feeEnvelopId` — all three or none) and inserts the transfer plus the
+fee expense row (`description: "Fee — <desc>"`) in one DB transaction.
 
 **UI** — the Transfer form ([`NewTransactionSheet`](../apps/web/src/features/transactions/NewTransactionSheet.tsx))
 exposes an optional "There's a fee on this transfer" toggle that reveals
-the amount + category inputs and a live preview: "Source debited −1005
-/ Destination credited +1000 / Fee (lost to provider) 5.00". The edit
-form ([`EditTransactionSheet`](../apps/web/src/features/transactions/EditTransactionSheet.tsx))
-hydrates from the existing columns and lets the user clear the fee.
-Details view ([`TransactionDetailsSheet`](../apps/web/src/features/transactions/TransactionDetailsSheet.tsx))
-shows the fee amount + its category and a "Source out" line summing
-amount + fee.
+the amount + category + envelope inputs and a live preview: "Source
+debited −1005 / Destination credited +1000 / Fee (lost to provider)
+5.00". In the edit form ([`EditTransactionSheet`](../apps/web/src/features/transactions/EditTransactionSheet.tsx))
+a fee row edits as a mostly-ordinary expense — its source account is
+locked to the parent transfer's source and a banner points at the
+parent for amount/source changes. Details view
+([`TransactionDetailsSheet`](../apps/web/src/features/transactions/TransactionDetailsSheet.tsx))
+recognizes `parent_transfer_id` and shows the fee alongside its parent.
 
 **Source-dropdown rule** — the transaction form's "from" dropdowns
 (expense source, transfer source, adjustment account) only list
@@ -936,6 +1033,18 @@ overspends). Transactions always record; an overspend is simply shown in
 analytics (§5.1, §8) and resolved, if the user chooses, with a transfer
 between envelopes.
 
+### 11.8 Transaction-entry pins
+
+Pins (migrations 043/044, the `pin.*` router — `set` / `clear` /
+`listBySpace`) are per-space defaults for the transaction entry form:
+pin an Account, an Envelope, and/or an Event and the form pre-selects
+them. **Account pins are per-user-per-space** (my wallet isn't your
+default); **Envelope and Event pins are space-wide** (set by any
+editor+, visible to all members). With categories decoupled from
+envelopes (§3.5), pins are the primary envelope-prefill mechanism.
+Full behavior spec lives in
+[`contexts/modules/server/pin.md`](./modules/server/pin.md).
+
 ---
 
 ## 12. Analytics procedures
@@ -954,7 +1063,7 @@ and registered in [`routers/analytics.mts`](../apps/server/src/routers/analytics
 | `accountBalanceHistory` | same shape, narrowed to one account |
 | `netWorthHistory` | net worth (asset − liability) running total |
 | `cumulativeSpend` | running expense total in the period for the burn-down chart |
-| `spendingHeatmap` | daily expense totals for calendar heatmap |
+| `spendingHeatmap` | daily expense totals for calendar heatmaps. `mode` ∈ `cash` / `operational` — `cash` (default) counts cross-space outbound transfer principal as spend (agrees with `cashFlow`); `operational` counts only true expenses (moving money to your own savings isn't spending — the Spending calendar view requests this) |
 | `incomeBreakdown` | sources of income for the period |
 
 **Category / priority / merchants**
@@ -962,11 +1071,12 @@ and registered in [`routers/analytics.mts`](../apps/server/src/routers/analytics
 | Procedure | What it returns |
 | --- | --- |
 | `categoryBreakdown` | per-category direct + subtree totals via recursive CTE |
+| `categoryMonthlyTrend` | monthly time series behind `categoryBreakdown` — one row per category per calendar month in range, zero-filled, same filter shape, so the Categories view's trend chart always agrees with its donut |
 | `topCategories` | top N categories by spend in the window |
 | `topCategoriesByBucket` | top categories per time bucket (used by the period comparison chart) |
 | `topMerchants` | top expense locations/descriptions, derived from `location` and the first-line of `description` |
 | `categoryWoW` | week-over-week per-category deltas |
-| `priorityBreakdown` | expense per priority tier (essential / important / discretionary / luxury / unclassified) for the window. Tier lives on the category (§3.5); descendants inherit from the nearest non-NULL ancestor via a recursive CTE. Transfer principal excluded; transfer fees counted via `fee_expense_category_id` |
+| `priorityBreakdown` | expense per priority tier (essential / important / discretionary / luxury / unclassified) for the window. Tier lives on the category (§3.5); descendants inherit from the nearest non-NULL ancestor via a recursive CTE. Transfer principal excluded; a transfer fee is its own expense row (§11.6) so it lands under its own category's tier |
 
 **Envelopes / accounts**
 
@@ -974,9 +1084,12 @@ and registered in [`routers/analytics.mts`](../apps/server/src/routers/analytics
 | --- | --- |
 | `envelopeUtilization` | per-envelope `allocated` / `consumed` / `remaining` for the period (space-wide; no per-account partitions) + goal-target progress for rolling envelopes that carry a target |
 | `envelopeRecentAverages` | trailing-N-period averages used by the envelope card "typical month" line |
-| `unbudgetedTrend` | 90-day breakdown of what drained the unbudgeted pool — income, allocations, **silent overspend absorption** (the surprising one) |
-| `allocations` | flat list of allocations for the AllocationsView |
+| `envelopeMonthlyAllocations` | calendar-year allocated-per-month history for one monthly envelope — pairs with per-month spend on the envelope detail page's "Monthly spend" chart (rolling/goal envelopes have no monthly rows) |
 | `accountDistribution` | per-account balance with color/icon (powers the Overview; the Accounts page derives its own distribution bar from the account list) |
+
+(The former `allocations` and `unbudgetedTrend` procedures — and the
+web AllocationsView they powered — were removed along with the
+allocation-map analytics view.)
 
 **Events**
 
@@ -984,6 +1097,8 @@ and registered in [`routers/analytics.mts`](../apps/server/src/routers/analytics
 | --- | --- |
 | `eventTotals` | per-event expense + income totals + tx count |
 | `eventCategoryBreakdown` | per-event spend broken down by category |
+| `eventDailySpend` | per-day expense/income totals for one event (APP_TZ calendar days, active days only) — powers the event detail page's spend timeline + day-of-week strip |
+| `eventTopLocations` | top expense locations for one event, ranked by total — the "Where it went" section of the event detail page |
 
 **Trends / anomalies / yearly**
 
@@ -1014,7 +1129,7 @@ All accept `spaceId` and validate membership before running.
 | `categoryBreakdown`, `topCategories` | `space_id` | expense categories are space-local; the category tree only contains rows stamped with this space |
 | `envelopeUtilization` | `space_id` | envelopes are space entities |
 | `eventTotals` | `space_id` | events are space entities |
-| `priorityBreakdown` | account | mirrors `cashFlow`: inflow/outflow is per-account, classified via envelope's `priority` column |
+| `priorityBreakdown` | account | mirrors `cashFlow`: outflow is per-account, classified via the category's `priority` (inherited from the nearest non-NULL ancestor) |
 
 **Why account-scoped for money-flow.** The balance trigger updates
 `account_balances` based on `source_account_id` / `destination_account_id`
@@ -1032,12 +1147,17 @@ becomes purely a categorization tag for the category/envelope graph.
 **The combination table** (for any row, from Space X's viewpoint,
 where `scope = space_accounts` for X):
 
-| src ∈ scope | dst ∈ scope | Transfer → X income | Transfer → X expense | Fee (if present) |
-|---|---|---|---|---|
-| yes | yes | 0 | 0 | counts as expense (bank took it) |
-| yes | no  | 0 | `amount` | counts as expense |
-| no  | yes | `amount` | 0 | **doesn't count** (fee debited a source outside scope) |
-| no  | no  | 0 | 0 | doesn't count |
+| src ∈ scope | dst ∈ scope | Transfer → X income | Transfer → X expense |
+|---|---|---|---|
+| yes | yes | 0 | 0 |
+| yes | no  | 0 | `amount` |
+| no  | yes | `amount` | 0 |
+| no  | no  | 0 | 0 |
+
+A transfer's fee needs no column in this table anymore: it is its own
+`type='expense'` row (§11.6), so it counts as X's expense exactly when
+its source account ∈ scope — which reproduces the old inline-fee
+semantics through the ordinary expense path.
 
 - `income` counts only if destination ∈ scope.
 - `expense` counts only if source ∈ scope.
@@ -1064,11 +1184,16 @@ and are composed by [`routers/personal.mts`](../apps/server/src/routers/personal
 Every analytics procedure has a personal twin (same output shape, same
 SQL pattern, different anchor) so the pages and analytics views swap
 data sources via a single `space.isPersonal` branch:
-`summary`, `cashFlow`, `topCategories`, `categoryBreakdown`,
-`envelopeUtilization`, `balanceHistory`, `spendingHeatmap`,
-`accountDistribution`, plus `transactions` (full filter parity with
-`transaction.list`), `listCategories`, and `ownedAccounts`. See §6.5 for
-the semantics.
+`summary`, `todaySummary`, `cashFlow`, `topCategories`,
+`categoryBreakdown`, `categoryMonthlyTrend`, `envelopeUtilization`,
+`balanceHistory`, `spendingHeatmap` (same `cash`/`operational` mode),
+`accountDistribution`, `spaceBreakdown` (how the caller's owned-account
+net worth splits across their spaces — the "Across N spaces" band on
+the My-money overview), plus `transactions` +
+`transactionFilteredTotals` (full filter parity with
+`transaction.list` / `transaction.filteredTotals`), `listCategories`,
+`ownedAccounts`, and the `trends.*` / `anomalies.*` / overview-card
+twins. See §6.5 for the semantics.
 
 ---
 
@@ -1112,9 +1237,17 @@ and the ROUTES constant is in [`router/routes.ts`](../apps/web/src/router/routes
     ([`YearReportPage`](../apps/web/src/pages/space/year/YearReportPage.tsx))
     powered by `analytics.yearReport`
   - `/analytics` — index of analytics sub-views
-  - `/analytics/:view` where `view` ∈ `cash-flow | categories |
-    envelopes | balance | accounts | heatmap | allocations |
-    trends | anomalies | priority`
+  - `/analytics/:view` where `view` ∈ `cash-flow | trends |
+    categories | envelopes | balance | heatmap | anomalies | priority`
+    (the former `allocations` view was removed; account distribution
+    lives on the Accounts page and the Overview)
+  - `/events/:eventId` is a full dashboard page: hero band, stat
+    tiles, budget gauge against `estimated_amount`, cumulative spend
+    timeline + daily bars (`analytics.eventDailySpend`), drillable
+    category donut, top locations (`analytics.eventTopLocations`),
+    filterable transaction list, attachments — components in
+    [`eventCharts.tsx`](../apps/web/src/pages/space/events/eventCharts.tsx)
+    / [`eventUtils.ts`](../apps/web/src/pages/space/events/eventUtils.ts)
 
 Guards in [`router/guards/`](../apps/web/src/router/guards/):
 `ProtectedRoute`, `GuestOnlyRoute`, `PublicRoute`. Both `LoginPage`
@@ -1153,8 +1286,24 @@ All under [`apps/web/src/components/`](../apps/web/src/components/).
   optional. **`activeIndex` is passed only when hovering**; passing `-1`
   breaks recharts rendering on some versions. No white stroke between
   segments.
-- [`AllocationFlowBar`](../apps/web/src/components/shared/charts/AllocationFlowBar.tsx) —
-  horizontal stacked bars for the per-envelope allocation breakdown.
+- [`DrillableDonut`](../apps/web/src/components/shared/charts/DrillableDonut.tsx) —
+  donut with click-to-drill into a slice's children (category subtrees);
+  used by the Categories analytics view and the Overview donuts.
+- [`MultiSeriesLineChart`](../apps/web/src/components/shared/charts/MultiSeriesLineChart.tsx) —
+  shared multi-line time-series chart (one line per selected category /
+  envelope), used by the Trends, Categories, Envelopes, and Heatmap
+  analytics views.
+- [`DateRangePicker`](../apps/web/src/components/shared/DateRangePicker.tsx) +
+  `PeriodChip` + [`AnalyticsFilterBar`](../apps/web/src/pages/space/analytics/components/AnalyticsFilterBar.tsx)
+  \+ [`CategoryMultiSelect`](../apps/web/src/pages/space/analytics/components/CategoryMultiSelect.tsx) —
+  the shared filter surface for analytics views; prefer these over
+  bespoke filter UIs.
+- [`spendHeatmapColor`](../apps/web/src/lib/spendHeatmapColor.ts) — the
+  shared daily-spend heatmap color system: a single-hue amber ramp with
+  **data-derived quantile buckets** (20/40/60/80th percentiles of the
+  user's own active days, IQR-fenced so one huge day doesn't stretch
+  the scale). Used by the Overview calendar and the Spending calendar
+  view; never hardcode absolute amount thresholds.
 - [`ConfirmDialog`](../apps/web/src/components/shared/ConfirmDialog.tsx),
   [`PermissionGate`](../apps/web/src/components/shared/PermissionGate.tsx),
   [`EmptyState`](../apps/web/src/components/shared/EmptyState.tsx),
@@ -1201,21 +1350,30 @@ header buttons.
 
 ### 13.5 Overview page story
 
-The [`OverviewPage`](../apps/web/src/pages/space/OverviewPage.tsx) reads
-top-down as a narrative:
+The [`OverviewPage`](../apps/web/src/pages/space/OverviewPage.tsx) was
+rebuilt (2026-07) as a single self-styled editorial dashboard —
+`od-card` panels grouped under eyebrow labels — that always shows the
+**current month**. Top-down:
 
-1. Header with "All analytics" shortcut
-2. Attention strip — over-allocation banner + overspend alerts (conditional)
-3. 4 stat cards with month-over-month deltas
-4. Balance trend (full-width area chart, 30 days)
-5. Paired donuts — Allocation map + Top categories
-6. Cash flow (full-width bars, 3 months weekly)
-7. Month-progress bar with net-this-month + envelope-spend sidebar
-8. Envelope utilization
-9. Recent transactions + Upcoming events (7/5)
+1. Header — unallocated chip (links to Budgets), "All analytics" and
+   "New transaction" actions
+2. Today band — "today vs typical" strip (`analytics.todaySummary`)
+3. "Across your spaces" band (personal `/s/me` only —
+   `personal.spaceBreakdown`)
+4. Over-allocated banner (conditional)
+5. **Position** — stat tiles (net worth, spendable, month income /
+   expense / net) with deltas
+6. Balance trend (area chart, last 30 days) + Net worth composition
+7. **Composition** — three donuts: Where money sits (accounts),
+   Spending by envelope, By priority
+8. **Flow** — cash flow bars with metric toggle, month-progress strip,
+   Daily spend heatmap (current-month calendar on the shared amber
+   quantile ramp — §13.2), Top movers
+9. **Targets** — Envelope utilization + Goals progress
+10. Spending trends + Accounts at a glance
 
-Every section has a "Details →" chip linking to the corresponding
-analytics sub-view or the feature page.
+Every section has an "Open view →" link into the corresponding
+analytics sub-view or feature page.
 
 ### 13.6 Common bug source: `new Date()` as query input
 
@@ -1260,6 +1418,16 @@ which stringify identically across renders within the same month.
 - Date handling at UI edges: always `new Date(str)` before `date-fns`,
   because tRPC HTTP serializes `Date → string` even though the type
   claims `Date`. Seen in budgets, events, transactions.
+- **APP_TZ-aware wall-clock math**: when reading or constructing
+  wall-clock fields from an absolute `Date`, use
+  `getAppTzYear/Month/Date/Day/Hours/Minutes`, `makeAppTzDate`, and
+  `addMonthsClamped` from [`@/lib/dates`](../apps/web/src/lib/dates.ts)
+  — native `Date.getHours()` / `setFullYear()` run in the **browser's**
+  zone and silently drift the value for any user outside Asia/Dhaka.
+  [`TransactionDatePicker`](../apps/web/src/features/transactions/TransactionDatePicker.tsx)
+  is the reference implementation; the `fromInputDateTime` /
+  `toInputDateTime` round-trip stays the boundary with the form's
+  `datetime-local` string.
 - Route persistence: filter/period state is URL-synced via `useSearchParams`
   so deep-linking and back-button work.
 
@@ -1296,14 +1464,18 @@ don't do it.
    remaining. Don't re-implement on the client.
 
 **Allocations & overspend**
-7. An expense whose category rolls up to envelope E adds to E's
-   `consumed` for the transaction's period. It never writes an
-   allocation row. Allocations are space-wide (no `account_id`).
+7. An expense is stamped with its envelope at write time
+   (`transactions.envelop_id`, NOT NULL for expenses) and adds to that
+   envelope's `consumed` for the transaction's period. It never writes
+   an allocation row. Allocations are space-wide (no `account_id`).
+   Categories carry **no** envelope — reorganizing the category tree
+   must never change any envelope's consumption.
 8. Allocate/deallocate and transfer mutate the single period row via an
    accumulating UPSERT under a row lock — never append.
 9. Overspend (`allocated < consumed`) is legal state, not an error, and
-   is never blocked. Envelope consumption equals the sum of matching
-   transactions (incl. transfer fees).
+   is never blocked. Envelope consumption equals the sum of expense
+   rows stamped with the envelope (transfer fees are themselves expense
+   rows — §11.6).
 
 **Permissions**
 10. Space isolation: every procedure that reads/writes space data calls
@@ -1317,14 +1489,16 @@ don't do it.
 **Cascade**
 13. `ON DELETE RESTRICT` on:
     - `expense_categories.parent_id` (can't delete parent with children)
-    - `expense_categories.envelop_id` (can't delete envelope with
-      categories)
+    - `transactions.envelop_id` (can't delete an envelope that has
+      transactions — categories no longer reference envelopes at all)
     - `envelop_allocations.created_by`
     (Note: `envelop_allocations.account_id` no longer exists — migration
     048 dropped per-account allocation — so allocations no longer guard
     account deletion.)
 14. `ON DELETE CASCADE` on space_members, space_accounts (when account
-    unshared from space), envelops (when space deleted).
+    unshared from space), envelops (when space deleted), and
+    `transactions.parent_transfer_id` (deleting a transfer deletes its
+    fee expense row).
 
 **UI**
 15. `MoneyDisplay` is the only component that renders currency. Never
@@ -1385,8 +1559,8 @@ When reviewing a PR, run this mental scan:
 
 ### 16.2 Must-test scenarios for any allocation/transaction change
 
-1. Monthly envelope: allocate $500, spend $100 with matching category,
-   verify `(E, Jan)` remaining = $400. Roll to Feb (manually change
+1. Monthly envelope: allocate $500, record a $100 expense stamped with
+   the envelope, verify `(E, Jan)` remaining = $400. Roll to Feb (manually change
    system date or use test fixture), verify Jan preserved and Feb is a
    fresh, empty period (no carry-over).
 2. No carry-over: underspend Jan by $200, verify Feb starts at the new
@@ -1397,13 +1571,16 @@ When reviewing a PR, run this mental scan:
 4. Rebalance: with E at `−200` and a healthy envelope F at `+300`,
    transfer $200 from F to E via the transfer dialog (one upsert each).
    Verify E's overspend clears and F drops by $200.
-5. Allocate exceeding unallocated → blocked (signed unallocated must be
-   ≥ the positive delta).
+5. Allocate exceeding unallocated → **allowed** (over-allocation is
+   intent), but the space's signed unallocated goes negative and the
+   over-allocated banner appears on the Overview.
 6. Edit expense's `transaction_datetime` across months: previous month's
    consumption reverses, new month's consumption applies.
-7. Delete envelope with categories → should fail with a clear message.
-8. Deallocate more than the period's remaining → blocked (row can't go
-   artificially negative from a pull).
+7. Delete envelope that has transactions → should fail with a clear
+   message (`transactions.envelop_id` RESTRICT).
+8. Deallocate more than the period's `allocated` → blocked (the budget
+   can't go below zero). Deallocating below what's already **spent** is
+   allowed — it's a planning-number edit and frees no cash.
 9. Goal envelope: create a `cadence='none'` envelope with a
    `target_amount`; verify a target on a `monthly` envelope is rejected
    by `envelops_target_only_on_rolling_check`.
@@ -1412,7 +1589,8 @@ When reviewing a PR, run this mental scan:
 ### 16.3 Smoke test on the web
 
 - Login, space picker, space overview loads without errors
-- Overview: balance trend, allocation donut, top categories donut all
+- Overview: balance trend, the Composition donuts (Where money sits /
+  Spending by envelope / By priority), and the daily heatmap all
   render (not stuck on skeleton)
 - Click a slice — no white border artifact
 - Open envelope detail, see this period's allocated / consumed / remaining
@@ -1500,7 +1678,7 @@ implementers don't accidentally ship fixes without context.
 ```
 apps/server/src/
 ├── db/kysely/
-│   ├── migrations/         # all schema history (0001–048)
+│   ├── migrations/         # all schema history (0001–050)
 │   ├── migrator.mts        # applies migrations on pnpm migrate
 │   └── types.mts           # kysely-codegen output — don't hand-edit
 ├── procedures/
@@ -1517,7 +1695,8 @@ apps/server/src/
 │   │                       # utils/{periodWindow, resolveEnvelopePeriodBalance,
 │   │                       # resolveEnvelopActive}
 │   ├── event/              # create, update, delete, listBySpace, close/reopen
-│   ├── expenseCategory/    # create, update, delete, changeParent, changeEnvelop
+│   ├── expenseCategory/    # create, update, delete, changeParent,
+│   │                       # listBySpace, listBySpaceWithUsage
 │   ├── file/               # createUploadUrl, confirm, delete, getDownloadUrl,
 │   │                       # attach, listForTransaction, listForEvent,
 │   │                       # removeFromTransaction, shared.mts (limits)
@@ -1529,7 +1708,8 @@ apps/server/src/
 │   │                       # sendInvite, listInvites, revokeInvite,
 │   │                       # inviteInfo (public), acceptInvite (§6.6),
 │   │                       # utils/resolveSpaceMembership
-│   ├── transaction/        # income, expense, transfer, adjust, update, delete, list
+│   ├── transaction/        # income, expense, transfer, adjust, update,
+│   │                       # delete, list, filteredTotals
 │   └── user/               # updateAvatar, updateProfile, changeEmail,
 │                           # changePassword, deleteAccount (§6.7)
 ├── routers/                # one file per feature, composes procedures
@@ -1568,12 +1748,14 @@ apps/web/src/
 │   ├── ui/                 # shadcn primitives
 │   └── shared/             # Orbit-specific shared pieces
 │                           # (MoneyDisplay, EntityAvatar, UserAvatar,
-│                           # PeriodSelector, Donut, AllocationFlowBar,
+│                           # PeriodSelector, DateRangePicker, PeriodChip,
+│                           # charts/{Donut, DrillableDonut, MultiSeriesLineChart},
 │                           # RoleBadge, ConfirmDialog, ...)
 ├── hooks/                  # usePeriod, useCurrentSpace, useFileUpload,
 │                           # useSignedUrl, ...
-├── lib/                    # dates, money, entityStyle, entityIcons,
-│                           # formatDate (formatInAppTz), utils, permissions
+├── lib/                    # dates (incl. APP_TZ getters), money, entityStyle,
+│                           # entityIcons, formatDate (formatInAppTz),
+│                           # spendHeatmapColor, personalSpace, utils, permissions
 ├── stores/                 # MobX (Auth, Signup, ForgotPassword)
 └── index.css               # theme + preflight overrides
 ```
@@ -1583,7 +1765,7 @@ apps/web/src/
 ## 19. Quick reference — "where does X live?"
 
 - **I want to compute this envelope's remaining** →
-  `resolveEnvelopePeriodBalance({envelopId, accountId?, at?})`.
+  `resolveEnvelopePeriodBalance({trx, envelopId, at?})`.
 - **I want to know if a space is over-allocated** →
   `resolveSpaceUnallocated({spaceId})` (signed; negative = over).
 - **I want to show money** → `<MoneyDisplay amount={…} variant=… />`.
