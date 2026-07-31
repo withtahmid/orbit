@@ -163,21 +163,34 @@ export function OrbitField({
     hint,
     required,
     children,
-    /** Force the wrapper to render as a non-label element. Use this when
-     *  the hint slot contains its own focusable control (e.g. a Pin
-     *  toggle button) — a single <label> should not wrap two separate
-     *  interactive elements, and clicking the hint button would
-     *  otherwise also fire the label's implicit "focus first input"
-     *  behavior. */
-    interactiveHint = false,
+    /**
+     * Render the wrapper as a <div> instead of a <label>. Pass this
+     * whenever the field owns MORE than one interactive element, or one
+     * that isn't a plain text input — because a <label> forwards every
+     * click anywhere inside it to its first labelable descendant
+     * (`button`, `input`, `select`, `textarea`, …), so the whole field
+     * row silently becomes a hit target for that one control:
+     *
+     *  - the hint slot holds its own control (e.g. a Pin toggle) — a
+     *    single <label> must not wrap two separate interactive elements;
+     *  - the content holds a button rather than an input (e.g.
+     *    FileUploadField's "Add file", a colour/icon picker) — without
+     *    this, clicking the field's label text or any empty space in the
+     *    row fires that button, which for a file field means the OS file
+     *    picker opening from a stray click.
+     *
+     * Only omit it for the plain single-input case, where "click the
+     * label to focus the input" is exactly what you want.
+     */
+    noWrapperLabel = false,
 }: {
     label: ReactNode;
     hint?: ReactNode;
     required?: boolean;
     children: ReactNode;
-    interactiveHint?: boolean;
+    noWrapperLabel?: boolean;
 }) {
-    const Tag = (interactiveHint ? "div" : "label") as "div" | "label";
+    const Tag = (noWrapperLabel ? "div" : "label") as "div" | "label";
     return (
         <Tag className="oms-field">
             <span className="oms-field-row">

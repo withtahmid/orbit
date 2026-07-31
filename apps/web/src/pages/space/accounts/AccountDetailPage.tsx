@@ -139,9 +139,7 @@ export default function AccountDetailPage() {
                 description={
                     <span className="flex items-center gap-2">
                         <AccountTypeBadge type={account.account_type} />
-                        <span className="text-sm text-muted-foreground">
-                            Current balance:
-                        </span>
+                        <span className="text-sm text-muted-foreground">Current balance:</span>
                         <MoneyDisplay
                             amount={
                                 account.account_type === "liability"
@@ -174,10 +172,7 @@ export default function AccountDetailPage() {
                 </TabsContent>
 
                 <TabsContent value="shared">
-                    <SharedSpacesTab
-                        accountId={account.id}
-                        currentSpaceId={space.id}
-                    />
+                    <SharedSpacesTab accountId={account.id} currentSpaceId={space.id} />
                 </TabsContent>
 
                 <TabsContent value="transactions">
@@ -201,19 +196,26 @@ export default function AccountDetailPage() {
                                 </TableHeader>
                                 <TableBody>
                                     {txQuery.data.items.map((t) => {
-                                        const isIncoming =
-                                            t.destination_account_id === account.id;
+                                        const isIncoming = t.destination_account_id === account.id;
                                         return (
                                             <TableRow key={t.id}>
                                                 <TableCell className="text-muted-foreground">
-                                                    {formatInAppTz(
-                                                        t.transaction_datetime,
-                                                        "MMM d"
-                                                    )}
+                                                    {formatInAppTz(t.transaction_datetime, "MMM d")}
                                                 </TableCell>
                                                 <TableCell>
+                                                    {/* kysely-codegen misreads
+                                                        the transaction-type enum
+                                                        as an array; the runtime
+                                                        value is a scalar string.
+                                                        Repo-wide workaround. */}
                                                     <TransactionTypeBadge
-                                                        type={t.type as any}
+                                                        type={
+                                                            t.type as unknown as
+                                                                | "income"
+                                                                | "expense"
+                                                                | "transfer"
+                                                                | "adjustment"
+                                                        }
                                                     />
                                                 </TableCell>
                                                 <TableCell className="text-sm text-muted-foreground">
@@ -227,15 +229,11 @@ export default function AccountDetailPage() {
                                                     />
                                                 </TableCell>
                                                 <TableCell className="text-right">
-                                                    {t.account_balances_after?.[
-                                                        account.id
-                                                    ] != null ? (
+                                                    {t.account_balances_after?.[account.id] !=
+                                                    null ? (
                                                         <MoneyDisplay
                                                             amount={
-                                                                t
-                                                                    .account_balances_after[
-                                                                    account.id
-                                                                ]
+                                                                t.account_balances_after[account.id]
                                                             }
                                                         />
                                                     ) : (
@@ -268,7 +266,7 @@ export default function AccountDetailPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {(usersQuery.data ?? []).map((u: any) => (
+                                    {(usersQuery.data ?? []).map((u) => (
                                         <TableRow key={u.id}>
                                             <TableCell className="font-medium">
                                                 <span className="inline-flex items-center gap-2">
@@ -370,8 +368,7 @@ function AccountAppearanceForm({
         onError: (e) => toast.error(e.message),
     });
 
-    const dirty =
-        name.trim() !== currentName || color !== currentColor || icon !== currentIcon;
+    const dirty = name.trim() !== currentName || color !== currentColor || icon !== currentIcon;
 
     return (
         <form
@@ -471,7 +468,7 @@ function AddAccountMember({ accountId }: { accountId: string }) {
             </div>
             <div className="grid gap-2">
                 <Label>Role</Label>
-                <Select value={role} onValueChange={(v) => setRole(v as any)}>
+                <Select value={role} onValueChange={(v) => setRole(v as "owner" | "viewer")}>
                     <SelectTrigger className="w-36">
                         <SelectValue />
                     </SelectTrigger>
@@ -529,17 +526,14 @@ function SharedSpacesTab({
                     <div>
                         <CardTitle className="text-base">Spaces</CardTitle>
                         <p className="mt-1 text-xs text-muted-foreground">
-                            This account can be used in every space listed below. Each
-                            space keeps its own transactions and allocations; only the
-                            cash balance is shared.
+                            This account can be used in every space listed below. Each space keeps
+                            its own transactions and allocations; only the cash balance is shared.
                         </p>
                     </div>
                     <PermissionGate roles={["owner", "editor"]}>
                         <ShareWithAnotherSpaceDialog
                             accountId={accountId}
-                            alreadyIn={
-                                spacesQuery.data?.map((s) => s.spaceId) ?? []
-                            }
+                            alreadyIn={spacesQuery.data?.map((s) => s.spaceId) ?? []}
                         />
                     </PermissionGate>
                 </CardHeader>
@@ -549,9 +543,7 @@ function SharedSpacesTab({
                             <Skeleton className="h-14 w-full" />
                         </div>
                     ) : (spacesQuery.data ?? []).length === 0 ? (
-                        <div className="p-4 text-sm text-muted-foreground">
-                            No spaces linked.
-                        </div>
+                        <div className="p-4 text-sm text-muted-foreground">No spaces linked.</div>
                     ) : (
                         <Table>
                             <TableHeader>
@@ -669,9 +661,8 @@ function ShareWithAnotherSpaceDialog({
                 <DialogHeader>
                     <DialogTitle>Share this account</DialogTitle>
                     <DialogDescription>
-                        Pick a space where you&apos;re an owner or editor. The account
-                        becomes usable there &mdash; existing transactions stay where
-                        they are.
+                        Pick a space where you&apos;re an owner or editor. The account becomes
+                        usable there &mdash; existing transactions stay where they are.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="max-h-[50vh] overflow-y-auto">
@@ -679,8 +670,8 @@ function ShareWithAnotherSpaceDialog({
                         <Skeleton className="h-24 w-full" />
                     ) : candidates.length === 0 ? (
                         <p className="py-6 text-center text-sm text-muted-foreground">
-                            No eligible spaces. The account is already in every space
-                            you can share to.
+                            No eligible spaces. The account is already in every space you can share
+                            to.
                         </p>
                     ) : (
                         <div className="grid gap-1.5">
@@ -690,9 +681,7 @@ function ShareWithAnotherSpaceDialog({
                                     type="button"
                                     onClick={() => setSelected(s.id)}
                                     className={`flex w-full items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-left transition-colors hover:border-foreground/30 ${
-                                        selected === s.id
-                                            ? "border-primary/60 bg-primary/5"
-                                            : ""
+                                        selected === s.id ? "border-primary/60 bg-primary/5" : ""
                                     }`}
                                 >
                                     <span className="text-sm font-medium">{s.name}</span>
@@ -705,20 +694,13 @@ function ShareWithAnotherSpaceDialog({
                     )}
                 </div>
                 <DialogFooter className="gap-2">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setOpen(false)}
-                    >
+                    <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                         Cancel
                     </Button>
                     <Button
                         variant="gradient"
                         disabled={!selected || share.isPending}
-                        onClick={() =>
-                            selected &&
-                            share.mutate({ accountId, spaceId: selected })
-                        }
+                        onClick={() => selected && share.mutate({ accountId, spaceId: selected })}
                     >
                         {share.isPending ? "Sharing…" : "Share"}
                     </Button>
@@ -738,14 +720,12 @@ function AccountBalanceHistoryTab({
     accountColor: string;
 }) {
     const { period } = usePeriod("last-3-months");
-    const [bucketSelection, setBucketSelection] =
-        useState<BucketSelection>("auto");
+    const [bucketSelection, setBucketSelection] = useState<BucketSelection>("auto");
     const resolvedBucket = useMemo(
         () => autoBucket(period.start, period.end),
         [period.start, period.end]
     );
-    const effectiveBucket: Bucket =
-        bucketSelection === "auto" ? resolvedBucket : bucketSelection;
+    const effectiveBucket: Bucket = bucketSelection === "auto" ? resolvedBucket : bucketSelection;
 
     const q = trpc.analytics.balanceHistory.useQuery({
         spaceId,
@@ -761,10 +741,7 @@ function AccountBalanceHistoryTab({
         if (!q.data) return [];
         return q.data.series
             .map((r) => ({
-                bucket:
-                    typeof r.bucket === "string"
-                        ? r.bucket
-                        : new Date(r.bucket).toISOString(),
+                bucket: typeof r.bucket === "string" ? r.bucket : new Date(r.bucket).toISOString(),
                 balance: r.balance,
             }))
             .sort((a, b) => a.bucket.localeCompare(b.bucket));
@@ -788,8 +765,7 @@ function AccountBalanceHistoryTab({
         const start = series[0].balance;
         const end = series[series.length - 1].balance;
         const change = end - start;
-        const pct =
-            start !== 0 ? (change / Math.abs(start)) * 100 : change === 0 ? 0 : null;
+        const pct = start !== 0 ? (change / Math.abs(start)) * 100 : change === 0 ? 0 : null;
         return { start, end, change, pct };
     }, [series]);
 
@@ -800,9 +776,7 @@ function AccountBalanceHistoryTab({
             <div className="flex flex-wrap items-center justify-end gap-2">
                 <Select
                     value={bucketSelection}
-                    onValueChange={(v) =>
-                        setBucketSelection(v as BucketSelection)
-                    }
+                    onValueChange={(v) => setBucketSelection(v as BucketSelection)}
                 >
                     <SelectTrigger className="w-full min-w-[10rem] sm:w-auto">
                         <Clock className="size-4 text-muted-foreground" />
@@ -864,13 +838,7 @@ function AccountBalanceHistoryTab({
                                 margin={{ top: 16, right: 16, bottom: 8, left: 0 }}
                             >
                                 <defs>
-                                    <linearGradient
-                                        id={gradId}
-                                        x1="0"
-                                        y1="0"
-                                        x2="0"
-                                        y2="1"
-                                    >
+                                    <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                                         <stop
                                             offset="0%"
                                             stopColor={accountColor}
@@ -891,10 +859,7 @@ function AccountBalanceHistoryTab({
                                 <XAxis
                                     dataKey="bucket"
                                     tickFormatter={(v) =>
-                                        formatInAppTz(
-                                            v,
-                                            bucketTickPattern(effectiveBucket)
-                                        )
+                                        formatInAppTz(v, bucketTickPattern(effectiveBucket))
                                     }
                                     stroke="var(--muted-foreground)"
                                     fontSize={11}
@@ -983,10 +948,7 @@ function AccountBalanceHistoryTab({
                                 <XAxis
                                     dataKey="bucket"
                                     tickFormatter={(v) =>
-                                        formatInAppTz(
-                                            v,
-                                            bucketTickPattern(effectiveBucket)
-                                        )
+                                        formatInAppTz(v, bucketTickPattern(effectiveBucket))
                                     }
                                     stroke="var(--muted-foreground)"
                                     fontSize={11}
@@ -1027,11 +989,7 @@ function AccountBalanceHistoryTab({
                                         fillOpacity: 0.08,
                                     }}
                                 />
-                                <Bar
-                                    dataKey="delta"
-                                    radius={[3, 3, 0, 0]}
-                                    maxBarSize={20}
-                                >
+                                <Bar dataKey="delta" radius={[3, 3, 0, 0]} maxBarSize={20}>
                                     {activity.map((row, i) => (
                                         <Cell
                                             key={i}
@@ -1065,12 +1023,7 @@ function Stat({
     variant?: "neutral" | "income" | "expense";
     subtext?: string;
 }) {
-    const Icon =
-        variant === "income"
-            ? TrendingUp
-            : variant === "expense"
-              ? TrendingDown
-              : null;
+    const Icon = variant === "income" ? TrendingUp : variant === "expense" ? TrendingDown : null;
     const tone =
         variant === "income"
             ? "text-emerald-500"
@@ -1079,18 +1032,14 @@ function Stat({
               : "text-foreground";
     return (
         <div className="rounded-lg border border-border/60 bg-card/40 p-3">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {label}
-            </p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
             <div className={`mt-1 flex items-baseline gap-2 text-lg font-bold ${tone}`}>
                 {Icon && <Icon className="size-4" />}
                 <span className="font-mono tabular-nums">
                     {value == null ? "—" : formatMoney(value)}
                 </span>
             </div>
-            {subtext && (
-                <p className="mt-0.5 text-xs text-muted-foreground">{subtext}</p>
-            )}
+            {subtext && <p className="mt-0.5 text-xs text-muted-foreground">{subtext}</p>}
         </div>
     );
 }

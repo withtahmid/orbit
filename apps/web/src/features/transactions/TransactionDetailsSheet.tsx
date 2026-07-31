@@ -1,14 +1,6 @@
 import { useRef } from "react";
 import { toast } from "sonner";
-import {
-    Download,
-    FileText,
-    Loader2,
-    Paperclip,
-    Pencil,
-    Trash2,
-    X,
-} from "lucide-react";
+import { Download, FileText, Loader2, Paperclip, Pencil, Trash2, X } from "lucide-react";
 import {
     Sheet,
     SheetContent,
@@ -61,7 +53,19 @@ type Props = {
     accountsById: Map<string, { name: string }>;
     categoriesById: Map<string, { name: string }>;
     eventsById: Map<string, { name: string }>;
+    /** Ownership: the caller may modify this transaction at all. Gates
+     *  Delete and the attachment controls as well as Edit. */
     canEdit: boolean;
+    /**
+     * True while this row's own update is still in flight. Gates ONLY the
+     * Edit hand-off — re-editing mid-flight would snapshot already-
+     * optimistic values as the rollback baseline. Delete and attachments
+     * stay available on purpose: nothing guarantees the in-flight flag ever
+     * clears (a hung request leaves it set), and a row that can't be
+     * deleted or have its receipts touched, with no explanation, is the
+     * same dead end this state was designed to avoid.
+     */
+    isSaving?: boolean;
     /**
      * Hand off to the page-level edit sheet. The page is expected to
      * close the details sheet itself; this is just the "user clicked
@@ -84,6 +88,7 @@ export function TransactionDetailsSheet({
     categoriesById,
     eventsById,
     canEdit,
+    isSaving,
     onEdit,
     onDelete,
 }: Props) {
@@ -97,6 +102,7 @@ export function TransactionDetailsSheet({
                         categoriesById={categoriesById}
                         eventsById={eventsById}
                         canEdit={canEdit}
+                        isSaving={isSaving}
                         onEdit={onEdit}
                         onDelete={onDelete}
                     />
@@ -114,6 +120,7 @@ function Details({
     categoriesById,
     eventsById,
     canEdit,
+    isSaving,
     onEdit,
     onDelete,
 }: {
@@ -122,6 +129,7 @@ function Details({
     categoriesById: Map<string, { name: string }>;
     eventsById: Map<string, { name: string }>;
     canEdit: boolean;
+    isSaving?: boolean;
     onEdit?: () => void;
     onDelete?: () => void;
 }) {
@@ -163,6 +171,11 @@ function Details({
                                     size="sm"
                                     className="gap-1.5"
                                     onClick={onEdit}
+                                    /* No `title`: shadcn's base button sets
+                                       disabled:pointer-events-none, so a tooltip
+                                       on it can never fire. The role="status"
+                                       note in the body carries the reason. */
+                                    disabled={isSaving}
                                 >
                                     <Pencil className="size-3" />
                                     Edit
@@ -197,12 +210,26 @@ function Details({
                     </span>
                     <MoneyDisplay
                         amount={transaction.amount}
-                        variant={variant as any}
+                        variant={variant}
                         className="text-lg font-bold"
                     />
                 </SheetDescription>
             </SheetHeader>
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
+                {/* Say why Edit is disabled. Without this the button is just
+                    greyed out with no cause — and the values shown below are
+                    the optimistic ones, so the sheet would otherwise look
+                    like it had simply stopped working. role="status" so the
+                    reason reaches AT too. */}
+                {isSaving && (
+                    <p
+                        role="status"
+                        className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+                    >
+                        <Loader2 className="size-3 shrink-0 animate-spin" />
+                        Saving your last change — editing is available in a moment.
+                    </p>
+                )}
                 <dl className="grid gap-2 text-sm">
                     {source && <Row label="From">{source}</Row>}
                     {destination && <Row label="To">{destination}</Row>}
@@ -247,9 +274,7 @@ function Details({
                     {attachments.isLoading ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
                     ) : (attachments.data?.length ?? 0) === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                            No attachments yet.
-                        </p>
+                        <p className="text-xs text-muted-foreground">No attachments yet.</p>
                     ) : (
                         <ul className="grid grid-cols-2 gap-3">
                             {attachments.data!.map((a) => (
@@ -284,13 +309,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     );
 }
 
-function AttachButton({
-    transactionId,
-    onDone,
-}: {
-    transactionId: string;
-    onDone: () => void;
-}) {
+function AttachButton({ transactionId, onDone }: { transactionId: string; onDone: () => void }) {
     const { upload, uploading } = useFileUpload();
     const update = trpc.transaction.update.useMutation();
     const inputRef = useRef<HTMLInputElement>(null);
@@ -400,9 +419,7 @@ function AttachmentCard({
                         <button
                             type="button"
                             className="rounded p-1 text-muted-foreground hover:text-destructive"
-                            onClick={() =>
-                                remove.mutate({ transactionId, fileId })
-                            }
+                            onClick={() => remove.mutate({ transactionId, fileId })}
                             disabled={remove.isPending}
                             title="Remove"
                         >

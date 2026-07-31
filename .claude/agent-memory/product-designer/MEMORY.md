@@ -37,3 +37,5 @@
 - [Burn-up bar strip shared axis](burnup_bar_strip_shared_axis.md) — daily-volume bars share ONE y-axis with the cumulative line; no compressed secondary axis; height bumps do aid legibility (SVG stretches).
 - [Overview rebuild round3](overview_rebuild_round3.md) — 2026-07-16: Overview lists created_at-unsorted (fake rankings); personal /budgets dead-links; 3 trend charts share component but Envelopes trends lack narrowing/cap that Categories got.
 - [Quantile-bucket count tautology](quantile-bucket-count-tautology.md) — "Days by intensity" count-donut over quantile bins = ~5 equal slices always; chart dollars-per-bucket instead. Also: HeatmapView bar chart ships with invisible reference lines (contrast + behind-bars occlusion).
+- [Transfer fee + destination semantics](transfer_fee_and_destination_semantics.md) — fee's account/date/event follow the parent transfer; income destinations allow space-membership-only accounts, transfers don't.
+- [Category ancestry display canon](category_ancestry_display_canon.md) — ROOT is the ancestor to surface (analytics slices roots); root color dot is weak; 3 pickers = 3 search behaviours.

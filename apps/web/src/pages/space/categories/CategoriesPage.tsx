@@ -1264,9 +1264,9 @@ function Inspector({
                             />
                         </OrbitField>
 
-                        {/* interactiveHint renders a div, not a label — a <label> around a
+                        {/* noWrapperLabel renders a div, not a label — a <label> around a
     button group forwards label-text clicks to the first button. */}
-                        <OrbitField label="Style" interactiveHint>
+                        <OrbitField label="Style" noWrapperLabel>
                             <div className="ct-insp-style-row">
                                 <ColorPickerButton value={color} onChange={setColor} />
                                 <IconPickerButton value={icon} onChange={setIcon} color={color} />
@@ -1275,7 +1275,7 @@ function Inspector({
 
                         <OrbitField
                             label="Priority"
-                            interactiveHint
+                            noWrapperLabel
                             hint={
                                 priority === "" && inheritedPriority
                                     ? `Inheriting ${PRIORITIES[inheritedPriority].label} from parent`
@@ -1321,6 +1321,7 @@ function Inspector({
                         <OrbitField
                             label="Parent"
                             hint="You can also drag rows in the tree to re-nest"
+                            noWrapperLabel
                         >
                             <CategoryTreeSelect
                                 categories={parentCandidates}
@@ -1598,7 +1599,7 @@ function CreatePanel({
 
                 {/* Field order mirrors the edit inspector (Name / Style /
                     Priority / Parent) so muscle memory transfers. */}
-                <OrbitField label="Style" interactiveHint>
+                <OrbitField label="Style" noWrapperLabel>
                     <div className="ct-insp-style-row">
                         <ColorPickerButton value={color} onChange={setColor} />
                         <IconPickerButton value={icon} onChange={setIcon} color={color} />
@@ -1607,7 +1608,7 @@ function CreatePanel({
 
                 <OrbitField
                     label="Priority"
-                    interactiveHint
+                    noWrapperLabel
                     hint={
                         inheritedPriority
                             ? `Unset inherits ${PRIORITIES[inheritedPriority].label}`
@@ -1650,7 +1651,7 @@ function CreatePanel({
                     </div>
                 </OrbitField>
 
-                <OrbitField label="Parent" hint="Optional">
+                <OrbitField label="Parent" hint="Optional" noWrapperLabel>
                     <CategoryTreeSelect
                         categories={allCategories}
                         value={parentId}

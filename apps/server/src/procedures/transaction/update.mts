@@ -64,11 +64,8 @@ export const updateTransaction = authorizedProcedure
                     amount: input.amount ?? Number(existing.amount),
                     datetime: input.datetime ?? existing.transaction_datetime,
                     description:
-                        input.description === undefined
-                            ? existing.description
-                            : input.description,
-                    location:
-                        input.location === undefined ? existing.location : input.location,
+                        input.description === undefined ? existing.description : input.description,
+                    location: input.location === undefined ? existing.location : input.location,
                     sourceAccountId:
                         input.sourceAccountId === undefined
                             ? existing.source_account_id
@@ -82,15 +79,11 @@ export const updateTransaction = authorizedProcedure
                             ? existing.expense_category_id
                             : input.expenseCategoryId,
                     envelopId:
-                        input.envelopId === undefined
-                            ? existing.envelop_id
-                            : input.envelopId,
-                    eventId:
-                        input.eventId === undefined ? existing.event_id : input.eventId,
+                        input.envelopId === undefined ? existing.envelop_id : input.envelopId,
+                    eventId: input.eventId === undefined ? existing.event_id : input.eventId,
                 };
 
-                const isTransfer =
-                    (existing.type as unknown as string) === "transfer";
+                const isTransfer = (existing.type as unknown as string) === "transfer";
 
                 // Fee shape validation: if any fee field is touched, the
                 // resulting state must be "all three set" or "all three
@@ -115,18 +108,9 @@ export const updateTransaction = authorizedProcedure
                 if (isTransfer) {
                     const row = await trx
                         .selectFrom("transactions")
-                        .select([
-                            "id",
-                            "amount",
-                            "expense_category_id",
-                            "envelop_id",
-                        ])
+                        .select(["id", "amount", "expense_category_id", "envelop_id"])
                         .where("parent_transfer_id", "=", input.transactionId)
-                        .where(
-                            "type",
-                            "=",
-                            "expense" as unknown as Transactions["type"]
-                        )
+                        .where("type", "=", "expense" as unknown as Transactions["type"])
                         .executeTakeFirst();
                     if (row) {
                         linkedFee = {
@@ -151,9 +135,7 @@ export const updateTransaction = authorizedProcedure
                         input.feeEnvelopId,
                     ];
                     const allNull = triple.every((v) => v === null);
-                    const allSet = triple.every(
-                        (v) => v !== null && v !== undefined
-                    );
+                    const allSet = triple.every((v) => v !== null && v !== undefined);
                     if (!allNull && !allSet) {
                         throw new TRPCError({
                             code: "BAD_REQUEST",
@@ -208,10 +190,7 @@ export const updateTransaction = authorizedProcedure
                     });
                 }
 
-                if (
-                    input.envelopId !== undefined &&
-                    input.envelopId !== existing.envelop_id
-                ) {
+                if (input.envelopId !== undefined && input.envelopId !== existing.envelop_id) {
                     await resolveEnvelopActive({
                         trx,
                         envelopId: input.envelopId,
@@ -258,8 +237,7 @@ export const updateTransaction = authorizedProcedure
                             .updateTable("transactions")
                             .set({
                                 amount: desiredFee.amount,
-                                expense_category_id:
-                                    desiredFee.expenseCategoryId,
+                                expense_category_id: desiredFee.expenseCategoryId,
                                 envelop_id: desiredFee.envelopId,
                             })
                             .where("id", "=", linkedFee.id)
@@ -274,8 +252,7 @@ export const updateTransaction = authorizedProcedure
                                 amount: desiredFee.amount,
                                 source_account_id: merged.sourceAccountId,
                                 destination_account_id: null,
-                                expense_category_id:
-                                    desiredFee.expenseCategoryId,
+                                expense_category_id: desiredFee.expenseCategoryId,
                                 envelop_id: desiredFee.envelopId,
                                 description: merged.description
                                     ? `Fee — ${merged.description}`
@@ -287,6 +264,49 @@ export const updateTransaction = authorizedProcedure
                             })
                             .execute();
                     }
+                }
+
+                /**
+                 * Keep a surviving fee row aligned with its parent. Source
+                 * account, date, event and location are properties of the
+                 * TRANSFER, not of the fee — the insert branch above seeds
+                 * the fee from exactly these four columns, so they must
+                 * keep tracking the parent afterwards.
+                 *
+                 * This deliberately runs on every transfer edit, not only
+                 * when the fee fields are touched. Without it, moving a
+                 * transfer to another account (or another date, or off an
+                 * event) left the fee debiting the OLD account on the OLD
+                 * date: one logical operation silently split across two
+                 * accounts, and — since a fee is a type='expense' row — a
+                 * fee stranded in the wrong month or event skewed those
+                 * envelope/event/category rollups with no visible cause.
+                 *
+                 * Permission-safe: a transfer's source has already been
+                 * validated as owner-held and unlocked, which is exactly
+                 * what an expense row's source requires.
+                 *
+                 * The rule is STRUCTURAL columns follow the parent;
+                 * user-authored free text does not. `source_account_id`,
+                 * `transaction_datetime` and `event_id` decide which account
+                 * is debited and which period/event rollup the fee lands in,
+                 * so they must stay in lockstep. `description` and
+                 * `location` are prose the fee row exposes for direct
+                 * editing (see `isFeeExpense` in EditTransactionSheet), so
+                 * re-copying them on every parent edit would silently
+                 * clobber what the user typed there. The insert above seeds
+                 * both once and then leaves them alone.
+                 */
+                if (isTransfer && linkedFee && !clearFee) {
+                    await trx
+                        .updateTable("transactions")
+                        .set({
+                            source_account_id: merged.sourceAccountId,
+                            transaction_datetime: merged.datetime,
+                            event_id: merged.eventId,
+                        })
+                        .where("id", "=", linkedFee.id)
+                        .execute();
                 }
 
                 await attachFilesToTransaction({

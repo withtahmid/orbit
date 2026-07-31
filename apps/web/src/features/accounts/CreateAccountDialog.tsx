@@ -1,19 +1,10 @@
 import { useState } from "react";
 import { Plus, Edit3, Link2, Lock, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import {
-    Dialog,
-    DialogContent,
-    DialogTitle,
-    DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { OrbitModalShell, OrbitField } from "@/components/orbit/OrbitModalShell";
-import {
-    OrbitFormStyles,
-    OrbitInfoPill,
-    OrbitInput,
-} from "@/components/orbit/OrbitForm";
+import { OrbitFormStyles, OrbitInfoPill, OrbitInput } from "@/components/orbit/OrbitForm";
 import { ColorPickerButton } from "@/components/shared/ColorPicker";
 import { IconPickerButton } from "@/components/shared/IconPicker";
 import { trpc } from "@/trpc";
@@ -128,11 +119,7 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                             <button
                                 type="button"
                                 className="orbit-btn orbit-btn-primary"
-                                disabled={
-                                    method === "plaid" ||
-                                    !name.trim() ||
-                                    create.isPending
-                                }
+                                disabled={method === "plaid" || !name.trim() || create.isPending}
                                 onClick={submit}
                             >
                                 <Plus className="size-3.5" />
@@ -178,8 +165,12 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                     </div>
 
                     {/* Account type tile grid */}
-                    <OrbitField label="Account type">
-                        <div className="acc-mod-type-grid">
+                    {/* noWrapperLabel: a <label> forwards clicks anywhere in the
+                        row to its first labelable descendant — here the first tile
+                        <button> — so clicking the "Account type" text or any grid
+                        gutter silently reassigned the type AND reset the icon. */}
+                    <OrbitField label="Account type" noWrapperLabel>
+                        <div className="acc-mod-type-grid" role="group" aria-label="Account type">
                             {TYPE_TILES.map((t) => {
                                 const Icon = ICON_LOOKUP[t.icon] ?? Wallet;
                                 const active = accountType === t.id;
@@ -207,12 +198,8 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                                             <Icon className="size-4" />
                                         </span>
                                         <span className="acc-mod-type-text">
-                                            <span className="acc-mod-type-label">
-                                                {t.label}
-                                            </span>
-                                            <span className="acc-mod-type-sub">
-                                                {t.sub}
-                                            </span>
+                                            <span className="acc-mod-type-label">{t.label}</span>
+                                            <span className="acc-mod-type-sub">{t.sub}</span>
                                         </span>
                                     </button>
                                 );
@@ -231,7 +218,12 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                         />
                     </OrbitField>
 
-                    <OrbitField label="Style">
+                    {/* Same as CategoriesPage's Style field: the colour/icon
+                        pickers are buttons, so without this, clicking "Style"
+                        opened the colour popover — and because both pickers are
+                        portal={false}, clicking the OPEN panel's own padding
+                        forwarded back to the trigger and closed it again. */}
+                    <OrbitField label="Style" noWrapperLabel>
                         <div className="acc-mod-style-row">
                             <ColorPickerButton value={color} onChange={setColor} />
                             <IconPickerButton
@@ -250,8 +242,8 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                             className="size-3"
                             style={{ display: "inline-block", marginRight: 4, marginBottom: -2 }}
                         />
-                        Read-only access · 256-bit encryption · credentials never stored
-                        on Orbit servers.
+                        Read-only access · 256-bit encryption · credentials never stored on Orbit
+                        servers.
                     </OrbitInfoPill>
                 </OrbitModalShell>
             </DialogContent>
@@ -260,11 +252,7 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
 }
 
 /* Lazy-look-up so we don't have to enumerate every Lucide icon name. */
-import {
-    Wallet as WalletIcon,
-    CreditCard,
-    PiggyBank,
-} from "lucide-react";
+import { Wallet as WalletIcon, CreditCard, PiggyBank } from "lucide-react";
 const ICON_LOOKUP: Record<string, typeof WalletIcon> = {
     wallet: WalletIcon,
     "credit-card": CreditCard,

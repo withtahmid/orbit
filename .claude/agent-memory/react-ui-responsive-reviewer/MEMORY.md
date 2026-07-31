@@ -1,5 +1,6 @@
 - [Orbit design token scoping](orbit-design-scoping.md) — `--bg/--fg/--brand/...` only resolve inside `.orbit-design`; new pages using these tokens must wrap their root.
 - [Tap target sizes in Orbit](tap-target-sizes.md) — default button heights (shadcn `h-9` 36px, `.od-btn` 36px, `.od-btn-sm` 30px, `.ai-btn` 40px) are below 44px. Flag only in sticky bars, destructive controls, or dense rows.
+- [OrbitField <label> click forwarding](orbitfield_label_click_forwarding.md) — default `<label>` wrapper forwards stray clicks to the first labelable descendant; when to pass `noWrapperLabel`.
 - [Transaction sheet architecture](transaction-sheet-architecture.md) — How New/Edit tx sheets, OrbitDrawerShell, NT_STYLES sharing, TransactionDatePicker popover styles, and FieldPin compose.
 - [Date-picker popovers](date_picker_popovers.md) — The 3 date pickers (tdp/op-date/etp): pinned-header/scroll/pinned-footer pattern, dvh+radix-available-height cap, live-commit + single Done; TDP full-width green Done sits beside form's green Save.
 - [Money variant="muted" contrast trap](money-variant-muted-contrast.md) — `variant="muted"` uses Tailwind `text-muted-foreground` (global theme), not orbit-design tokens — fails on brand/light surfaces.
@@ -8,6 +9,8 @@
 - [Cadence-row wrap bug pattern](feedback_recurring_cadence_row_wrap_bug.md) — Envelope card cadence spans don't flex-wrap; flag any 3rd segment added there.
 - [Plan-to-envelope rename](project_plan_to_envelope_rename.md) — Plans merged into envelopes via targetAmount/targetDate; leftover "Plan" copy in BudgetMonthPage + Overview "Plan {Month}" CTA.
 - [Transactions UI architecture](transactions_ui_architecture.md) — Page-level sheet ownership pattern (selectedTx + editingTx) prevents stacked right-side sheets.
+- [Transactions table grid math](transactions_table_grid_math.md) — Fixed/fr track widths per band; 901-1050px already overflows, 1280→1281 makes Category NARROWER; 116px Type-slot budget; 30px row height.
+- [Transactions row state signals](tx_row_state_signals.md) — `__pending` (opacity, inert) vs `__saving` (brand tint + inset bar, stays interactive); why opacity is banned and why the tint ≈ hover.
 - [Orbit form primitives](orbit_form_primitives.md) — OrbitField/OrbitSelect/OrbitInfoPill conventions and the envelope-chip disclosure pattern.
 - [Analytics CategoriesView](analytics_categories_view.md) — Donut/ranked-list layout, breadcrumb ml-auto wrap fragility, DrillableDonut a11y mitigated by legend buttons.
 - [simplify-budgeting removal pass](project_simplify_budgeting_removal.md) — Borrow/reckoning/carry ripped out; sparse BudgetDetailPage, lopsided grids, orphaned CSS, bare-div OrbitFieldRow.

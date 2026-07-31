@@ -38,14 +38,6 @@ export default function SpaceSettingsPage() {
     const navigate = useNavigate();
     const utils = trpc.useUtils();
 
-    // The personal space is a synthesized virtual space — it has no
-    // members, no roles, no danger-zone, and any backend query that takes
-    // a real `spaceId` (memberList, listInvites, …) will reject "me" as
-    // a non-UUID. Hide the route entirely instead.
-    if (isPersonal) {
-        return <Navigate to={ROUTES.space(space.id)} replace />;
-    }
-
     const [newName, setNewName] = useState(space.name);
     const update = trpc.space.update.useMutation({
         onSuccess: async () => {
@@ -62,6 +54,25 @@ export default function SpaceSettingsPage() {
         },
         onError: (e) => toast.error(e.message),
     });
+
+    /**
+     * The personal space is a synthesized virtual space — no members, no
+     * roles, no danger zone, and any backend query taking a real `spaceId`
+     * (memberList, listInvites, …) rejects "me" as a non-UUID. Redirect
+     * instead of rendering.
+     *
+     * This guard MUST stay below every hook above. It used to sit at the
+     * top of the component, which made `useState` and both `useMutation`
+     * calls conditional: this route keeps one component instance across a
+     * `:spaceId` param change, so going from `/s/me/settings` to
+     * `/s/<uuid>/settings` flipped `isPersonal` true→false and the hook
+     * count 0→3 — "Rendered more hooks than during the previous render",
+     * i.e. a hard crash. The mutations below are lazy, so declaring them
+     * for the personal case costs nothing.
+     */
+    if (isPersonal) {
+        return <Navigate to={ROUTES.space(space.id)} replace />;
+    }
 
     return (
         <div className="grid gap-6">
@@ -85,7 +96,8 @@ export default function SpaceSettingsPage() {
                                     className="flex gap-2"
                                     onSubmit={(e) => {
                                         e.preventDefault();
-                                        if (!newName.trim() || newName.trim() === space.name) return;
+                                        if (!newName.trim() || newName.trim() === space.name)
+                                            return;
                                         update.mutate({
                                             spaceId: space.id,
                                             name: newName.trim(),
@@ -175,7 +187,7 @@ function MembersCard() {
                     </TableRow>
                 </TableHeader>
                 <TableBody>
-                    {(membersQuery.data ?? []).map((m: any) => (
+                    {(membersQuery.data ?? []).map((m) => (
                         <TableRow key={m.id}>
                             <TableCell className="font-medium">
                                 <span className="inline-flex items-center gap-2">
@@ -190,10 +202,18 @@ function MembersCard() {
                             </TableCell>
                             <TableCell className="text-muted-foreground">{m.email}</TableCell>
                             <TableCell>
+                                {/* kysely-codegen misreads the space-role
+                                    Postgres enum as an array type, so the
+                                    double cast is the repo-wide workaround
+                                    (see useOptimisticTransactionCache.ts). The
+                                    runtime value is a scalar role string. */}
                                 {isOwner ? (
-                                    <RoleSelect userId={m.id} role={m.role as SpaceRole} />
+                                    <RoleSelect
+                                        userId={m.id}
+                                        role={m.role as unknown as SpaceRole}
+                                    />
                                 ) : (
-                                    <RoleBadge role={m.role as SpaceRole} />
+                                    <RoleBadge role={m.role as unknown as SpaceRole} />
                                 )}
                             </TableCell>
                             {isOwner && (
@@ -352,114 +372,112 @@ function PendingInvitesCard() {
             {invites.length === 0 ? (
                 <CardContent>
                     <p className="text-sm text-muted-foreground">
-                        Sent invites will appear here until they&apos;re accepted, revoked,
-                        or expire.
+                        Sent invites will appear here until they&apos;re accepted, revoked, or
+                        expire.
                     </p>
                 </CardContent>
             ) : (
                 <CardContent className="p-0">
-                <div className="hidden sm:block">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Email</TableHead>
-                                <TableHead>Role</TableHead>
-                                <TableHead>Invited by</TableHead>
-                                <TableHead>Expires</TableHead>
-                                <TableHead className="w-12" />
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {invites.map((inv) => {
-                                const expires = new Date(inv.expiresAt);
-                                return (
-                                    <TableRow key={inv.id}>
-                                        <TableCell className="font-medium break-all">
-                                            {inv.email}
-                                        </TableCell>
-                                        <TableCell>
-                                            <RoleBadge role={inv.role} />
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground">
-                                            {inv.invitedByName}
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground">
+                    <div className="hidden sm:block">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Role</TableHead>
+                                    <TableHead>Invited by</TableHead>
+                                    <TableHead>Expires</TableHead>
+                                    <TableHead className="w-12" />
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {invites.map((inv) => {
+                                    const expires = new Date(inv.expiresAt);
+                                    return (
+                                        <TableRow key={inv.id}>
+                                            <TableCell className="font-medium break-all">
+                                                {inv.email}
+                                            </TableCell>
+                                            <TableCell>
+                                                <RoleBadge role={inv.role} />
+                                            </TableCell>
+                                            <TableCell className="text-muted-foreground">
+                                                {inv.invitedByName}
+                                            </TableCell>
+                                            <TableCell className="text-muted-foreground">
+                                                {expires.toLocaleDateString(undefined, {
+                                                    month: "short",
+                                                    day: "numeric",
+                                                })}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Button
+                                                    size="icon"
+                                                    variant="ghost"
+                                                    className="size-9"
+                                                    onClick={() =>
+                                                        revoke.mutate({
+                                                            spaceId: space.id,
+                                                            inviteId: inv.id,
+                                                        })
+                                                    }
+                                                    disabled={revoke.isPending}
+                                                    aria-label={`Revoke invite for ${inv.email}`}
+                                                >
+                                                    <X className="size-3.5 text-destructive" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    <ul className="sm:hidden divide-y">
+                        {invites.map((inv) => {
+                            const expires = new Date(inv.expiresAt);
+                            return (
+                                <li key={inv.id} className="p-4 flex flex-col gap-2">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="font-medium break-all">{inv.email}</div>
+                                            <div className="mt-1 flex items-center gap-2">
+                                                <RoleBadge role={inv.role} />
+                                                <span className="text-xs text-muted-foreground">
+                                                    Invited by {inv.invitedByName}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="text-xs text-muted-foreground">
+                                            Expires{" "}
                                             {expires.toLocaleDateString(undefined, {
                                                 month: "short",
                                                 day: "numeric",
                                             })}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Button
-                                                size="icon"
-                                                variant="ghost"
-                                                className="size-9"
-                                                onClick={() =>
-                                                    revoke.mutate({
-                                                        spaceId: space.id,
-                                                        inviteId: inv.id,
-                                                    })
-                                                }
-                                                disabled={revoke.isPending}
-                                                aria-label={`Revoke invite for ${inv.email}`}
-                                            >
-                                                <X className="size-3.5 text-destructive" />
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                );
-                            })}
-                        </TableBody>
-                    </Table>
-                </div>
-                <ul className="sm:hidden divide-y">
-                    {invites.map((inv) => {
-                        const expires = new Date(inv.expiresAt);
-                        return (
-                            <li key={inv.id} className="p-4 flex flex-col gap-2">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0 flex-1">
-                                        <div className="font-medium break-all">
-                                            {inv.email}
-                                        </div>
-                                        <div className="mt-1 flex items-center gap-2">
-                                            <RoleBadge role={inv.role} />
-                                            <span className="text-xs text-muted-foreground">
-                                                Invited by {inv.invitedByName}
-                                            </span>
-                                        </div>
+                                        </span>
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="min-h-9 text-destructive"
+                                            onClick={() =>
+                                                revoke.mutate({
+                                                    spaceId: space.id,
+                                                    inviteId: inv.id,
+                                                })
+                                            }
+                                            disabled={revoke.isPending}
+                                            aria-label={`Revoke invite for ${inv.email}`}
+                                        >
+                                            <X className="size-3.5" />
+                                            Revoke
+                                        </Button>
                                     </div>
-                                </div>
-                                <div className="flex items-center justify-between gap-3">
-                                    <span className="text-xs text-muted-foreground">
-                                        Expires{" "}
-                                        {expires.toLocaleDateString(undefined, {
-                                            month: "short",
-                                            day: "numeric",
-                                        })}
-                                    </span>
-                                    <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        className="min-h-9 text-destructive"
-                                        onClick={() =>
-                                            revoke.mutate({
-                                                spaceId: space.id,
-                                                inviteId: inv.id,
-                                            })
-                                        }
-                                        disabled={revoke.isPending}
-                                        aria-label={`Revoke invite for ${inv.email}`}
-                                    >
-                                        <X className="size-3.5" />
-                                        Revoke
-                                    </Button>
-                                </div>
-                            </li>
-                        );
-                    })}
-                </ul>
-            </CardContent>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </CardContent>
             )}
         </Card>
     );
@@ -485,9 +503,9 @@ function LeaveSpaceCard() {
             </CardHeader>
             <CardContent className="grid gap-3">
                 <p className="text-sm text-muted-foreground">
-                    Removes your membership. The space and its data remain available to the
-                    other members. If you&apos;re the sole owner, transfer ownership or delete
-                    the space first.
+                    Removes your membership. The space and its data remain available to the other
+                    members. If you&apos;re the sole owner, transfer ownership or delete the space
+                    first.
                 </p>
                 <ConfirmDialog
                     trigger={
@@ -505,4 +523,3 @@ function LeaveSpaceCard() {
         </Card>
     );
 }
-
