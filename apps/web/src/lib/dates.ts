@@ -292,6 +292,57 @@ export function fromInputDate(v: string): Date | null {
     return unprojectFromAppTz(projected);
 }
 
+/* ─── Calendar-aligned periods ────────────────────────────────────────
+ *
+ * A *period* is a whole calendar unit — an ISO week, a calendar month,
+ * quarter, or year — never an arbitrary range. Analytics that compare
+ * "this one vs the last one" or average across "every prior one" need
+ * aligned, equal-shaped windows: a ragged range has no defined position
+ * ("day 12 of what?"), no comparable predecessor, and no bucket
+ * positions to average over. Use `resolvePeriod` / `PeriodChip` for
+ * ragged windows and these helpers for aligned ones.
+ *
+ * All four boundaries match Postgres `date_trunc(unit, …)` under the
+ * session timezone (Asia/Dhaka), so client-derived windows land on the
+ * same instants the server buckets on. */
+
+export type PeriodGranularity = "week" | "month" | "quarter" | "year";
+
+/** Start of the calendar period of `granularity` containing `date`. */
+export function startOfPeriod(granularity: PeriodGranularity, date: Date): Date {
+    if (granularity === "week") return startOfIsoWeek(date);
+    if (granularity === "month") return startOfMonth(date);
+    if (granularity === "quarter") return startOfQuarter(date);
+    return startOfYear(date);
+}
+
+/** `{ start, end }` of the period containing `date`; `end` is exclusive. */
+export function periodBounds(
+    granularity: PeriodGranularity,
+    date: Date = new Date()
+): { start: Date; end: Date } {
+    const start = startOfPeriod(granularity, date);
+    return { start, end: addPeriods(granularity, start, 1) };
+}
+
+/**
+ * Shift `date` by `n` whole periods. Pass a period *start* (what
+ * `startOfPeriod` returns) rather than an arbitrary mid-period date:
+ * stepping from Jul 31 by −1 month would land on Jul 1 via JS day
+ * overflow, silently repeating the period instead of moving off it.
+ */
+export function addPeriods(granularity: PeriodGranularity, date: Date, n: number): Date {
+    if (granularity === "week") return addDays(date, n * 7);
+    if (granularity === "month") return addMonths(date, n);
+    if (granularity === "quarter") return addMonths(date, n * 3);
+    return addMonths(date, n * 12);
+}
+
+/** True when `date` falls inside the period of `granularity` containing `ref`. */
+export function isSamePeriod(granularity: PeriodGranularity, date: Date, ref: Date): boolean {
+    return startOfPeriod(granularity, date).getTime() === startOfPeriod(granularity, ref).getTime();
+}
+
 export type PeriodPresetId =
     | "this-month"
     | "last-30-days"

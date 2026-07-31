@@ -25,6 +25,8 @@ export const personalTrendsYearOverYear = authorizedProcedure
     .input(
         z.object({
             year: z.number().int().min(1970).max(9999).optional(),
+            /* Must match the daily-comparison mode — see space-scoped twin. */
+            mode: z.enum(["cash", "operational"]).default("cash"),
             /* Personal trends only supports account filtering — see
                daily-comparison twin for the rationale. */
             accountIds: z.array(z.string().uuid()).max(200).optional(),
@@ -41,6 +43,8 @@ export const personalTrendsYearOverYear = authorizedProcedure
                     resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id),
                 ]);
                 const owned = intersectAccountIds(ownedAll, input.accountIds);
+                /* Derived from the Zod enum — no injection surface. */
+                const xferFactor = input.mode === "cash" ? 1 : 0;
 
                 const now = new Date();
                 const yearRow = await sql<{
@@ -90,7 +94,7 @@ export const personalTrendsYearOverYear = authorizedProcedure
                                     AND t.source_account_id = ANY(${owned}) THEN t.amount
                                 WHEN t.type = 'transfer'
                                     AND t.source_account_id = ANY(${owned})
-                                    AND t.destination_account_id <> ALL(${owned}) THEN t.amount
+                                    AND t.destination_account_id <> ALL(${owned}) THEN t.amount * ${xferFactor}
                                 ELSE 0
                             END
                         )::text AS expense
@@ -107,8 +111,7 @@ export const personalTrendsYearOverYear = authorizedProcedure
 
                 for (const r of rows.rows) {
                     if (r.year === year) thisYear[r.month_idx] = Number(r.expense);
-                    else if (r.year === year - 1)
-                        lastYear[r.month_idx] = Number(r.expense);
+                    else if (r.year === year - 1) lastYear[r.month_idx] = Number(r.expense);
                 }
 
                 return { year, months: MONTH_LABELS, thisYear, lastYear };
@@ -118,9 +121,7 @@ export const personalTrendsYearOverYear = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message:
-                    error.message ||
-                    "Failed to compute personal trends year over year",
+                message: error.message || "Failed to compute personal trends year over year",
             });
         }
         return result;

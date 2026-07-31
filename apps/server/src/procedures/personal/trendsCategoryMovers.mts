@@ -11,6 +11,10 @@ export const personalTrendsCategoryMovers = authorizedProcedure
         z.object({
             periodStart: z.coerce.date(),
             periodEnd: z.coerce.date(),
+            /* Explicit comparison-window start (ends at `periodStart`).
+               See space-scoped twin for why equal-duration subtraction
+               misses calendar boundaries. */
+            prevStart: z.coerce.date().optional(),
             limit: z.number().int().min(1).max(50).default(10),
             /* Personal trends only supports account filtering — see
                daily-comparison twin for the rationale. */
@@ -20,15 +24,9 @@ export const personalTrendsCategoryMovers = authorizedProcedure
     .query(async ({ ctx, input }) => {
         const [error, result] = await safeAwait(
             (async () => {
-                const ownedAll = await resolveOwnedAccountIds(
-                    ctx.services.qb,
-                    ctx.auth.user.id
-                );
+                const ownedAll = await resolveOwnedAccountIds(ctx.services.qb, ctx.auth.user.id);
                 const owned = intersectAccountIds(ownedAll, input.accountIds);
-                const memberSpaces = await resolveMemberSpaceIds(
-                    ctx.services.qb,
-                    ctx.auth.user.id
-                );
+                const memberSpaces = await resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id);
                 /* Response shape matches the space-scoped twin so the
                    frontend renders both via a single code path. Personal
                    can never enter drill-in mode (no category filter),
@@ -41,11 +39,9 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                     };
                 }
 
-                const durationMs =
-                    input.periodEnd.getTime() - input.periodStart.getTime();
-                const prevStart = new Date(
-                    input.periodStart.getTime() - durationMs
-                );
+                const durationMs = input.periodEnd.getTime() - input.periodStart.getTime();
+                const prevStart =
+                    input.prevStart ?? new Date(input.periodStart.getTime() - durationMs);
 
                 const rows = await sql<{
                     id: string;
@@ -55,12 +51,34 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                     cur: string;
                     prv: string;
                 }>`
-                    WITH spending AS (
+                    WITH RECURSIVE roots_all AS (
+                        /* Every category mapped to its top-level ancestor so a
+                           parent's movement includes what's tagged beneath it
+                           — see space-scoped twin. Unscoped by space for the
+                           same reason it is there: in-scope rows can carry a
+                           category from any space the user belongs to, and
+                           parent_id never crosses spaces. */
+                        SELECT id, id AS root_id, ARRAY[id]::uuid[] AS path
+                        FROM expense_categories
+                        WHERE parent_id IS NULL
+                        UNION ALL
+                        SELECT ec.id, r.root_id, r.path || ec.id
+                        FROM expense_categories ec
+                        JOIN roots_all r ON ec.parent_id = r.id
+                        WHERE NOT (ec.id = ANY(r.path))
+                    ),
+                    roots AS (
+                        SELECT DISTINCT ON (id) id, root_id
+                        FROM roots_all
+                        ORDER BY id, array_length(path, 1)
+                    ),
+                    spending AS (
                         SELECT
-                            t.expense_category_id AS category_id,
+                            COALESCE(r.root_id, t.expense_category_id) AS category_id,
                             t.amount,
                             t.transaction_datetime AS dt
                         FROM transactions t
+                        LEFT JOIN roots r ON r.id = t.expense_category_id
                         WHERE t.type = 'expense'
                           AND t.space_id = ANY(${memberSpaces})
                           AND t.source_account_id = ANY(${owned})
@@ -84,12 +102,7 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                     const cur = Number(r.cur);
                     const prv = Number(r.prv);
                     const deltaAmount = cur - prv;
-                    const deltaPct =
-                        prv === 0
-                            ? cur > 0
-                                ? 1
-                                : 0
-                            : (cur - prv) / prv;
+                    const deltaPct = prv === 0 ? (cur > 0 ? 1 : 0) : (cur - prv) / prv;
                     return {
                         categoryId: r.id,
                         name: r.name,
@@ -101,10 +114,7 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                         deltaPct,
                     };
                 });
-                items.sort(
-                    (a, b) =>
-                        Math.abs(b.deltaAmount) - Math.abs(a.deltaAmount)
-                );
+                items.sort((a, b) => Math.abs(b.deltaAmount) - Math.abs(a.deltaAmount));
                 return {
                     mode: "standard" as const,
                     drillRootCategoryId: null as string | null,
@@ -116,9 +126,7 @@ export const personalTrendsCategoryMovers = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message:
-                    error.message ||
-                    "Failed to compute personal trends category movers",
+                message: error.message || "Failed to compute personal trends category movers",
             });
         }
         return result;

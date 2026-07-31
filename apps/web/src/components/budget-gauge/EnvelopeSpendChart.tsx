@@ -116,12 +116,23 @@ export function EnvelopeSpendChart({
     const max = (rawMax > 0 ? rawMax : 1) * 1.1;
     const denom = Math.max(1, daysInMonth - 1);
     const sx = (i: number) => p + (i / denom) * (w - p * 2);
+    /* The prior period has its own day count — January is 31 days even when
+       this chart is showing February — so it gets its own x-scale and both
+       curves race on fraction-of-period-elapsed. On a shared scale the dashed
+       line either overflowed the plot on the right or plateaued for the last
+       few days. */
+    const prvDenom = Math.max(1, prv.length - 1);
+    const sxPrev = (i: number) => p + (i / prvDenom) * (w - p * 2);
+    /** Prior-series index at the same fraction through its period as `i` is
+     *  through the current one — keeps hover dots on the drawn line. */
+    const prvIdxAt = (i: number) =>
+        Math.max(0, Math.min(prv.length - 1, Math.round((i / denom) * prvDenom)));
     const sy = (v: number) => h - p - (v / max) * (h - p * 2);
     const todayX = sx(today - 1);
-    const todayY = sy(cur[today - 1]);
+    const todayY = sy(cur[today - 1] ?? 0);
 
     const prvPath = prv
-        .map((v, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`)
+        .map((v, i) => `${i ? "L" : "M"}${sxPrev(i).toFixed(1)} ${sy(v).toFixed(1)}`)
         .join(" ");
     const curSlice = cur.slice(0, today);
     const curPath = curSlice
@@ -514,8 +525,8 @@ export function EnvelopeSpendChart({
                         ) : null}
                         <span
                             style={dotStyle(
-                                sx(hoverIdx),
-                                sy(prv[hoverIdx] ?? 0),
+                                sxPrev(prvIdxAt(hoverIdx)),
+                                sy(prv[prvIdxAt(hoverIdx)] ?? 0),
                                 6,
                                 "var(--muted-foreground)"
                             )}
@@ -614,7 +625,7 @@ export function EnvelopeSpendChart({
                         ) : null}
                         <TooltipRow
                             label="Last"
-                            value={prv[hoverIdx] ?? 0}
+                            value={prv[prvIdxAt(hoverIdx)] ?? 0}
                             color="var(--muted-foreground)"
                         />
                         {avgPath ? (

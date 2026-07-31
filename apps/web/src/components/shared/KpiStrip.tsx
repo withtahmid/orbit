@@ -37,19 +37,19 @@ export function KpiStrip({
     return (
         <div
             className={cn(
-                "kpi-strip grid grid-cols-1 divide-y divide-border/60 overflow-hidden rounded-xl border border-border bg-card sm:grid-cols-[var(--kpi-cols-sm)] sm:divide-x sm:divide-y-0 lg:grid-cols-[var(--kpi-cols-lg)]",
+                "kpi-strip grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border/60 sm:grid-cols-[var(--kpi-cols-sm)] lg:grid-cols-[var(--kpi-cols-lg)]",
                 className
             )}
             style={
                 {
                     // 2-up at sm if we have 2+ items, otherwise 1.
-                    "--kpi-cols-sm":
-                        items.length >= 2
-                            ? "repeat(2, minmax(0, 1fr))"
-                            : "1fr",
-                    // At lg: lay out 1..4 items as N columns, 5+ as 4.
+                    "--kpi-cols-sm": items.length >= 2 ? "repeat(2, minmax(0, 1fr))" : "1fr",
+                    // At lg: one row for up to 6 items. Wrapping 5 items onto a
+                    // second row left a single lonely tile at quarter width,
+                    // and the strip's height then changed whenever an
+                    // optional KPI appeared — shifting everything below it.
                     "--kpi-cols-lg":
-                        items.length <= 4
+                        items.length <= 6
                             ? `repeat(${items.length}, minmax(0, 1fr))`
                             : "repeat(4, minmax(0, 1fr))",
                 } as React.CSSProperties
@@ -58,14 +58,25 @@ export function KpiStrip({
             {items.map((it, i) => (
                 <div
                     key={i}
-                    className="flex flex-col gap-1 p-4 sm:p-5"
+                    className={cn(
+                        "flex flex-col gap-1 bg-card p-4 sm:p-5",
+                        // An odd item count leaves a hole in the last 2-up row
+                        // at sm; let the final tile span it instead.
+                        items.length % 2 === 1 &&
+                            i === items.length - 1 &&
+                            "sm:col-span-2 lg:col-span-1"
+                    )}
                 >
                     <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                         {it.label}
                     </span>
                     <div className="flex items-baseline gap-2">
                         {isLoading ? (
-                            <Skeleton className="h-7 w-24" />
+                            /* Matches `KpiValue`'s line box exactly (28px at
+                               base, 32px from sm where it goes text-2xl) so
+                               swapping in the real number doesn't nudge
+                               everything below the strip. */
+                            <Skeleton className="h-7 w-24 sm:h-8" />
                         ) : (
                             <KpiValue item={it} />
                         )}
@@ -73,17 +84,12 @@ export function KpiStrip({
                             <span
                                 className={cn(
                                     "inline-flex items-center gap-0.5 text-[11px] font-medium tabular-nums",
-                                    it.delta.direction === "up" &&
-                                        "text-[color:var(--income)]",
-                                    it.delta.direction === "down" &&
-                                        "text-[color:var(--expense)]",
-                                    it.delta.direction === "flat" &&
-                                        "text-muted-foreground"
+                                    it.delta.direction === "up" && "text-[color:var(--income)]",
+                                    it.delta.direction === "down" && "text-[color:var(--expense)]",
+                                    it.delta.direction === "flat" && "text-muted-foreground"
                                 )}
                             >
-                                {it.delta.direction === "up" && (
-                                    <ArrowUpRight className="size-3" />
-                                )}
+                                {it.delta.direction === "up" && <ArrowUpRight className="size-3" />}
                                 {it.delta.direction === "down" && (
                                     <ArrowDownRight className="size-3" />
                                 )}
@@ -91,8 +97,14 @@ export function KpiStrip({
                             </span>
                         )}
                     </div>
+                    {/* One line, always. A sub that wrapped at some widths and
+                        not others changed the strip's height whenever the copy
+                        changed, shifting every card below it. */}
                     {it.sub && (
-                        <span className="text-[11px] text-muted-foreground">
+                        <span
+                            className="truncate text-[11px] text-muted-foreground"
+                            title={typeof it.sub === "string" ? it.sub : undefined}
+                        >
                             {it.sub}
                         </span>
                     )}
@@ -138,7 +150,10 @@ function KpiValue({ item }: { item: KpiItem }) {
                 className={cn(
                     cls,
                     item.tone === "income" && "text-[color:var(--income)]",
-                    item.tone === "expense" && "text-[color:var(--expense)]"
+                    item.tone === "expense" && "text-[color:var(--expense)]",
+                    // Was silently dropped here, so a "no data to compare"
+                    // percentage rendered at full strength like a real one.
+                    item.tone === "muted" && "text-muted-foreground"
                 )}
             >
                 {item.value.toFixed(1)}
@@ -146,5 +161,11 @@ function KpiValue({ item }: { item: KpiItem }) {
             </span>
         );
     }
-    return <span className={cls}>{item.value}</span>;
+    /* Non-numeric values (an em-dash for "nothing to compare against")
+       still honor `tone` so they read as absent rather than as data. */
+    return (
+        <span className={cn(cls, item.tone === "muted" && "text-muted-foreground")}>
+            {item.value}
+        </span>
+    );
 }

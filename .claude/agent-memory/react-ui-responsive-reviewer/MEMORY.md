@@ -31,3 +31,4 @@
 - [Analytics UI accepted tradeoffs](analytics_accepted_tradeoffs.md) — Settled UI/a11y choices (click-isolate, 32px targets, search-in-dropdown keyboard limit, rAF auto-focus); don't re-flag.
 - [Daily-volume bar strip pattern](daily_volume_bar_strip_pattern.md) — 4 spend charts share a daily-bar strip; hand-rolled 2 clamp bar width to 60% slot, eventCharts `barSize={14}` overlaps on long events.
 - [Heatmap Spending Calendar](heatmap_spending_calendar.md) — Donut controlled-hover (additive, no other consumer uses it); SlabLegend keyboard dead-ends; granularity toggle drift vs TrendsView; ReferenceLines LIVE (gridline fixes off-limits).
+- [MoversList shared component](movers_list_shared.md) — one list on TrendsView + BudgetDetailPage; hosts metrically identical (envelope card 4px wider); `w-0` name-column collapses to 20-44px below lg.
