@@ -9,7 +9,9 @@ export function RootLayout() {
             <ScrollRestoration />
             <DemoBanner />
             <Outlet />
-            <Toaster position="bottom-right" richColors closeButton />
+            {/* Position, variants and motion are all configured inside the
+                component — see components/ui/sonner.tsx. */}
+            <Toaster />
         </TooltipProvider>
     );
 }

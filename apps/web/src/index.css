@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./styles/orbit-design.css";
+@import "./styles/orbit-toast.css";
 
 @custom-variant dark (&:is(.dark *));
 
