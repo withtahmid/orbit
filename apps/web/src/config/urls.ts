@@ -1,10 +1,10 @@
 export const baseBackendURL = (() => {
-    const mode = (import.meta as any).env.MODE || "development";
+    const mode = import.meta.env.MODE || "development";
 
     // Frontend should read Vite-prefixed env variables (VITE_*) at build time.
-    const serverPort = (import.meta as any).env.VITE_SERVER_PORT || "3000";
-    const testBackend = (import.meta as any).env.VITE_TEST_BACKEND_URL;
-    const prodBackend = (import.meta as any).env.VITE_BACKEND_URL;
+    const serverPort = import.meta.env.VITE_SERVER_PORT || "3000";
+    const testBackend = import.meta.env.VITE_TEST_BACKEND_URL;
+    const prodBackend = import.meta.env.VITE_BACKEND_URL;
 
     if (mode === "development") {
         return `${window.location.protocol}//${window.location.hostname}:${serverPort}`;

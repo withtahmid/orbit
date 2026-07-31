@@ -8,9 +8,19 @@ type: reference
 
 Key tokens (oklch L): bg 14.5%, bg-elev-1 17%, bg-elev-2 20%; fg 96%, fg-2 80%, fg-3 62%, fg-4 48%; brand oklch(72% .14 165), brand-soft = brand @12%.
 
-Approx WCAG contrast ratios (treating oklch L ≈ CIE L*):
-- fg-3 on bg ≈ 5.2 (passes AA 4.5). fg-3 on bg-elev-1 ≈ 4.85 (passes). fg-3 on bg-elev-2 ≈ 4.43 (JUST under 4.5 — matters for hover/active legend rows and tooltips).
-- fg-4 on bg ≈ 3.2 — FAILS AA for normal text; only OK for icons/decorative graphics (3:1) or large text. fg-4 on bg-elev-2 ≈ 2.7 (fails).
+Measured WCAG contrast ratios (oklch→sRGB→relative luminance; sRGB values
+bg `#080b0a`, e1 `#0d100f`, e2 `#131716`, fg `#eef3f2`, fg-2 `#babfbe`, fg-3 `#818886`, fg-4 `#595f5e`):
+- fg-3: 5.40 on bg, **5.27 on bg-elev-1, 4.98 on bg-elev-2** — passes AA on all three, hover included.
+- fg-2: 10.25 on bg-elev-1, 9.70 on bg-elev-2. fg: ~13+ everywhere.
+- fg-4: 3.00 on bg, **2.93 on bg-elev-1, 2.78 on bg-elev-2** — FAILS AA for normal text; icons/decorative only, and it misses even 3:1 on elevated surfaces.
+
+**`opacity` on a row/card silently voids these numbers.** Group opacity composites text AND
+background against the parent, so contrast drops steeply: at `opacity: 0.72` over bg-elev-1,
+fg-3 → **3.28** (fails), fg-2 → 5.75 (ok), fg → 9.05 (ok), fg-4 → 2.08. At `0.55`: fg-3 → 2.40,
+fg-2 → 3.82, fg → 5.68. So a dimmed-but-still-interactive state (in-flight save, "syncing") may
+not use `opacity` on anything carrying fg-3/fg-4 text — WCAG's inactive-control exemption only
+covers genuinely disabled UI. Hover feedback also nearly vanishes: bg-elev-2 vs bg-elev-1 is only
+1.06:1 at full opacity and 1.04:1 at 0.72. A `var(--brand)` focus ring survives (8.20 → 4.72).
 
 **Recurring issue:** meaningful caption text keeps getting shipped at `--fg-4` (empty-state helper lines, chart axis labels, file sizes, tooltip sub-values). It should be `--fg-3`. Decorative icons at fg-4 are fine.
 

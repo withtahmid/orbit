@@ -209,8 +209,16 @@ export function CategoryMultiSelect({
                                         checked={selectedSet.has(n.id)}
                                         onCheckedChange={() => toggle(n.id)}
                                         onSelect={(e) => e.preventDefault()}
+                                        /* Flat results read flat. `filtered` is a
+                                           plain name match that drops ancestors,
+                                           so keeping the depth indent left a child
+                                           indented under a parent that isn't on
+                                           screen — the indentation pointed at
+                                           nothing. */
                                         style={{
-                                            paddingLeft: `${0.5 + n.depth * 0.75}rem`,
+                                            paddingLeft: query.trim()
+                                                ? "0.5rem"
+                                                : `${0.5 + n.depth * 0.75}rem`,
                                         }}
                                     >
                                         <span className="flex min-w-0 flex-1 items-center gap-2">

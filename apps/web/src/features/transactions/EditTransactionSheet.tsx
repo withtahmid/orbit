@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
     ArrowDown,
     ArrowUp,
@@ -29,9 +29,11 @@ import { trpc } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
 import type { RouterOutput } from "@/trpc";
 import { toInputDateTime, fromInputDateTime } from "@/lib/dates";
+import { formatInAppTz } from "@/lib/formatDate";
 import { getIcon } from "@/lib/entityIcons";
 import { NT_STYLES, SourceOverspendHint } from "./NewTransactionSheet";
 import { TransactionDatePicker, TDP_POPOVER_STYLES } from "./TransactionDatePicker";
+import { useOptimisticTransactionCache } from "./useOptimisticTransactionCache";
 
 type SpaceAccount = RouterOutput["account"]["listBySpace"][number];
 const ownedByMe = (a: SpaceAccount) => a.myRole === "owner";
@@ -142,12 +144,10 @@ export function EditTransactionSheet({
     const type = transaction.type as unknown as TxType;
     const meta = EDIT_META[type];
     const LeadIcon = meta.icon;
-    /* Lifted from EditForm so the footer Save button can reflect the
-       mutation's pending state (disable + spinner + "Saving…" label).
-       Without this, the button looks unresponsive on click — and worse,
-       double-clicks could fire two updates. Matches NewTransactionSheet
-       pattern. */
-    const [isSaving, setIsSaving] = useState(false);
+    /* No pending/"Saving…" state here on purpose: the save is optimistic,
+       so the sheet closes on submit and the edited row carries the saving
+       spinner in the list instead. EditForm's own same-frame submit lock
+       covers the double-fire the old disabled state used to. */
 
     return (
         <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -162,26 +162,16 @@ export function EditTransactionSheet({
                     onClose={onClose}
                     footer={
                         <>
-                            <button
-                                type="button"
-                                className="nt-btn"
-                                onClick={onClose}
-                                disabled={isSaving}
-                            >
+                            <button type="button" className="nt-btn" onClick={onClose}>
                                 Cancel
                             </button>
                             <button
                                 type="submit"
                                 form="edit-tx-form"
                                 className="nt-btn nt-btn-primary"
-                                disabled={isSaving}
                             >
-                                {isSaving ? (
-                                    <span className="nt-spinner" aria-hidden />
-                                ) : (
-                                    <Check className="size-3.5" />
-                                )}
-                                {isSaving ? "Saving…" : "Save changes"}
+                                <Check className="size-3.5" />
+                                Save changes
                             </button>
                         </>
                     }
@@ -189,12 +179,7 @@ export function EditTransactionSheet({
                     <OrbitFormStyles />
                     <style>{NT_STYLES}</style>
                     <style>{TDP_POPOVER_STYLES}</style>
-                    <EditForm
-                        key={transaction.id}
-                        transaction={transaction}
-                        onDone={onClose}
-                        onPendingChange={setIsSaving}
-                    />
+                    <EditForm key={transaction.id} transaction={transaction} onDone={onClose} />
                 </OrbitDrawerShell>
             </SheetContent>
         </Sheet>
@@ -204,16 +189,15 @@ export function EditTransactionSheet({
 function EditForm({
     transaction,
     onDone,
-    onPendingChange,
 }: {
     transaction: EditableTransaction;
     onDone: () => void;
-    onPendingChange: (pending: boolean) => void;
 }) {
     const spaceId = transaction.space_id;
     const type = transaction.type as unknown as TxType;
     const meta = EDIT_META[type];
     const invalidate = useInvalidateAnalytics();
+    const optimistic = useOptimisticTransactionCache();
     const isFeeExpense = type === "expense" && transaction.parent_transfer_id != null;
 
     const accountsQuery = trpc.account.listBySpace.useQuery({ spaceId });
@@ -260,9 +244,22 @@ function EditForm({
                 .map(toAccountItem),
         [accountsQuery.data]
     );
+    /* Transfer destinations only — mirrors NewTransactionSheet's filter (see
+       the reasoning there): the server needs an owner/viewer
+       `user_accounts` row for the caller, so accounts reachable through
+       space membership alone would fail with FORBIDDEN. Offering them here
+       was worse than in the create sheet: the edit sheet closes on submit,
+       so the rejection also discarded everything the user had typed.
+       Keep the transaction's CURRENT destination even if it wouldn't pass —
+       an older row may point at an account the caller has since lost their
+       row on, and dropping it from the list would silently blank the field. */
     const destItems = useMemo(
-        () => (accountsQuery.data ?? []).filter((a) => a.id !== sourceAccountId).map(toAccountItem),
-        [accountsQuery.data, sourceAccountId]
+        () =>
+            (accountsQuery.data ?? [])
+                .filter((a) => a.id !== sourceAccountId)
+                .filter((a) => a.myRole != null || a.id === transaction.destination_account_id)
+                .map(toAccountItem),
+        [accountsQuery.data, sourceAccountId, transaction.destination_account_id]
     );
 
     const selectedEnvelope = useMemo(
@@ -307,17 +304,140 @@ function EditForm({
         [envelopesQuery.data, envelopeId]
     );
 
+    /* Same-frame double-submit lock. The sheet closes synchronously on
+       submit, but the form is still in the DOM until React re-renders, so
+       a second Enter/click in the same frame could fire a second update.
+       Effectively single-use per mount: closing unmounts EditForm, so a
+       reopened sheet always gets a fresh ref (onSettled clears it for the
+       no-close case only — a failed submit that kept the form alive). */
+    const submittingRef = useRef(false);
     const mutate = trpc.transaction.update.useMutation({
-        onSuccess: async () => {
+        onMutate: async (variables) => {
+            await optimistic.cancelBoth();
+            /* Only the columns this submit actually sends get patched:
+               `undefined` means "leave unchanged" server-side, so it must
+               mean the same in the cache. `prev` mirrors `patch`
+               key-for-key from the row as the sheet opened it, so the
+               error path can put exactly those columns back. */
+            const patch: Record<string, unknown> = {};
+            const prev: Record<string, unknown> = {};
+            const put = (column: string, next: unknown, before: unknown) => {
+                patch[column] = next;
+                prev[column] = before;
+            };
+            if (variables.amount !== undefined) {
+                // Numeric columns arrive as strings over the wire — keep
+                // the optimistic value in the same shape the row already
+                // has so every formatter treats it identically.
+                put("amount", String(variables.amount), transaction.amount);
+            }
+            if (variables.datetime !== undefined) {
+                put(
+                    "transaction_datetime",
+                    new Date(variables.datetime).toISOString(),
+                    transaction.transaction_datetime
+                );
+            }
+            if (variables.description !== undefined) {
+                put("description", variables.description, transaction.description);
+            }
+            if (variables.location !== undefined) {
+                put("location", variables.location, transaction.location);
+            }
+            if (variables.sourceAccountId !== undefined) {
+                put("source_account_id", variables.sourceAccountId, transaction.source_account_id);
+            }
+            if (variables.destinationAccountId !== undefined) {
+                put(
+                    "destination_account_id",
+                    variables.destinationAccountId,
+                    transaction.destination_account_id
+                );
+            }
+            if (variables.expenseCategoryId !== undefined) {
+                put(
+                    "expense_category_id",
+                    variables.expenseCategoryId,
+                    transaction.expense_category_id
+                );
+            }
+            if (variables.envelopId !== undefined) {
+                put("envelop_id", variables.envelopId, transaction.envelop_id);
+            }
+            if (variables.eventId !== undefined) {
+                put("event_id", variables.eventId, transaction.event_id);
+            }
+            /* Blank the server-computed running balance whenever the edit
+               invalidates it. Amount and "Balance after" are an arithmetic
+               pair on a ledger row: showing the NEW amount beside the
+               PRE-EDIT balance is two numbers that can't both be true, and
+               the window isn't a frame — invalidating an infinite query
+               refetches every loaded page. `rowBalanceEntries` renders an
+               empty map as "—", which is the honest state until the server
+               recomputes. Same stance as the create path, which seeds
+               `account_balances_after: {}` for exactly this reason.
+               Every input is COMPARED, not merely checked for presence: the
+               form always sends the amount, and always sends whichever
+               account its type owns, so a bare `!== undefined` blanked the
+               balance even when the user changed nothing but a note. */
+            const amountChanged =
+                variables.amount !== undefined && variables.amount !== Number(transaction.amount);
+            const sourceChanged =
+                variables.sourceAccountId !== undefined &&
+                variables.sourceAccountId !== transaction.source_account_id;
+            const destinationChanged =
+                variables.destinationAccountId !== undefined &&
+                variables.destinationAccountId !== transaction.destination_account_id;
+            if (amountChanged || sourceChanged || destinationChanged) {
+                put(
+                    "account_balances_after",
+                    {},
+                    (transaction as { account_balances_after?: unknown }).account_balances_after ??
+                        null
+                );
+            }
+            /* Row only — the IN/OUT/NET/AVG tiles are NOT patched here.
+               `filteredTotals` is filtered on nine dimensions this form can
+               all change, so an edit can move the row out of (or into) the
+               counted set; a `next - previous` bump would then be wrong,
+               not merely early. They resync on the invalidate() below.
+               See the note in useOptimisticTransactionCache.ts. */
+            optimistic.patchSavingRow(transaction.id, patch);
+            return { prev };
+        },
+        onSuccess: async (_data, _variables, ctx) => {
+            /* Clear the row's saving state BEFORE invalidating — the
+               refetch reconciles to server truth (balances, fee row,
+               ordering) but must never be the only thing that clears the
+               spinner: it can fail or be cancelled silently. */
+            if (ctx) optimistic.settleRow(transaction.id);
             toast.success("Transaction updated");
             await invalidate(spaceId);
-            onDone();
         },
-        onError: (e) => toast.error(e.message),
+        onError: async (e, _variables, ctx) => {
+            if (ctx) {
+                optimistic.restoreRow(transaction.id, ctx.prev);
+                // `prev` is the row as the sheet opened it, which a
+                // refetch in between may have moved past — resync to
+                // truth rather than trust the local restore.
+                await invalidate(spaceId);
+            }
+            /* Name the row. The sheet is already gone by the time this fires,
+               so an anonymous "changes didn't save" leaves a user who edited
+               two rows in a row unable to tell WHICH one reverted.
+               Deliberately the PRE-EDIT identity rather than `variables`: the
+               row has just been rolled back, so naming the attempted amount
+               and date would point at figures that appear nowhere on screen. */
+            const when = formatInAppTz(transaction.transaction_datetime, "MMM d");
+            toast.error(
+                `Couldn't save changes to that ${type} of ${transaction.amount} on ${when} — ${e.message}`,
+                { duration: Infinity }
+            );
+        },
+        onSettled: () => {
+            submittingRef.current = false;
+        },
     });
-    useEffect(() => {
-        onPendingChange(mutate.isPending);
-    }, [mutate.isPending, onPendingChange]);
 
     /* Net new debit applied to the (possibly newly-picked) source. When
        the source is unchanged, only the delta vs. the existing amount
@@ -335,9 +455,21 @@ function EditForm({
 
     const submit = (e: FormEvent) => {
         e.preventDefault();
+        if (submittingRef.current || mutate.isPending) return;
         const parsed = Number(amount);
         if (!Number.isFinite(parsed) || parsed <= 0) {
             toast.error("Amount must be greater than zero");
+            return;
+        }
+        /* `fromInputDateTime` returns `new Date(NaN)` for any string its
+           regex misses. That would throw inside onMutate at
+           `.toISOString()`, and a throw there rejects the mutation BEFORE
+           the request is ever sent — a silent no-save with no error. The
+           date picker guards its own segments, so this is a backstop for
+           the one field submit never validated. */
+        const parsedDatetime = fromInputDateTime(datetime);
+        if (!Number.isFinite(parsedDatetime.getTime())) {
+            toast.error("Pick a valid date and time");
             return;
         }
         if (type === "expense" && (!sourceAccountId || !categoryId)) {
@@ -375,10 +507,14 @@ function EditForm({
                 : isFeeExpense
                   ? undefined
                   : sourceAccountId || null;
+        submittingRef.current = true;
         mutate.mutate({
             transactionId: transaction.id,
             amount: parsed,
-            datetime: fromInputDateTime(datetime),
+            /* Parent-owned on a fee row (the server re-syncs both from the
+               transfer), so send nothing rather than echo a value we don't
+               control — same stance as `sendSource` below. */
+            datetime: isFeeExpense ? undefined : parsedDatetime,
             description: description.trim() === "" ? null : description.trim(),
             location: location.trim() === "" ? null : location.trim(),
             sourceAccountId: sendSource,
@@ -388,26 +524,57 @@ function EditForm({
                     : destinationAccountId || null,
             expenseCategoryId: type === "expense" ? categoryId : undefined,
             envelopId: envelopeChanged ? envelopeId : undefined,
-            eventId: type === "adjustment" ? undefined : eventId === "" ? null : eventId,
+            eventId:
+                type === "adjustment" || isFeeExpense ? undefined : eventId === "" ? null : eventId,
         });
+        /* Close immediately — the edited row shows the new values with a
+           saving spinner, and onError rolls it back with a persistent
+           toast. Mirrors the create path in NewTransactionSheet. */
+        onDone();
     };
 
     return (
         <form id="edit-tx-form" className="nt-form" onSubmit={submit}>
             {isFeeExpense && (
+                /* Says what is actually true of this form. The previous copy
+                   sent the user to the parent transfer to change the fee's
+                   amount — but the amount field right below IS editable and
+                   does save, while the transfer's own edit form has no fee
+                   controls at all, so the instruction pointed at a screen
+                   that doesn't exist. Only the account is locked (the select
+                   below is disabled, and the submit sends no source for fee
+                   rows so it can't drift from its parent). */
                 <OrbitInfoPill tone="transfer">
-                    This is a transfer fee. Edit the parent transfer to change the fee's amount or
-                    source account.
+                    This is a transfer fee. Its account, date, and event follow the parent transfer
+                    and are locked here — the amount, category, envelope, and notes are yours to
+                    edit.
                 </OrbitInfoPill>
             )}
 
             <OrbitAmountCard value={amount} onChange={setAmount} tone={meta.tone} autoFocus />
 
-            {type !== "adjustment" && (
-                <OrbitField label="Date">
-                    <TransactionDatePicker value={datetime} onChange={setDatetime} />
-                </OrbitField>
-            )}
+            {type !== "adjustment" &&
+                (isFeeExpense ? (
+                    /* A fee's date is the parent transfer's date: the server
+                       re-syncs it on every transfer edit (see update.mts), so
+                       an editable field here would accept a value and then
+                       silently lose it the next time the parent changed. Show
+                       it, locked, instead of lying about it. */
+                    <OrbitField label="Date" hint="Locked — follows the parent transfer">
+                        <OrbitInput
+                            value={formatInAppTz(
+                                fromInputDateTime(datetime),
+                                "MMM d, yyyy · h:mm a"
+                            )}
+                            readOnly
+                            disabled
+                        />
+                    </OrbitField>
+                ) : (
+                    <OrbitField label="Date">
+                        <TransactionDatePicker value={datetime} onChange={setDatetime} />
+                    </OrbitField>
+                ))}
 
             {type === "income" && (
                 <OrbitField label="Into account" required>
@@ -449,7 +616,12 @@ function EditForm({
                             additionalDebit={editAdditionalDebit}
                         />
                     )}
-                    <OrbitField label="Category" hint="Tag for what the spend was" required>
+                    <OrbitField
+                        label="Category"
+                        hint="Tag for what the spend was"
+                        required
+                        noWrapperLabel
+                    >
                         <CategoryTreeSelect
                             categories={categoriesQuery.data ?? []}
                             value={categoryId}
@@ -535,7 +707,14 @@ function EditForm({
                             <ArrowDown className="size-3.5" />
                         </span>
                     </div>
-                    <OrbitField label="To" required>
+                    {/* See NewTransactionSheet's "To" field: the list hides
+                        accounts the server would reject, so the rule needs
+                        saying out loud. */}
+                    <OrbitField
+                        label="To"
+                        required
+                        hint="Only accounts shared with you can receive a transfer"
+                    >
                         <OrbitSelect
                             value={destinationAccountId}
                             onValueChange={setDest}
@@ -599,12 +778,23 @@ function EditForm({
                             </OrbitField>
 
                             {(eventsQuery.data?.length ?? 0) > 0 && (
-                                <OrbitField label="Link to event" hint="Optional">
+                                <OrbitField
+                                    label="Link to event"
+                                    /* Same reason as the Date field above: the
+                                       server keeps a fee's event in lockstep
+                                       with its parent transfer. */
+                                    hint={
+                                        isFeeExpense
+                                            ? "Locked — follows the parent transfer"
+                                            : "Optional"
+                                    }
+                                >
                                     <OrbitSelect
                                         value={eventId || "__none"}
                                         onValueChange={(v) => setEventId(v === "__none" ? "" : v)}
                                         items={eventItems}
                                         placeholder="No event"
+                                        disabled={isFeeExpense}
                                     />
                                 </OrbitField>
                             )}

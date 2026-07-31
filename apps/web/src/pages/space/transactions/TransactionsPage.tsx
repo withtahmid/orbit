@@ -88,6 +88,12 @@ function rowBalanceEntries(t: {
  *  server yet — never present on a real row. */
 const isPendingRow = (t: { id: string; __pending?: boolean }) => t.__pending === true;
 
+/** True for a REAL row whose optimistic edit is still in flight. Unlike a
+ *  pending row this one keeps its identity — badge, click target — because
+ *  there is a real transaction behind it and nothing guarantees the flag
+ *  clears (a hung request leaves it set). Only re-editing is gated. */
+const isSavingRow = (t: { id: string; __saving?: boolean }) => t.__saving === true;
+
 /** A rendered list row — the page shows either the space list or its
  *  personal cross-space twin, so selection state carries the union. */
 type TxRow =
@@ -110,6 +116,32 @@ const TYPE_OPTIONS: Array<{ value: TxType | null; label: string }> = [
    appended once we cross years. */
 type DayGroup<T> = { key: string; label: string; items: T[] };
 
+/* Merge same-day groups and order them newest-first. For server data this
+   is a no-op — rows arrive `transaction_datetime DESC`, so the linear pass
+   above already emits one group per day in order. It exists for the
+   optimistic case: a created or edited row can carry a date that breaks
+   DESC order, and a run-length grouper then emits the SAME calendar day as
+   two non-adjacent groups — a stray sticky "Apr 12" header wedged between
+   two July blocks, plus duplicate React keys. Normalising here puts the row
+   in the day block its own date claims and makes `g.key` unique again. */
+function normalizeDayGroups<T>(groups: DayGroup<T>[]): DayGroup<T>[] {
+    const byKey = new Map<string, DayGroup<T>>();
+    for (const g of groups) {
+        const existing = byKey.get(g.key);
+        if (existing) existing.items.push(...g.items);
+        else byKey.set(g.key, g);
+    }
+    /* Sort unconditionally. Gating this on "did we merge anything" looked
+       like a free optimisation and was a bug: an optimistic date edit that
+       lands on a day NOT already in the list produces all-unique keys, so
+       the gate short-circuited and the new day rendered wherever the run-
+       length pass happened to emit it — e.g. editing a Jul 28 row to Aug 15
+       parked an "Aug 15" block at the BOTTOM, under July. Sorting a list
+       that's already descending is a no-op on an array with one entry per
+       day. */
+    return [...byKey.values()].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+}
+
 function groupByDay<T extends { transaction_datetime: string | Date }>(
     items: T[],
     todayKey: string,
@@ -130,17 +162,14 @@ function groupByDay<T extends { transaction_datetime: string | Date }>(
                 label =
                     year === thisYear
                         ? formatInAppTz(item.transaction_datetime, "EEEE, MMM d")
-                        : formatInAppTz(
-                              item.transaction_datetime,
-                              "EEEE, MMM d, yyyy"
-                          );
+                        : formatInAppTz(item.transaction_datetime, "EEEE, MMM d, yyyy");
             }
             group = { key, label, items: [] };
             groups.push(group);
         }
         group.items.push(item);
     }
-    return groups;
+    return normalizeDayGroups(groups);
 }
 
 function DayHeader({ label }: { label: string }) {
@@ -212,8 +241,7 @@ export default function TransactionsPage() {
        reads as a clean running balance (statement mode: dots hidden, caption
        shown); across accounts each row shows its own account's balance —
        two lines for a transfer. */
-    const singleAccountId =
-        f.accountIds.length === 1 ? f.accountIds[0] : null;
+    const singleAccountId = f.accountIds.length === 1 ? f.accountIds[0] : null;
     const isStatementMode = !!singleAccountId;
 
     const accountsSpaceQuery = trpc.account.listBySpace.useQuery(
@@ -246,9 +274,7 @@ export default function TransactionsPage() {
     });
     const categoriesData = useMemo(
         () =>
-            isPersonal
-                ? categoriesPersonalQuery.data ?? []
-                : categoriesSpaceQuery.data ?? [],
+            isPersonal ? (categoriesPersonalQuery.data ?? []) : (categoriesSpaceQuery.data ?? []),
         [isPersonal, categoriesPersonalQuery.data, categoriesSpaceQuery.data]
     );
 
@@ -265,7 +291,16 @@ export default function TransactionsPage() {
         { enabled: !isPersonal }
     );
 
-    const [selectedTx, setSelectedTx] = useState<TxRow | null>(null);
+    /* Selection is held by ID, not by row object. Holding the object froze
+       a snapshot: the optimistic cache patch replaces row objects in the
+       query cache, so an open details sheet kept rendering the pre-edit
+       amount/date, and the `isSaving` flag derived from it never cleared
+       when the save settled — leaving Edit disabled until the user closed
+       and reopened the sheet. Deriving the row from `items` each render
+       tracks both. If the row leaves the list entirely (deleted, or an edit
+       moved it out of the active filter) this resolves to null and the sheet
+       closes, which beats rendering an empty shell. */
+    const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
     /**
      * Page-owned edit state. Previously each row mounted its own
      * EditTransactionSheet, which could stack on top of the details
@@ -329,15 +364,45 @@ export default function TransactionsPage() {
 
     const accountsById = useMemo(() => {
         const m = new Map<string, { name: string; color: string; icon: string }>();
-        for (const a of accountsData)
-            m.set(a.id, { name: a.name, color: a.color, icon: a.icon });
+        for (const a of accountsData) m.set(a.id, { name: a.name, color: a.color, icon: a.icon });
         return m;
     }, [accountsData]);
 
     const categoriesById = useMemo(() => {
         const m = new Map<string, { name: string; color: string; icon: string }>();
-        for (const c of categoriesData)
-            m.set(c.id, { name: c.name, color: c.color, icon: c.icon });
+        for (const c of categoriesData) m.set(c.id, { name: c.name, color: c.color, icon: c.icon });
+        return m;
+    }, [categoriesData]);
+
+    /**
+     * Category id → its ROOT ancestor, for sub-categories only. Roots
+     * themselves are absent from the map, so `get(id)` returning undefined
+     * means "this row's category IS a root, nothing extra to show".
+     *
+     * Deliberately the root and not the immediate parent: analytics rolls
+     * spending up to roots, so the root is the label that lets a reader
+     * connect a row to the totals they see elsewhere ("Rice" means nothing;
+     * "under Groceries" does). The walk carries a visited-guard like every
+     * other category walker in the app (CategoriesPage's `ancestorIds`,
+     * CategoryMultiSelect's `path`) — the server blocks creating a
+     * parent_id cycle, but corrupt/stale data must degrade instead of
+     * hanging the page.
+     */
+    const categoryRootById = useMemo(() => {
+        const byId = new Map(categoriesData.map((c) => [c.id, c]));
+        const m = new Map<string, { name: string; color: string }>();
+        for (const c of categoriesData) {
+            let cur = c;
+            const seen = new Set<string>([c.id]);
+            // `byId.has` mirrors buildTree's orphan stance everywhere else:
+            // a parent_id pointing at a missing row means "treat as
+            // top-level", never emit a phantom ancestor.
+            while (cur.parent_id && byId.has(cur.parent_id) && !seen.has(cur.parent_id)) {
+                seen.add(cur.parent_id);
+                cur = byId.get(cur.parent_id)!;
+            }
+            if (cur.id !== c.id) m.set(c.id, { name: cur.name, color: cur.color });
+        }
         return m;
     }, [categoriesData]);
 
@@ -367,20 +432,13 @@ export default function TransactionsPage() {
     /* Count only the filters NOT owned by the AnalyticsFilterBar — the
        bar renders its own summary + "Clear all" for env/acc/cat. This
        badges the "Add filter" popover (type/event/amount/user). */
-    const activeFilterCount = [
-        type,
-        eventId,
-        userId,
-        amountMin,
-        amountMax,
-    ].filter(Boolean).length;
+    const activeFilterCount = [type, eventId, userId, amountMin, amountMax].filter(Boolean).length;
 
     /* Whether ANY filter is narrowing the list — includes the env/acc/cat
        multi-selects (owned by the bar) and the search box, not just the
        "Add filter" popover's set. Drives the page-level "Clear" button and
        the "no match" vs "nothing yet" empty state. */
-    const hasActiveFilters =
-        activeFilterCount > 0 || f.hasAnyFilter || !!search;
+    const hasActiveFilters = activeFilterCount > 0 || f.hasAnyFilter || !!search;
 
     /* Flatten all loaded pages into a single list. Each page carries its
        own `nextCursor`; the latest page's nextCursor === null means the
@@ -388,6 +446,12 @@ export default function TransactionsPage() {
     const items = useMemo(
         () => listQuery.data?.pages.flatMap((p) => p.items) ?? [],
         [listQuery.data]
+    );
+    /* The live row behind `selectedTxId` — see that state's comment for why
+       this is looked up rather than stored. */
+    const selectedTx = useMemo<TxRow | null>(
+        () => (selectedTxId ? (items.find((t) => t.id === selectedTxId) ?? null) : null),
+        [items, selectedTxId]
     );
     const hasNextPage = listQuery.hasNextPage ?? false;
     const isFetchingNextPage = listQuery.isFetchingNextPage ?? false;
@@ -398,10 +462,7 @@ export default function TransactionsPage() {
        previous day's labels until the query data changes. */
     const now = new Date();
     const todayKey = formatInAppTz(now, "yyyy-MM-dd");
-    const yesterdayKey = formatInAppTz(
-        new Date(now.getTime() - 86_400_000),
-        "yyyy-MM-dd"
-    );
+    const yesterdayKey = formatInAppTz(new Date(now.getTime() - 86_400_000), "yyyy-MM-dd");
     const thisYear = formatInAppTz(now, "yyyy");
     const dayGroups = useMemo(
         () => groupByDay(items, todayKey, yesterdayKey, thisYear),
@@ -444,14 +505,14 @@ export default function TransactionsPage() {
         { spaceId: space.id, ...filteredTotalsInput },
         { enabled: !isPersonal }
     );
-    const filteredTotalsPersonalQuery =
-        trpc.personal.transactionFilteredTotals.useQuery(filteredTotalsInput, {
+    const filteredTotalsPersonalQuery = trpc.personal.transactionFilteredTotals.useQuery(
+        filteredTotalsInput,
+        {
             enabled: isPersonal,
-        });
+        }
+    );
     const totalsData =
-        (isPersonal
-            ? filteredTotalsPersonalQuery.data
-            : filteredTotalsSpaceQuery.data) ?? null;
+        (isPersonal ? filteredTotalsPersonalQuery.data : filteredTotalsSpaceQuery.data) ?? null;
     const summary = totalsData
         ? {
               inTotal: totalsData.inTotal,
@@ -495,10 +556,8 @@ export default function TransactionsPage() {
             <header className="tx-topbar">
                 <div className="tx-topbar-text">
                     <span className="eyebrow">
-                        {(totalsData?.count ?? items.length).toLocaleString(
-                            "en-US"
-                        )}{" "}
-                        results · {periodLabel}
+                        {(totalsData?.count ?? items.length).toLocaleString("en-US")} results ·{" "}
+                        {periodLabel}
                     </span>
                     <h1 className="display tx-title">Transactions</h1>
                     <p className="tx-sub">
@@ -514,10 +573,7 @@ export default function TransactionsPage() {
                     <PermissionGate roles={["owner", "editor"]}>
                         <NewTransactionSheet
                             trigger={
-                                <button
-                                    type="button"
-                                    className="od-btn od-btn-primary"
-                                >
+                                <button type="button" className="od-btn od-btn-primary">
                                     <Plus className="size-3.5" /> New transaction
                                 </button>
                             }
@@ -531,10 +587,7 @@ export default function TransactionsPage() {
                 <div className="od-card tx-filters">
                     <div className="tx-filter-row1">
                         <label className="tx-search">
-                            <Search
-                                className="size-3.5"
-                                style={{ color: "var(--fg-4)" }}
-                            />
+                            <Search className="size-3.5" style={{ color: "var(--fg-4)" }} />
                             <input
                                 className="od-input tx-search-input"
                                 placeholder="Search description, location, or amount…"
@@ -614,9 +667,7 @@ export default function TransactionsPage() {
                         </div>
 
                         <span className="tx-filter-count">
-                            {(totalsData?.count ?? items.length).toLocaleString(
-                                "en-US"
-                            )}{" "}
+                            {(totalsData?.count ?? items.length).toLocaleString("en-US")}{" "}
                             transactions
                         </span>
                     </div>
@@ -624,28 +675,15 @@ export default function TransactionsPage() {
 
                 {/* Daily summary strip */}
                 <div className="od-card tx-summary">
-                    <SummaryCell
-                        label="In"
-                        amount={summary.inTotal}
-                        variant="income"
-                        signed
-                    />
-                    <SummaryCell
-                        label="Out"
-                        amount={summary.outTotal}
-                        variant="expense"
-                    />
+                    <SummaryCell label="In" amount={summary.inTotal} variant="income" signed />
+                    <SummaryCell label="Out" amount={summary.outTotal} variant="expense" />
                     <SummaryCell
                         label="Net"
                         amount={summary.net}
                         variant={summary.net >= 0 ? "income" : "expense"}
                         signed
                     />
-                    <SummaryCell
-                        label="Avg / day"
-                        amount={summary.avg}
-                        variant="neutral"
-                    />
+                    <SummaryCell label="Avg / day" amount={summary.avg} variant="neutral" />
                 </div>
 
                 {/* Table */}
@@ -669,20 +707,18 @@ export default function TransactionsPage() {
                             Each row shows{" "}
                             <strong>
                                 {singleAccountId
-                                    ? accountsById.get(singleAccountId)?.name ??
-                                      "this account"
+                                    ? (accountsById.get(singleAccountId)?.name ?? "this account")
                                     : "this account"}
                             </strong>
-                            's balance after that transaction, across all
-                            activity — filters above narrow which rows you see,
-                            not the balances.
+                            's balance after that transaction, across all activity — filters above
+                            narrow which rows you see, not the balances.
                         </div>
                     ) : (
                         (activeFilterCount > 0 || !!search) && (
                             <div className="tx-statement-note">
                                 <Coins className="size-3.5" />
-                                Balance reflects each account's full history,
-                                not just these filtered rows.
+                                Balance reflects each account's full history, not just these
+                                filtered rows.
                             </div>
                         )
                     )}
@@ -690,36 +726,36 @@ export default function TransactionsPage() {
                         a row of empty headings above the EmptyState reads
                         as broken data rather than "empty state". */}
                     {!listQuery.isLoading && items.length > 0 && (
-                    <div className="tx-table-head tx-row-grid">
-                        {[
-                            "Date",
-                            "Type",
-                            "From / To",
-                            "Category",
-                            "Envelope",
-                            ...(isPersonal ? [] : ["Event"]),
-                            "By",
-                            "Amount",
-                            "Balance after",
-                            "",
-                        ].map((h, i) => (
-                            <span
-                                key={i}
-                                className={cn(
-                                    "tx-th",
-                                    h === "Balance after" && "tx-th-balance"
-                                )}
-                                style={{
-                                    textAlign:
-                                        h === "Amount" || h === "Balance after"
-                                            ? "right"
-                                            : "left",
-                                }}
-                            >
-                                {h}
-                            </span>
-                        ))}
-                    </div>
+                        <div className="tx-table-head tx-row-grid">
+                            {[
+                                "Date",
+                                "Type",
+                                "From / To",
+                                "Category",
+                                "Envelope",
+                                ...(isPersonal ? [] : ["Event"]),
+                                "By",
+                                "Amount",
+                                "Balance after",
+                                "",
+                            ].map((h, i) => (
+                                <span
+                                    key={i}
+                                    className={cn(
+                                        "tx-th",
+                                        h === "Balance after" && "tx-th-balance"
+                                    )}
+                                    style={{
+                                        textAlign:
+                                            h === "Amount" || h === "Balance after"
+                                                ? "right"
+                                                : "left",
+                                    }}
+                                >
+                                    {h}
+                                </span>
+                            ))}
+                        </div>
                     )}
                     {listQuery.isLoading ? (
                         <div className="tx-empty">
@@ -750,17 +786,15 @@ export default function TransactionsPage() {
                                     description="Add your first transaction to start tracking this space."
                                     action={
                                         !isPersonal && (
-                                            <PermissionGate
-                                                roles={["owner", "editor"]}
-                                            >
+                                            <PermissionGate roles={["owner", "editor"]}>
                                                 <NewTransactionSheet
                                                     trigger={
                                                         <button
                                                             type="button"
                                                             className="od-btn od-btn-primary"
                                                         >
-                                                            <Plus className="size-3.5" />{" "}
-                                                            Add transaction
+                                                            <Plus className="size-3.5" /> Add
+                                                            transaction
                                                         </button>
                                                     }
                                                 />
@@ -778,11 +812,15 @@ export default function TransactionsPage() {
                                     <div key={g.key} className="tx-day-block">
                                         <DayHeader label={g.label} />
                                         {g.items.map((t) => {
-                                            const tt =
-                                                (t.type as unknown as TxType) ?? "expense";
+                                            const tt = (t.type as unknown as TxType) ?? "expense";
                                             const cat = t.expense_category_id
                                                 ? categoriesById.get(t.expense_category_id)
                                                 : null;
+                                            /* Only set when the row's category is a
+                                               sub-category — see categoryRootById. */
+                                            const catRoot = t.expense_category_id
+                                                ? categoryRootById.get(t.expense_category_id)
+                                                : undefined;
                                             const env = t.envelop_id
                                                 ? envelopesById.get(t.envelop_id)
                                                 : null;
@@ -790,244 +828,280 @@ export default function TransactionsPage() {
                                                 ? eventsById.get(t.event_id)
                                                 : null;
                                             const pending = isPendingRow(t);
+                                            /* A real row mid-edit: stays readable and
+                                               openable (the details sheet shows the
+                                               optimistic values), marked with a tint
+                                               and a spinner. Blocking
+                                               it like a pending row would strip its type
+                                               badge and click target from a transaction
+                                               that exists — and leave it that way for
+                                               good if the request hangs. */
+                                            const saving = isSavingRow(t);
                                             return (
-                                        <div
-                                            key={t.id}
-                                            /* Focusable + Enter/Space so keyboard users
+                                                <div
+                                                    key={t.id}
+                                                    /* Focusable + Enter/Space so keyboard users
                                                can open the details sheet, but NOT
                                                role="button": the row contains account
                                                <Link>s, and interactive descendants
                                                inside a button are invalid ARIA that can
                                                hide those links from screen readers. */
-                                            tabIndex={pending ? -1 : 0}
-                                            className={cn(
-                                                "tx-row tx-row-grid",
-                                                pending && "tx-row-pending"
-                                            )}
-                                            aria-busy={pending || undefined}
-                                            aria-disabled={pending || undefined}
-                                            onClick={() => {
-                                                if (!pending) setSelectedTx(t);
-                                            }}
-                                            onKeyDown={(e) => {
-                                                /* Row-level key handling only — inner
+                                                    tabIndex={pending ? -1 : 0}
+                                                    className={cn(
+                                                        "tx-row tx-row-grid",
+                                                        pending && "tx-row-pending",
+                                                        saving && "tx-row-saving"
+                                                    )}
+                                                    /* aria-busy for PENDING only. It tells AT
+                                                       "don't announce this region's content yet",
+                                                       which is right for a row that isn't real
+                                                       yet and wrong for a saving row whose values
+                                                       are exactly what the user wants read back —
+                                                       the status node in the type slot below
+                                                       carries that state instead. */
+                                                    aria-busy={pending || undefined}
+                                                    aria-disabled={pending || undefined}
+                                                    onClick={() => {
+                                                        if (!pending) setSelectedTxId(t.id);
+                                                    }}
+                                                    onKeyDown={(e) => {
+                                                        /* Row-level key handling only — inner
                                                    links/buttons keep their own native
                                                    Enter/Space without also opening the
                                                    details sheet (keydown bubbles), and
                                                    holding Space must not re-fire. */
-                                                if (e.target !== e.currentTarget) return;
-                                                if (e.repeat) return;
-                                                if (e.key === "Enter" || e.key === " ") {
-                                                    e.preventDefault();
-                                                    if (!pending) setSelectedTx(t);
-                                                }
-                                            }}
-                                        >
-                                            <span className="tx-cell-date">
-                                                <span className="tx-date">
-                                                    {formatInAppTz(
-                                                        t.transaction_datetime,
-                                                        "MMM d"
-                                                    )}
-                                                </span>
-                                                <span className="tx-time mono">
-                                                    {formatInAppTz(
-                                                        t.transaction_datetime,
-                                                        "HH:mm"
-                                                    )}
-                                                </span>
-                                            </span>
-                                            <span className="tx-type-slot">
-                                                {pending ? (
-                                                    <span
-                                                        className="tx-pending-spinner"
-                                                        role="status"
-                                                        aria-label="Saving"
-                                                    />
-                                                ) : (
-                                                    <TxBadge type={tt} />
-                                                )}
-                                            </span>
-                                            <AccountFlow
-                                                spaceId={
-                                                    (t as { space_id?: string })
-                                                        .space_id ?? space.id
-                                                }
-                                                from={t.source_account_id}
-                                                to={t.destination_account_id}
-                                                accountsById={accountsById}
-                                            />
-                                            <span className="tx-cell-cat">
-                                                {cat ? (
-                                                    <>
-                                                        <Avatar
-                                                            color={cat.color}
-                                                            icon={cat.icon}
-                                                            size={20}
-                                                        />
-                                                        <span style={{ color: "var(--fg-2)" }}>
-                                                            {cat.name}
-                                                        </span>
-                                                    </>
-                                                ) : (
-                                                    <span style={{ color: "var(--fg-4)" }}>
-                                                        —
-                                                    </span>
-                                                )}
-                                            </span>
-                                            <span className="tx-cell-env">
-                                                {env ? (
-                                                    <>
-                                                        <Avatar
-                                                            color={env.color}
-                                                            icon={env.icon}
-                                                            size={20}
-                                                        />
-                                                        <span style={{ color: "var(--fg-2)" }}>
-                                                            {env.name}
-                                                        </span>
-                                                    </>
-                                                ) : (
-                                                    <span style={{ color: "var(--fg-4)" }}>
-                                                        —
-                                                    </span>
-                                                )}
-                                            </span>
-                                            {!isPersonal && (
-                                                <span style={{ color: "var(--fg-4)" }}>
-                                                    {ev ? (
-                                                        <span
-                                                            className="tx-event-chip"
-                                                            style={{
-                                                                background: `color-mix(in oklab, ${ev.color} 12%, transparent)`,
-                                                                color: ev.color,
-                                                                borderColor: `color-mix(in oklab, ${ev.color} 30%, transparent)`,
-                                                            }}
-                                                        >
-                                                            {ev.name}
-                                                        </span>
-                                                    ) : (
-                                                        "—"
-                                                    )}
-                                                </span>
-                                            )}
-                                            <span className="tx-cell-by">
-                                                <UserAvatar
-                                                    fileId={
-                                                        t.created_by_avatar_file_id
-                                                    }
-                                                    firstName={
-                                                        t.created_by_first_name
-                                                    }
-                                                    lastName={
-                                                        t.created_by_last_name
-                                                    }
-                                                    size="xs"
-                                                />
-                                                <span
-                                                    style={{
-                                                        color: "var(--fg-3)",
-                                                        fontSize: 12,
+                                                        if (e.target !== e.currentTarget) return;
+                                                        if (e.repeat) return;
+                                                        if (e.key === "Enter" || e.key === " ") {
+                                                            e.preventDefault();
+                                                            if (!pending) setSelectedTxId(t.id);
+                                                        }
                                                     }}
                                                 >
-                                                    {t.created_by_first_name ?? "—"}
-                                                </span>
-                                            </span>
-                                            <span className="tx-cell-amt">
-                                                <Money
-                                                    amount={
-                                                        tt === "expense"
-                                                            ? -Number(t.amount)
-                                                            : Number(t.amount)
-                                                    }
-                                                    variant={
-                                                        tt === "income"
-                                                            ? "income"
-                                                            : tt === "transfer"
-                                                              ? "transfer"
-                                                              : tt === "adjustment"
-                                                                ? "warn"
-                                                                : "expense"
-                                                    }
-                                                    signed={tt === "income"}
-                                                    size={13}
-                                                    weight={500}
-                                                />
-                                                {t.description && (
-                                                    <span className="tx-cell-desc">
-                                                        {t.description}
+                                                    <span className="tx-cell-date">
+                                                        <span className="tx-date">
+                                                            {formatInAppTz(
+                                                                t.transaction_datetime,
+                                                                "MMM d"
+                                                            )}
+                                                        </span>
+                                                        <span className="tx-time mono">
+                                                            {formatInAppTz(
+                                                                t.transaction_datetime,
+                                                                "HH:mm"
+                                                            )}
+                                                        </span>
                                                     </span>
-                                                )}
-                                            </span>
-                                            <span className="tx-cell-balance">
-                                                {(() => {
-                                                        const entries =
-                                                            rowBalanceEntries(t);
-                                                        if (entries.length === 0)
-                                                            return (
-                                                                <span
-                                                                    style={{
-                                                                        color: "var(--fg-4)",
-                                                                    }}
-                                                                >
-                                                                    —
-                                                                </span>
-                                                            );
-                                                        return entries.map((b) => (
+                                                    <span className="tx-type-slot">
+                                                        {pending ? (
                                                             <span
-                                                                key={b.accountId}
-                                                                className="tx-bal-line"
-                                                            >
-                                                                {!isStatementMode && (
+                                                                className="tx-pending-spinner"
+                                                                role="status"
+                                                                aria-label="Saving"
+                                                            />
+                                                        ) : (
+                                                            <>
+                                                                <TxBadge type={tt} />
+                                                                {/* Beside the badge, never instead
+                                                                    of it: the type is the row's
+                                                                    identity and a real row must not
+                                                                    lose it while saving. */}
+                                                                {saving && (
                                                                     <span
-                                                                        className="tx-bal-dot"
-                                                                        style={{
-                                                                            background:
-                                                                                accountsById.get(
-                                                                                    b.accountId
-                                                                                )
-                                                                                    ?.color ??
-                                                                                UNALLOCATED_COLOR,
-                                                                        }}
-                                                                        title={
-                                                                            accountsById.get(
-                                                                                b.accountId
-                                                                            )?.name
-                                                                        }
+                                                                        className="tx-pending-spinner tx-saving-spinner"
+                                                                        role="status"
+                                                                        aria-label="Saving changes"
                                                                     />
                                                                 )}
-                                                                {/* Statement mode (one account selected) exists
+                                                            </>
+                                                        )}
+                                                    </span>
+                                                    <AccountFlow
+                                                        spaceId={
+                                                            (t as { space_id?: string }).space_id ??
+                                                            space.id
+                                                        }
+                                                        from={t.source_account_id}
+                                                        to={t.destination_account_id}
+                                                        accountsById={accountsById}
+                                                    />
+                                                    <span className="tx-cell-cat">
+                                                        {cat ? (
+                                                            <>
+                                                                <Avatar
+                                                                    color={cat.color}
+                                                                    icon={cat.icon}
+                                                                    size={20}
+                                                                />
+                                                                <span className="tx-cat-text">
+                                                                    <span className="tx-cat-name">
+                                                                        {cat.name}
+                                                                    </span>
+                                                                    {/* The relationship is a WORD, not
+                                                                ink: every category defaults to
+                                                                the same colour and the app has
+                                                                no root-colour legend, so a dot
+                                                                here read as an artifact. One
+                                                                string serves sighted and screen
+                                                                reader users alike. */}
+                                                                    {catRoot && (
+                                                                        <span className="tx-cat-root">
+                                                                            in {catRoot.name}
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <span style={{ color: "var(--fg-4)" }}>
+                                                                —
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                    <span className="tx-cell-env">
+                                                        {env ? (
+                                                            <>
+                                                                <Avatar
+                                                                    color={env.color}
+                                                                    icon={env.icon}
+                                                                    size={20}
+                                                                />
+                                                                <span
+                                                                    style={{ color: "var(--fg-2)" }}
+                                                                >
+                                                                    {env.name}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <span style={{ color: "var(--fg-4)" }}>
+                                                                —
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                    {!isPersonal && (
+                                                        <span style={{ color: "var(--fg-4)" }}>
+                                                            {ev ? (
+                                                                <span
+                                                                    className="tx-event-chip"
+                                                                    style={{
+                                                                        background: `color-mix(in oklab, ${ev.color} 12%, transparent)`,
+                                                                        color: ev.color,
+                                                                        borderColor: `color-mix(in oklab, ${ev.color} 30%, transparent)`,
+                                                                    }}
+                                                                >
+                                                                    {ev.name}
+                                                                </span>
+                                                            ) : (
+                                                                "—"
+                                                            )}
+                                                        </span>
+                                                    )}
+                                                    <span className="tx-cell-by">
+                                                        <UserAvatar
+                                                            fileId={t.created_by_avatar_file_id}
+                                                            firstName={t.created_by_first_name}
+                                                            lastName={t.created_by_last_name}
+                                                            size="xs"
+                                                        />
+                                                        <span
+                                                            style={{
+                                                                color: "var(--fg-3)",
+                                                                fontSize: 12,
+                                                            }}
+                                                        >
+                                                            {t.created_by_first_name ?? "—"}
+                                                        </span>
+                                                    </span>
+                                                    <span className="tx-cell-amt">
+                                                        <Money
+                                                            amount={
+                                                                tt === "expense"
+                                                                    ? -Number(t.amount)
+                                                                    : Number(t.amount)
+                                                            }
+                                                            variant={
+                                                                tt === "income"
+                                                                    ? "income"
+                                                                    : tt === "transfer"
+                                                                      ? "transfer"
+                                                                      : tt === "adjustment"
+                                                                        ? "warn"
+                                                                        : "expense"
+                                                            }
+                                                            signed={tt === "income"}
+                                                            size={13}
+                                                            weight={500}
+                                                        />
+                                                        {t.description && (
+                                                            <span className="tx-cell-desc">
+                                                                {t.description}
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                    <span className="tx-cell-balance">
+                                                        {(() => {
+                                                            const entries = rowBalanceEntries(t);
+                                                            if (entries.length === 0)
+                                                                return (
+                                                                    <span
+                                                                        style={{
+                                                                            color: "var(--fg-4)",
+                                                                        }}
+                                                                    >
+                                                                        —
+                                                                    </span>
+                                                                );
+                                                            return entries.map((b) => (
+                                                                <span
+                                                                    key={b.accountId}
+                                                                    className="tx-bal-line"
+                                                                >
+                                                                    {!isStatementMode && (
+                                                                        <span
+                                                                            className="tx-bal-dot"
+                                                                            style={{
+                                                                                background:
+                                                                                    accountsById.get(
+                                                                                        b.accountId
+                                                                                    )?.color ??
+                                                                                    UNALLOCATED_COLOR,
+                                                                            }}
+                                                                            title={
+                                                                                accountsById.get(
+                                                                                    b.accountId
+                                                                                )?.name
+                                                                            }
+                                                                        />
+                                                                    )}
+                                                                    {/* Statement mode (one account selected) exists
                                                                     to READ the running balance — full prominence
                                                                     there, matching AccountDetailPage. In the
                                                                     multi-account view balance is context: muted
                                                                     + smaller so it can't be mistaken for Amount
                                                                     (the divider + grey do the fencing). */}
-                                                                <Money
-                                                                    amount={Number(
-                                                                        b.balance
-                                                                    )}
-                                                                    variant={
-                                                                        isStatementMode
-                                                                            ? "neutral"
-                                                                            : "muted"
-                                                                    }
-                                                                    size={
-                                                                        isStatementMode
-                                                                            ? 13
-                                                                            : 12
-                                                                    }
-                                                                    weight={
-                                                                        isStatementMode
-                                                                            ? 500
-                                                                            : 400
-                                                                    }
-                                                                />
-                                                            </span>
-                                                        ));
-                                                    })()}
-                                            </span>
-                                        </div>
-                                    );
+                                                                    <Money
+                                                                        amount={Number(b.balance)}
+                                                                        variant={
+                                                                            isStatementMode
+                                                                                ? "neutral"
+                                                                                : "muted"
+                                                                        }
+                                                                        size={
+                                                                            isStatementMode
+                                                                                ? 13
+                                                                                : 12
+                                                                        }
+                                                                        weight={
+                                                                            isStatementMode
+                                                                                ? 500
+                                                                                : 400
+                                                                        }
+                                                                    />
+                                                                </span>
+                                                            ));
+                                                        })()}
+                                                    </span>
+                                                </div>
+                                            );
                                         })}
                                     </div>
                                 ))}
@@ -1039,78 +1113,93 @@ export default function TransactionsPage() {
                                     <div key={g.key} className="tx-day-block">
                                         <DayHeader label={g.label} />
                                         {g.items.map((t) => {
-                                    const tt = (t.type as unknown as TxType) ?? "expense";
-                                    const cat = t.expense_category_id
-                                        ? categoriesById.get(t.expense_category_id)
-                                        : null;
-                                    const pendingMobile = isPendingRow(t);
-                                    return (
-                                        <button
-                                            key={t.id}
-                                            type="button"
-                                            className={cn("tx-mrow", pendingMobile && "tx-mrow-pending")}
-                                            disabled={pendingMobile}
-                                            aria-busy={pendingMobile || undefined}
-                                            onClick={() => {
-                                                if (!pendingMobile) setSelectedTx(t);
-                                            }}
-                                        >
-                                            <Avatar
-                                                color={cat?.color ?? UNALLOCATED_COLOR}
-                                                icon={cat?.icon ?? "wallet"}
-                                                size={32}
-                                            />
-                                            <div className="tx-mrow-text">
-                                                <div className="tx-mrow-top">
-                                                    <span className="tx-type-slot">
-                                                    {pendingMobile ? (
-                                                        <span
-                                                        className="tx-pending-spinner"
-                                                        role="status"
-                                                        aria-label="Saving"
-                                                    />
-                                                    ) : (
-                                                        <TxBadge type={tt} />
+                                            const tt = (t.type as unknown as TxType) ?? "expense";
+                                            const cat = t.expense_category_id
+                                                ? categoriesById.get(t.expense_category_id)
+                                                : null;
+                                            const pendingMobile = isPendingRow(t);
+                                            /* See the desktop row: a real row mid-edit stays
+                                       tappable, tinted rather than dimmed. */
+                                            const savingMobile = isSavingRow(t);
+                                            return (
+                                                <button
+                                                    key={t.id}
+                                                    type="button"
+                                                    className={cn(
+                                                        "tx-mrow",
+                                                        pendingMobile && "tx-mrow-pending",
+                                                        savingMobile && "tx-mrow-saving"
                                                     )}
-                                                    </span>
-                                                    <span className="tx-mrow-date">
-                                                        {formatInAppTz(
-                                                            t.transaction_datetime,
-                                                            "MMM d"
+                                                    disabled={pendingMobile}
+                                                    aria-busy={pendingMobile || undefined}
+                                                    onClick={() => {
+                                                        if (!pendingMobile) setSelectedTxId(t.id);
+                                                    }}
+                                                >
+                                                    <Avatar
+                                                        color={cat?.color ?? UNALLOCATED_COLOR}
+                                                        icon={cat?.icon ?? "wallet"}
+                                                        size={32}
+                                                    />
+                                                    <div className="tx-mrow-text">
+                                                        <div className="tx-mrow-top">
+                                                            <span className="tx-type-slot">
+                                                                {pendingMobile ? (
+                                                                    <span
+                                                                        className="tx-pending-spinner"
+                                                                        role="status"
+                                                                        aria-label="Saving"
+                                                                    />
+                                                                ) : (
+                                                                    <>
+                                                                        <TxBadge type={tt} />
+                                                                        {savingMobile && (
+                                                                            <span
+                                                                                className="tx-pending-spinner tx-saving-spinner"
+                                                                                role="status"
+                                                                                aria-label="Saving changes"
+                                                                            />
+                                                                        )}
+                                                                    </>
+                                                                )}
+                                                            </span>
+                                                            <span className="tx-mrow-date">
+                                                                {formatInAppTz(
+                                                                    t.transaction_datetime,
+                                                                    "MMM d"
+                                                                )}
+                                                            </span>
+                                                        </div>
+                                                        <div className="tx-mrow-name">
+                                                            {cat?.name ?? t.description ?? "—"}
+                                                        </div>
+                                                        {t.description && cat && (
+                                                            <div className="tx-mrow-desc">
+                                                                {t.description}
+                                                            </div>
                                                         )}
-                                                    </span>
-                                                </div>
-                                                <div className="tx-mrow-name">
-                                                    {cat?.name ?? t.description ?? "—"}
-                                                </div>
-                                                {t.description && cat && (
-                                                    <div className="tx-mrow-desc">
-                                                        {t.description}
                                                     </div>
-                                                )}
-                                            </div>
-                                            <div className="tx-mrow-amt">
-                                                <Money
-                                                    amount={
-                                                        tt === "expense"
-                                                            ? -Number(t.amount)
-                                                            : Number(t.amount)
-                                                    }
-                                                    variant={
-                                                        tt === "income"
-                                                            ? "income"
-                                                            : tt === "transfer"
-                                                              ? "transfer"
-                                                              : tt === "adjustment"
-                                                                ? "warn"
-                                                                : "expense"
-                                                    }
-                                                    signed={tt === "income"}
-                                                    size={14}
-                                                    weight={500}
-                                                />
-                                                {rowBalanceEntries(t).map(
-                                                    (b) => (
+                                                    <div className="tx-mrow-amt">
+                                                        <Money
+                                                            amount={
+                                                                tt === "expense"
+                                                                    ? -Number(t.amount)
+                                                                    : Number(t.amount)
+                                                            }
+                                                            variant={
+                                                                tt === "income"
+                                                                    ? "income"
+                                                                    : tt === "transfer"
+                                                                      ? "transfer"
+                                                                      : tt === "adjustment"
+                                                                        ? "warn"
+                                                                        : "expense"
+                                                            }
+                                                            signed={tt === "income"}
+                                                            size={14}
+                                                            weight={500}
+                                                        />
+                                                        {rowBalanceEntries(t).map((b) => (
                                                             <span
                                                                 key={b.accountId}
                                                                 className="tx-mrow-balance"
@@ -1122,38 +1211,28 @@ export default function TransactionsPage() {
                                                                             background:
                                                                                 accountsById.get(
                                                                                     b.accountId
-                                                                                )
-                                                                                    ?.color ??
+                                                                                )?.color ??
                                                                                 UNALLOCATED_COLOR,
                                                                         }}
                                                                     />
                                                                 )}
                                                                 <Money
-                                                                    amount={Number(
-                                                                        b.balance
-                                                                    )}
+                                                                    amount={Number(b.balance)}
                                                                     variant={
                                                                         isStatementMode
                                                                             ? "neutral"
                                                                             : "muted"
                                                                     }
-                                                                    size={
-                                                                        isStatementMode
-                                                                            ? 12
-                                                                            : 11
-                                                                    }
+                                                                    size={isStatementMode ? 12 : 11}
                                                                     weight={
-                                                                        isStatementMode
-                                                                            ? 500
-                                                                            : 400
+                                                                        isStatementMode ? 500 : 400
                                                                     }
                                                                 />
                                                             </span>
-                                                        )
-                                                )}
-                                            </div>
-                                        </button>
-                                    );
+                                                        ))}
+                                                    </div>
+                                                </button>
+                                            );
                                         })}
                                     </div>
                                 ))}
@@ -1174,9 +1253,7 @@ export default function TransactionsPage() {
                                         disabled={isFetchingNextPage}
                                         onClick={() => listQuery.fetchNextPage()}
                                     >
-                                        {isFetchingNextPage
-                                            ? "Loading…"
-                                            : "Load 50 more"}
+                                        {isFetchingNextPage ? "Loading…" : "Load 50 more"}
                                     </button>
                                 ) : (
                                     <span
@@ -1197,24 +1274,30 @@ export default function TransactionsPage() {
             <TransactionDetailsSheet
                 transaction={selectedTx}
                 open={selectedTx !== null}
-                onClose={() => setSelectedTx(null)}
+                onClose={() => setSelectedTxId(null)}
                 accountsById={accountsById}
                 categoriesById={categoriesById}
                 eventsById={eventsById}
                 canEdit={selectedTx?.created_by === authStore.user?.id}
+                /* Gates the Edit hand-off only — re-editing a row whose own
+                   save is still out would snapshot already-optimistic values
+                   as its rollback baseline. Delete and attachments stay
+                   available: this flag has no timeout, so gating them too
+                   made a hung save leave the row unmanageable. */
+                isSaving={!!selectedTx && isSavingRow(selectedTx)}
                 onEdit={() => {
                     // Hand off from details -> edit. Capture the row,
                     // close details first so the two right-side sheets
                     // never coexist (this was the bug that motivated
                     // hoisting edit state to the page).
                     const tx = selectedTx;
-                    setSelectedTx(null);
+                    setSelectedTxId(null);
                     setEditingTx(tx);
                 }}
                 onDelete={() => {
                     const tx = selectedTx;
                     if (!tx) return;
-                    setSelectedTx(null);
+                    setSelectedTxId(null);
                     del.mutate({ transactionId: tx.id });
                 }}
             />
@@ -1243,13 +1326,7 @@ function Money({
     decimals = 2,
 }: {
     amount: number;
-    variant?:
-        | "neutral"
-        | "income"
-        | "expense"
-        | "transfer"
-        | "muted"
-        | "warn";
+    variant?: "neutral" | "income" | "expense" | "transfer" | "muted" | "warn";
     signed?: boolean;
     size?: number;
     weight?: number;
@@ -1281,14 +1358,23 @@ function Money({
 }
 
 function TxBadge({ type }: { type: TxType }) {
-    const map: Record<
-        TxType,
-        { color: string; label: string; icon: ReactNode }
-    > = {
+    const map: Record<TxType, { color: string; label: string; icon: ReactNode }> = {
         income: { color: "var(--income)", label: "Income", icon: <ArrowDown className="size-3" /> },
-        expense: { color: "var(--expense)", label: "Expense", icon: <ArrowUp className="size-3" /> },
-        transfer: { color: "var(--transfer)", label: "Transfer", icon: <ArrowRightLeft className="size-3" /> },
-        adjustment: { color: "var(--warn)", label: "Adjustment", icon: <Edit3 className="size-3" /> },
+        expense: {
+            color: "var(--expense)",
+            label: "Expense",
+            icon: <ArrowUp className="size-3" />,
+        },
+        transfer: {
+            color: "var(--transfer)",
+            label: "Transfer",
+            icon: <ArrowRightLeft className="size-3" />,
+        },
+        adjustment: {
+            color: "var(--warn)",
+            label: "Adjustment",
+            icon: <Edit3 className="size-3" />,
+        },
     };
     const m = map[type];
     return (
@@ -1305,15 +1391,7 @@ function TxBadge({ type }: { type: TxType }) {
     );
 }
 
-function Avatar({
-    icon,
-    color,
-    size = 22,
-}: {
-    icon: string;
-    color: string;
-    size?: number;
-}) {
+function Avatar({ icon, color, size = 22 }: { icon: string; color: string; size?: number }) {
     const IconCmp = getIcon(icon);
     return (
         <span
@@ -1349,15 +1427,9 @@ function AccountFlow({
     const fromAcc = from ? accountsById.get(from) : null;
     const toAcc = to ? accountsById.get(to) : null;
     return (
-        <span
-            className="tx-cell-flow"
-            onClick={(e) => e.stopPropagation()}
-        >
+        <span className="tx-cell-flow" onClick={(e) => e.stopPropagation()}>
             {fromAcc ? (
-                <Link
-                    to={ROUTES.spaceAccountDetail(spaceId, from!)}
-                    className="tx-flow-acct"
-                >
+                <Link to={ROUTES.spaceAccountDetail(spaceId, from!)} className="tx-flow-acct">
                     <span style={{ color: "var(--fg-2)" }}>{fromAcc.name}</span>
                 </Link>
             ) : (
@@ -1366,10 +1438,7 @@ function AccountFlow({
             {toAcc && (
                 <>
                     <ArrowRightLeft className="size-3" style={{ color: "var(--fg-4)" }} />
-                    <Link
-                        to={ROUTES.spaceAccountDetail(spaceId, to!)}
-                        className="tx-flow-acct"
-                    >
+                    <Link to={ROUTES.spaceAccountDetail(spaceId, to!)} className="tx-flow-acct">
                         <span style={{ color: "var(--fg)" }}>{toAcc.name}</span>
                     </Link>
                 </>
@@ -1393,13 +1462,7 @@ function SummaryCell({
         <div className="tx-summary-cell">
             <span className="tx-summary-label">{label}</span>
             <span className="tx-summary-amt">
-                <Money
-                    amount={amount}
-                    variant={variant}
-                    signed={signed}
-                    size={20}
-                    weight={500}
-                />
+                <Money amount={amount} variant={variant} signed={signed} size={20} weight={500} />
             </span>
         </div>
     );
@@ -1441,13 +1504,8 @@ function TxEventChip({
                     <ChevronDown className="size-3 opacity-60" />
                 </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent
-                align="start"
-                className="w-[min(16rem,calc(100vw-1.5rem))]"
-            >
-                <DropdownMenuLabel className="text-xs">
-                    Filter by event
-                </DropdownMenuLabel>
+            <DropdownMenuContent align="start" className="w-[min(16rem,calc(100vw-1.5rem))]">
+                <DropdownMenuLabel className="text-xs">Filter by event</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                     className="text-xs"
@@ -1459,9 +1517,7 @@ function TxEventChip({
                 <DropdownMenuSeparator />
                 <div className="max-h-[260px] overflow-y-auto">
                     {events.length === 0 ? (
-                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                            No events.
-                        </p>
+                        <p className="px-2 py-1.5 text-xs text-muted-foreground">No events.</p>
                     ) : (
                         events.map((e) => (
                             <DropdownMenuItem
@@ -1475,9 +1531,7 @@ function TxEventChip({
                                     icon={e.icon ?? "calendar"}
                                 />
                                 <span className="truncate">{e.name}</span>
-                                {value === e.id && (
-                                    <Check className="ml-auto size-3.5" />
-                                )}
+                                {value === e.id && <Check className="ml-auto size-3.5" />}
                             </DropdownMenuItem>
                         ))
                     )}
@@ -1992,11 +2046,33 @@ const TX_STYLES = `
     pointer-events: none;
 }
 .tx-row-pending:hover { background: transparent; }
+/* A REAL row with an edit in flight. Fully interactive: it keeps its type
+   badge, click target and keyboard focus, because there is a real
+   transaction behind it and a hung request must not leave a ledger row
+   unreadable.
+   Marked with a brand tint + edge bar rather than opacity. Group opacity
+   composites TEXT as well as background, and at 0.72 every --fg-3 line in
+   the row (the root-category sub-line, the time, the author) fell to
+   ~3.3:1 — under AA on a row that is still enabled, so none of the
+   inactive-control exemptions apply. It also flattened hover feedback to
+   ~1.04:1, i.e. invisible. The tint reads as a state without touching a
+   single foreground colour. */
+.tx-row-saving,
+.tx-mrow-saving {
+    background: color-mix(in oklab, var(--brand) 7%, transparent);
+    box-shadow: inset 2px 0 0 var(--brand);
+}
+.tx-row-saving:hover,
+.tx-mrow-saving:hover {
+    background: color-mix(in oklab, var(--brand) 12%, transparent);
+}
 /* Holds the type badge / pending spinner so swapping between them doesn't
    shift the row's height or push the date sideways. */
 .tx-type-slot {
     display: inline-flex;
     align-items: center;
+    /* Room for the saving spinner that sits beside the badge. */
+    gap: 6px;
     min-height: 22px;
 }
 .tx-pending-spinner {
@@ -2013,6 +2089,17 @@ const TX_STYLES = `
 }
 @media (prefers-reduced-motion: reduce) {
     .tx-pending-spinner { animation: none; }
+}
+/* Sits BESIDE the type badge on a saving row, so it has to be cheap on
+   width: the Type track is 116px at its narrowest and a badge runs ~85px.
+   10px + the slot's 6px gap leaves headroom. */
+.tx-saving-spinner {
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+    border-color: var(--brand);
+    border-right-color: transparent;
+    flex-shrink: 0;
 }
 .tx-cell-date {
     display: flex;
@@ -2109,6 +2196,51 @@ const TX_STYLES = `
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Category cell stacks the leaf name over its ROOT category. A row
+   reading "Rice" is unmoored — every analytics view rolls spending up to
+   roots, so the root is what ties the row to numbers seen elsewhere.
+   Same two-line shape the Date and Amount cells already use, and sized
+   to fit UNDER the Date cell's 13px+12px stack so rows with a
+   sub-category stay exactly as tall as rows without one. Desktop only:
+   the whole table is display:none below 901px, where the mobile card
+   list (single category line) takes over. */
+.tx-cat-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+.tx-cat-name {
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tx-cat-root {
+    min-width: 0;
+    /* 11px on --fg-3 (≈5.2:1), not the 10.5px/--fg-4 used by .tx-cell-desc:
+       that tier is fine for content repeated elsewhere on the page, but the
+       root category appears NOWHERE else here, so it has to clear AA on its
+       own. 13px + 11px at line-height 1.25 = exactly the 30px the two-line
+       Date cell already sets, so the row height is pinned by design rather
+       than by luck. */
+    font-size: 11px;
+    color: var(--fg-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* No alignment override for the two-line variant, deliberately.
+   .tx-row-grid is align-items: center, so every cell is content-sized and
+   centred in the row: a 20px Envelope avatar in a 20px cell and a 20px
+   Category avatar in a 30px two-line cell BOTH end up centred on the row.
+   Top-aligning the two-line cell instead pinned its avatar to the name line
+   and pushed it ~7px above the Envelope and By icons beside it — and because
+   only rows with a sub-category would carry such a class, the column's icon
+   rail zig-zagged row to row. A min-height here is equally wrong:
+   align-content does nothing to a single-line flex container, so once the
+   root line is hidden below 1152px the avatar would park at cross-start of
+   an over-tall box. */
 .tx-event-chip {
     display: inline-flex;
     align-items: center;
@@ -2365,6 +2497,18 @@ const TX_STYLES = `
            left only ~2px of headroom. */
         grid-template-columns: 96px 116px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) 120px 124px 56px;
     }
+}
+
+/* The Category track is minmax(0, 1fr) with no floor, so between the
+   table's 901px cut-in and ~1150px it resolves to well under 70px of text
+   — the root line degrades to a bare ellipsis while stealing width the
+   category's own name needs. The leaf name wins; the root line returns as
+   soon as it can actually be read.
+   The second range is not a typo: at 1281px the Event and By columns come
+   back, so the Category track DROPS from ~136px to ~90px — briefly less
+   room than the band above hides for. It recovers by 1300px. */
+@media (max-width: 1151px), (min-width: 1281px) and (max-width: 1299px) {
+    .tx-cat-root { display: none; }
 }
 
 /* Phone (<640px) — tighten filters, search, summary tiles. */

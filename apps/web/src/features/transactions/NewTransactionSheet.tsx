@@ -958,7 +958,7 @@ function EventSelect({
             /* The pin button inside the hint is its own interactive
                element — switch the wrapper to a non-label so semantics
                match the Account/Source fields above. */
-            interactiveHint={!!pinSlot}
+            noWrapperLabel={!!pinSlot}
             hint={
                 pinSlot ? (
                     <span className="nt-hint-row">
@@ -1290,7 +1290,7 @@ function IncomeForm({
                 __pending: true,
             };
             optimistic.addPendingRow(row);
-            optimistic.applyDelta(delta);
+            optimistic.applyDelta(delta, variables.spaceId);
             return { tempId, delta };
         },
         onSuccess: async (data, _variables, ctx) => {
@@ -1308,7 +1308,7 @@ function IncomeForm({
         onError: async (e, variables, ctx) => {
             if (ctx) {
                 optimistic.removePendingRow(ctx.tempId);
-                optimistic.reverseDelta(ctx.delta);
+                optimistic.reverseDelta(ctx.delta, variables.spaceId);
                 // A sibling "Save & add another" submission may have already
                 // invalidated filteredTotals to server truth (which never
                 // included this failed row) before this reverseDelta runs —
@@ -1367,7 +1367,7 @@ function IncomeForm({
                 <OrbitField
                     label="Account"
                     required
-                    interactiveHint
+                    noWrapperLabel
                     hint={
                         <FieldPin
                             field="account"
@@ -1427,7 +1427,11 @@ function IncomeForm({
                         }
                     />
 
-                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF">
+                    {/* noWrapperLabel: FileUploadField's "Add file" is a <button>, and a
+                        <label> wrapper would forward clicks from anywhere in the
+                        field row to it — opening the OS file picker on a stray
+                        click. */}
+                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF" noWrapperLabel>
                         <FileUploadField
                             purpose="transaction_receipt"
                             fileIds={attachmentFileIds}
@@ -1606,7 +1610,7 @@ function ExpenseForm({
                 __pending: true,
             };
             optimistic.addPendingRow(row);
-            optimistic.applyDelta(delta);
+            optimistic.applyDelta(delta, variables.spaceId);
             return { tempId, delta };
         },
         onSuccess: async (data, _variables, ctx) => {
@@ -1624,7 +1628,7 @@ function ExpenseForm({
         onError: async (e, variables, ctx) => {
             if (ctx) {
                 optimistic.removePendingRow(ctx.tempId);
-                optimistic.reverseDelta(ctx.delta);
+                optimistic.reverseDelta(ctx.delta, variables.spaceId);
                 // See IncomeForm's onError for why: a sibling submission's
                 // invalidate() may have already reset totals to server
                 // truth that never included this failed row.
@@ -1679,7 +1683,7 @@ function ExpenseForm({
         >
             <OrbitAmountCard value={amount} onChange={setAmount} tone="fg" autoFocus />
 
-            <OrbitField label="Category" required>
+            <OrbitField label="Category" required noWrapperLabel>
                 <CategoryTreeSelect
                     categories={activeCategories}
                     value={categoryId}
@@ -1768,7 +1772,7 @@ function ExpenseForm({
                 <OrbitField
                     label="Account"
                     required
-                    interactiveHint
+                    noWrapperLabel
                     hint={
                         <FieldPin
                             field="account"
@@ -1825,7 +1829,11 @@ function ExpenseForm({
                         }
                     />
 
-                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF">
+                    {/* noWrapperLabel: FileUploadField's "Add file" is a <button>, and a
+                        <label> wrapper would forward clicks from anywhere in the
+                        field row to it — opening the OS file picker on a stray
+                        click. */}
+                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF" noWrapperLabel>
                         <FileUploadField
                             purpose="transaction_receipt"
                             fileIds={attachmentFileIds}
@@ -1903,8 +1911,22 @@ function TransferForm({
         [accountsQuery.data]
     );
 
+    /* Transfer destinations need a `user_accounts` row — owner OR viewer —
+       for the caller; `resolveTransactionPermission` rejects a destination
+       the caller merely reaches through space membership with
+       FORBIDDEN "You do not have permission to transfer into the
+       destination account". `myRole` is exactly that row's role and is null
+       when there is none (legal: such an account is still visible and
+       usable for income/expense in this space, just not as a transfer
+       target). Offering those accounts here guaranteed a failed submit.
+       The server's "same space" half of the viewer rule is satisfied by
+       construction — every row here comes from this space's account list. */
     const destItems = useMemo(
-        () => (accountsQuery.data ?? []).filter((a) => a.id !== sourceAccountId).map(toAccountItem),
+        () =>
+            (accountsQuery.data ?? [])
+                .filter((a) => a.id !== sourceAccountId)
+                .filter((a) => a.myRole != null)
+                .map(toAccountItem),
         [accountsQuery.data, sourceAccountId]
     );
 
@@ -1990,7 +2012,7 @@ function TransferForm({
                 __pending: true,
             };
             optimistic.addPendingRow(row);
-            optimistic.applyDelta(delta);
+            optimistic.applyDelta(delta, variables.spaceId);
             return { tempId, delta };
         },
         onSuccess: async (data, _variables, ctx) => {
@@ -2007,7 +2029,7 @@ function TransferForm({
         onError: async (e, variables, ctx) => {
             if (ctx) {
                 optimistic.removePendingRow(ctx.tempId);
-                optimistic.reverseDelta(ctx.delta);
+                optimistic.reverseDelta(ctx.delta, variables.spaceId);
                 // See IncomeForm's onError for why: a sibling submission's
                 // invalidate() may have already reset totals to server
                 // truth that never included this failed row.
@@ -2083,7 +2105,7 @@ function TransferForm({
             <OrbitField
                 label="From"
                 required
-                interactiveHint
+                noWrapperLabel
                 hint={
                     <FieldPin
                         field="account"
@@ -2117,7 +2139,17 @@ function TransferForm({
                 </span>
             </div>
 
-            <OrbitField label="To" required>
+            {/* The hint explains an otherwise invisible rule: destItems hides
+                accounts the caller has no user_accounts row for, because the
+                server refuses those transfers. Without it, a shared-space
+                member finds a co-member's account offered for INCOME but
+                absent here — and if it's their only candidate, an empty
+                dropdown with no reason given. */}
+            <OrbitField
+                label="To"
+                required
+                hint="Only accounts shared with you can receive a transfer"
+            >
                 <OrbitSelect
                     value={destinationAccountId}
                     onValueChange={setDest}
@@ -2154,7 +2186,12 @@ function TransferForm({
                             placeholder="0.00"
                         />
                     </OrbitField>
-                    <OrbitField label="Fee category" hint="Where the fee is logged" required>
+                    <OrbitField
+                        label="Fee category"
+                        hint="Where the fee is logged"
+                        required
+                        noWrapperLabel
+                    >
                         <CategoryTreeSelect
                             categories={categoriesQuery.data ?? []}
                             value={feeCategoryId}
@@ -2211,7 +2248,11 @@ function TransferForm({
                         }
                     />
 
-                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF">
+                    {/* noWrapperLabel: FileUploadField's "Add file" is a <button>, and a
+                        <label> wrapper would forward clicks from anywhere in the
+                        field row to it — opening the OS file picker on a stray
+                        click. */}
+                    <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF" noWrapperLabel>
                         <FileUploadField
                             purpose="transaction_receipt"
                             fileIds={attachmentFileIds}
@@ -2427,7 +2468,7 @@ function AdjustmentForm({
             <OrbitField
                 label="Account"
                 required
-                interactiveHint
+                noWrapperLabel
                 hint={
                     <FieldPin
                         field="account"
@@ -2560,7 +2601,12 @@ function AdjustmentForm({
                 </div>
             </div>
 
-            <OrbitField label="Reason" hint="Required for audit trail" required>
+            {/* noWrapperLabel: OrbitRadioRow renders its own <label> per option
+                around a hidden radio, so a wrapping <label> both nested labels
+                (invalid HTML) and forwarded clicks on "Reason" / its hint to the
+                FIRST radio — silently reverting the user's pick on a field whose
+                whole purpose is an audit trail. */}
+            <OrbitField label="Reason" hint="Required for audit trail" required noWrapperLabel>
                 <OrbitRadioRow
                     name="adj-reason"
                     value={reason}
@@ -2599,7 +2645,11 @@ function AdjustmentForm({
                 />
             </OrbitField>
 
-            <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF">
+            {/* noWrapperLabel: FileUploadField's "Add file" is a <button>, and a
+                        <label> wrapper would forward clicks from anywhere in the
+                        field row to it — opening the OS file picker on a stray
+                        click. */}
+            <OrbitField label="Receipts" hint="Optional · PNG · JPG · PDF" noWrapperLabel>
                 <FileUploadField
                     purpose="transaction_receipt"
                     fileIds={attachmentFileIds}

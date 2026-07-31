@@ -281,14 +281,29 @@ export function Donut({
  * the cursor, same color, no stroke. Bypasses recharts' default white outline
  * that was making the chart look "bordered."
  */
-function renderActiveShape(props: any) {
+/* Recharts types `activeShape` as a loose renderer and doesn't export a
+   props type for it, so declare the geometry this renderer actually reads.
+   Everything is optional because recharts fills the slice geometry in at
+   render time. */
+type ActiveShapeProps = {
+    cx?: number;
+    cy?: number;
+    innerRadius?: number;
+    outerRadius?: number;
+    startAngle?: number;
+    endAngle?: number;
+    fill?: string;
+    cornerRadius?: number;
+};
+
+function renderActiveShape(props: ActiveShapeProps) {
     const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill, cornerRadius } = props;
     return (
         <Sector
             cx={cx}
             cy={cy}
             innerRadius={innerRadius}
-            outerRadius={outerRadius + 6}
+            outerRadius={(outerRadius ?? 0) + 6}
             startAngle={startAngle}
             endAngle={endAngle}
             fill={fill}
