@@ -42,7 +42,12 @@ const GRANULARITY_CONFIG: Record<
 > = {
     week: { periodInterval: "1 week", bucketInterval: "1 day", bucketUnit: "day", bucketDays: 1 },
     month: { periodInterval: "1 month", bucketInterval: "1 day", bucketUnit: "day", bucketDays: 1 },
-    quarter: { periodInterval: "3 months", bucketInterval: "1 day", bucketUnit: "day", bucketDays: 1 },
+    quarter: {
+        periodInterval: "3 months",
+        bucketInterval: "1 day",
+        bucketUnit: "day",
+        bucketDays: 1,
+    },
     year: { periodInterval: "1 year", bucketInterval: "1 day", bucketUnit: "day", bucketDays: 1 },
 };
 
@@ -107,9 +112,7 @@ export const trendsDailyComparison = authorizedProcedure
                 /* Filter fragments. Empty when the corresponding filter
                    is not active so the query reads cleanly in the
                    unfiltered (default) case. */
-                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [
-                    input.spaceId,
-                ]);
+                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [input.spaceId]);
                 const catWhere = categoryFilterWhere(input.categoryIds);
                 const envWhere = envelopeFilterWhere(input.envelopeIds);
                 const acctScope = scopeAccountsFilter(input.accountIds);
@@ -129,6 +132,8 @@ export const trendsDailyComparison = authorizedProcedure
                     expense: string;
                     today_bucket: number;
                     period_length: number;
+                    history_start: Date | null;
+                    avg_periods: number;
                 }>`
                     WITH RECURSIVE ${catCTE}
                     params AS (
@@ -141,7 +146,23 @@ export const trendsDailyComparison = authorizedProcedure
                                 + ${sql.raw(`'${cfg.periodInterval}'::interval`)} AS cur_end,
                             date_trunc(${input.granularity}, anchor_ts)
                                 - ${sql.raw(`'${cfg.periodInterval}'::interval`)} AS prev_start,
-                            anchor_ts AS now_ts
+                            /* "How far into the period are we" is pinned to
+                               the real clock, NOT to the anchor: the anchor
+                               selects *which* period, never how much of it
+                               has elapsed. For the current period this is
+                               NOW() (identical to the old behavior); for a
+                               completed period it saturates at the final
+                               bucket so the whole period comes back. That
+                               keeps the frontend from having to pass an
+                               end-of-period timestamp — passing the 1st of
+                               a past month used to silently yield a
+                               one-day chart. */
+                            LEAST(
+                                NOW(),
+                                date_trunc(${input.granularity}, anchor_ts)
+                                    + ${sql.raw(`'${cfg.periodInterval}'::interval`)}
+                                    - ${sql.raw(`'${cfg.bucketInterval}'::interval`)}
+                            ) AS now_ts
                         FROM params
                     ),
                     scope_accounts AS (
@@ -150,27 +171,104 @@ export const trendsDailyComparison = authorizedProcedure
                         WHERE space_id = ${input.spaceId}
                         ${acctScope}
                     ),
-                    /* Earliest period_start with any data in scope. Caps
-                       generate_series so we don't spin up buckets back
-                       to year zero when the user has only a few months
-                       of history. NULL when the user has zero
-                       transactions — handled via COALESCE below. */
-                    data_start AS (
+                    all_space_accounts AS (
+                        SELECT account_id
+                        FROM space_accounts
+                        WHERE space_id = ${input.spaceId}
+                    ),
+                    /* Earliest period that could ever show non-zero spend
+                       for this space — the navigable edge of history.
+                       Deliberately ignores the user's envelope / category /
+                       account filters and the metric mode: the period
+                       stepper's reach shouldn't shrink when a filter is
+                       toggled, and the empty-state copy speaks about the
+                       space's history rather than the filter's. Restricted
+                       to spend-producing rows so an opening-balance
+                       deposit doesn't advertise months of guaranteed
+                       zeros. */
+                    nav_start AS (
                         SELECT date_trunc(
                             ${input.granularity},
                             MIN(t.transaction_datetime)
-                        ) AS earliest
+                        ) AS ts
                         FROM transactions t
-                        WHERE (
-                            t.source_account_id IN (SELECT account_id FROM scope_accounts)
-                            OR t.destination_account_id IN (SELECT account_id FROM scope_accounts)
-                        )
+                        WHERE t.source_account_id IN (SELECT account_id FROM all_space_accounts)
+                          AND (
+                              t.type = 'expense'
+                              OR (
+                                  t.type = 'transfer'
+                                  AND t.destination_account_id NOT IN (
+                                      SELECT account_id FROM all_space_accounts
+                                  )
+                              )
+                          )
+                    ),
+                    /* Earliest in-scope row that can contribute non-zero spend
+                       to this series, with both its period start and its
+                       bucket start. Caps generate_series so we don't spin up
+                       buckets back to year zero, and anchors the average
+                       pool. Restricted to spend-producing rows in the active
+                       mode: an opening-balance deposit two years before the
+                       first purchase would otherwise pull in two years of
+                       structurally-zero buckets and drag "typical" to the
+                       floor. NULL when nothing qualifies. */
+                    data_start AS (
+                        SELECT
+                            date_trunc(
+                                ${input.granularity},
+                                MIN(t.transaction_datetime)
+                            ) AS earliest,
+                            date_trunc(
+                                ${cfg.bucketUnit},
+                                MIN(t.transaction_datetime)
+                            ) AS earliest_bucket
+                        FROM transactions t
+                        WHERE t.source_account_id IN (SELECT account_id FROM scope_accounts)
+                          AND (
+                              t.type = 'expense'
+                              OR (
+                                  ${xferFactor} = 1
+                                  AND t.type = 'transfer'
+                                  AND t.destination_account_id NOT IN (
+                                      SELECT account_id FROM scope_accounts
+                                  )
+                              )
+                          )
                           ${envWhere}
                           ${catWhere}
                     ),
+                    /* First period the typical-shape average may draw on.
+                       The user's very first period is usually PARTIAL — a
+                       first transaction on Mar 25 leaves March with 24
+                       structurally-zero days — and averaging it in as a whole
+                       month drags every early bucket toward zero, so normal
+                       spending reads as "+33% above typical". Skip it unless
+                       the first row lands in the period's opening bucket, in
+                       which case the period really is whole.
+
+                       Only the AVERAGE is bounded by this. The prior-period
+                       comparison still reaches the partial first period: it
+                       is drawn and labelled by name, so a short month is
+                       visible rather than misleading. */
+                    avg_pool_start AS (
+                        SELECT CASE
+                            WHEN earliest IS NULL THEN NULL
+                            WHEN earliest_bucket = earliest THEN earliest
+                            ELSE earliest + ${sql.raw(`'${cfg.periodInterval}'::interval`)}
+                        END AS ts
+                        FROM data_start
+                    ),
+                    /* Never later than cur_start: when the user navigates to
+                       a period that predates all their data, an
+                       unclamped history_start would leave generate_series
+                       with start > stop, producing zero buckets and a
+                       period_length of 0. */
                     history_start AS (
-                        SELECT COALESCE(
-                            (SELECT earliest FROM data_start),
+                        SELECT LEAST(
+                            COALESCE(
+                                (SELECT earliest FROM data_start),
+                                (SELECT cur_start FROM bounds)
+                            ),
                             (SELECT cur_start FROM bounds)
                         ) AS ts
                     ),
@@ -212,7 +310,11 @@ export const trendsDailyComparison = authorizedProcedure
                             CASE
                                 WHEN ab.bucket_ts >= (SELECT cur_start FROM bounds) THEN 'cur'
                                 WHEN ab.bucket_ts >= (SELECT prev_start FROM bounds) THEN 'prev'
-                                ELSE 'avg'
+                                /* 'skip' buckets exist so the prior period can
+                                   still be reached, but are excluded from the
+                                   average — see avg_pool_start. */
+                                WHEN ab.bucket_ts >= (SELECT ts FROM avg_pool_start) THEN 'avg'
+                                ELSE 'skip'
                             END AS kind,
                             /* Bucket position within its own period.
                                Partitioning by date_trunc(granularity, …)
@@ -234,14 +336,31 @@ export const trendsDailyComparison = authorizedProcedure
                             ) AS today_bucket,
                             (SELECT COUNT(*)::int FROM all_buckets
                                 WHERE bucket_ts >= (SELECT cur_start FROM bounds)
-                            ) AS period_length
+                            ) AS period_length,
+                            /* Unfiltered navigable edge of history (NULL if
+                               the space has never recorded spend). Lets the
+                               stepper disable its back arrow at the true
+                               edge instead of walking into empty periods
+                               forever. */
+                            (SELECT ts FROM nav_start) AS history_start,
+                            /* How many whole prior periods feed the average.
+                               Surfaced so the UI can say "averaged across
+                               4 earlier months" instead of claiming a norm
+                               built from a single period. */
+                            (SELECT COUNT(DISTINCT date_trunc(${input.granularity}, bucket_ts))::int
+                                FROM all_buckets
+                                WHERE bucket_ts < (SELECT prev_start FROM bounds)
+                                  AND bucket_ts >= (SELECT ts FROM avg_pool_start)
+                            ) AS avg_periods
                     )
                     SELECT
                         c.kind::text AS kind,
                         c.idx,
                         c.expense::text,
                         m.today_bucket,
-                        m.period_length
+                        m.period_length,
+                        m.history_start,
+                        m.avg_periods
                     FROM classified c
                     CROSS JOIN meta m
                     WHERE c.kind IN ('cur', 'prev')
@@ -253,27 +372,61 @@ export const trendsDailyComparison = authorizedProcedure
                         c.idx,
                         AVG(c.expense)::text AS expense,
                         m.today_bucket,
-                        m.period_length
+                        m.period_length,
+                        m.history_start,
+                        m.avg_periods
                     FROM classified c
                     CROSS JOIN meta m
                     WHERE c.kind = 'avg'
-                    GROUP BY c.idx, m.today_bucket, m.period_length
+                    GROUP BY c.idx, m.today_bucket, m.period_length, m.history_start, m.avg_periods
                     ORDER BY 1, 2
                 `.execute(trx);
 
                 const first = rows.rows[0];
                 const periodLength = first?.period_length ?? 1;
-                const todayBucket = first?.today_bucket ?? 1;
+                /* Clamp into [1, periodLength]. `now_ts` saturates at the
+                   period's last bucket so a *completed* period yields
+                   exactly periodLength, but a period entirely in the
+                   future (reachable only by a hand-edited URL — the
+                   stepper disables forward navigation) counts zero
+                   elapsed buckets, and a 0 here would make every
+                   downstream `today - 1` index negative. */
+                const todayBucket = Math.min(periodLength, Math.max(1, first?.today_bucket ?? 1));
+                const avgPeriods = first?.avg_periods ?? 0;
+
+                /* The prior period can be LONGER than the current one
+                   (Jan→Feb, Q4→Q1, leap year→next). Sizing `previous` by
+                   the *current* period's length silently discarded those
+                   tail buckets — viewing February compared Feb against
+                   Jan 1–28, hiding ~10% of January. Size it by its own
+                   bucket count and total it independently so any
+                   "full prior period" claim is honest. */
+                let previousLength = 0;
+                let previousTotal = 0;
+                for (const r of rows.rows) {
+                    if (r.kind !== "prev") continue;
+                    if (r.idx > previousLength) previousLength = r.idx;
+                    previousTotal += Number(r.expense);
+                }
 
                 const current = new Array<number>(periodLength).fill(0);
-                const previous = new Array<number>(periodLength).fill(0);
+                const previous = new Array<number>(previousLength).fill(0);
+                /* `average` stays sized to the CURRENT period so that
+                   `sum(average)` is "a typical period of this length" —
+                   the like-for-like basis the vs-typical comparison
+                   needs. Extending it to the longest historical period
+                   would make a 28-day February read as overspending
+                   against a 31-day yardstick. */
                 const average = new Array<number>(periodLength).fill(0);
                 let hasAverage = false;
                 for (const r of rows.rows) {
                     const i = r.idx - 1;
+                    if (r.kind === "prev") {
+                        if (i >= 0 && i < previousLength) previous[i] = Number(r.expense);
+                        continue;
+                    }
                     if (i < 0 || i >= periodLength) continue;
                     if (r.kind === "cur") current[i] = Number(r.expense);
-                    else if (r.kind === "prev") previous[i] = Number(r.expense);
                     else if (r.kind === "avg") {
                         average[i] = Number(r.expense);
                         hasAverage = true;
@@ -288,10 +441,28 @@ export const trendsDailyComparison = authorizedProcedure
                     today: todayBucket,
                     current,
                     previous,
+                    /* Bucket count and true total of the PRIOR period, which
+                       may differ in length from the current one. Use
+                       `previousTotal` for any full-period claim;
+                       `previous[today-1]` remains the same-elapsed-window
+                       figure that the in-progress pace comparison wants. */
+                    previousLength,
+                    previousTotal,
                     /* `null` when the user has no historical data
                        beyond the previous period — the frontend hides
                        the average line in that case. */
-                    average: hasAverage ? average : null,
+                    /* Gated at ≥2 contributing periods here rather than in one
+                       view: a single period is not a norm, and every consumer
+                       (Overview, envelope detail, budgets) draws this as a
+                       "typical" baseline. Gating server-side keeps them from
+                       disagreeing about whether the line exists. */
+                    average: hasAverage && avgPeriods >= 2 ? average : null,
+                    /* How many whole prior periods `average` is built from. */
+                    averagePeriods: avgPeriods,
+                    /* Start of the earliest period in which this space could
+                       show spend, ignoring filters (`null` ⇒ never any).
+                       Bounds the period stepper's back arrow. */
+                    historyStart: first?.history_start ?? null,
                 };
             })
         );
@@ -299,9 +470,7 @@ export const trendsDailyComparison = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message:
-                    error.message ||
-                    "Failed to compute trends daily comparison",
+                message: error.message || "Failed to compute trends daily comparison",
             });
         }
         return result;

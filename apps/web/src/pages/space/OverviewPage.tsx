@@ -2540,16 +2540,22 @@ function SpendingTrends({
         let curAcc = 0;
         let prvAcc = 0;
         let avgAcc = 0;
-        const len = Math.max(DAYS_IN_MONTH, PRV_DAILY.length);
-        for (let i = 0; i < len; i++) {
+        /* Each series over its OWN length: `previous` is sized to the PRIOR
+           month's day count, which can exceed this month's (Jan 31 → Feb 28).
+           Running all three to `max(…)` padded `cur`/`avg` with repeats of
+           their final value, which the chart then plotted past its right
+           edge. Mirrors TrendsView's accumulator. */
+        for (let i = 0; i < DAYS_IN_MONTH; i++) {
             curAcc += CUR_DAILY[i] ?? 0;
-            prvAcc += PRV_DAILY[i] ?? 0;
             cur.push(curAcc);
-            prv.push(prvAcc);
             if (avg && AVG_DAILY) {
                 avgAcc += AVG_DAILY[i] ?? 0;
                 avg.push(avgAcc);
             }
+        }
+        for (let i = 0; i < PRV_DAILY.length; i++) {
+            prvAcc += PRV_DAILY[i] ?? 0;
+            prv.push(prvAcc);
         }
         return { cur, prv, avg };
     }, [CUR_DAILY, PRV_DAILY, AVG_DAILY, DAYS_IN_MONTH]);
@@ -2590,6 +2596,9 @@ function SpendingTrends({
                         <CumulativeRaceChart
                             cur={cumulative.cur}
                             prv={cumulative.prv}
+                            /* The prior month can have more days than this
+                               one; the chart scales it on its own axis. */
+                            prvLength={cumulative.prv.length}
                             avg={cumulative.avg}
                             today={TODAY}
                             daysInMonth={DAYS_IN_MONTH}

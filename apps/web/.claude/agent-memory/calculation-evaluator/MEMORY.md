@@ -3,3 +3,8 @@
 - [Categories delete-gating tx_count divergence](categories-delete-gating-txcount.md) — client gates on expense-only tx_count; server delete guard counts ALL types. Known-latent, graceful.
 - [Accounts net-worth sign convention](accounts-networth-sign.md) — liabilities stored positive; net=assets+locked−Σliability(signed). Math.abs-of-sum is the pitfall.
 - [Event date-math day convention](event-date-math-day-convention.md) — ms-rounded totalDays/elapsed/pace vs APP_TZ midnight buckets: off-by-one day counts + pace misses estimate.
+- [Trends period array-length invariant](trends-period-array-length-invariant.md) — prev/avg-pool/rate traps: 1–3 fixed & measured; residual is the KPI "Pace" tile still being a totals ratio.
+- [Trends YoY complete-months window](trends-yoy-complete-months-window.md) — fixed: window is clock-derived (getAppTzMonth), not derived from the server's null sentinel.
+- [Trends movers window + bar scale](trends-movers-window-and-bar-scale.md) — round-6 whole-prior-vs-to-date is a structural partition; zero-filter provably inert; hasPrevious derived two ways.
+- [Rate-vs-total identity (pace tile vs velocity chip)](trends-rate-vs-total-identity.md) — STILL OPEN r6: (1+burn)=(1+pace)×(W_prev/W_cur); fix is paceDelta:=burnDelta when isLive.
+- [VelocityBars "Typical" window mismatch](trends-velocity-typical-window.md) — FIXED round 6: typicalSoFar/(TODAY·B) reproduces the KPI tile as an identity; closed periods bit-identical.

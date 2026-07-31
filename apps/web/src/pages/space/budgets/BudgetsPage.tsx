@@ -267,16 +267,20 @@ export default function BudgetsPage() {
         let ca = 0,
             pa = 0,
             aa = 0;
-        const len = Math.max(pl, daily.previous.length);
-        for (let i = 0; i < len; i++) {
+        /* Each series over its OWN length — `previous` is sized to the prior
+           period's bucket count, which can be longer than this period's.
+           See the same loop in BudgetDetailPage for why `max(…)` was wrong. */
+        for (let i = 0; i < pl; i++) {
             ca += daily.current[i] ?? 0;
-            pa += daily.previous[i] ?? 0;
             cur.push(ca);
-            prv.push(pa);
             if (avg && daily.average) {
                 aa += daily.average[i] ?? 0;
                 avg.push(aa);
             }
+        }
+        for (let i = 0; i < daily.previous.length; i++) {
+            pa += daily.previous[i] ?? 0;
+            prv.push(pa);
         }
         const spentToDate = cur[today - 1] ?? 0;
         const projected = today > 0 ? (spentToDate / today) * pl : 0;

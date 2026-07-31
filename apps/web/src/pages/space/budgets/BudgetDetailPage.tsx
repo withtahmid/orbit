@@ -1,5 +1,6 @@
 import {
     Fragment,
+    useCallback,
     useMemo,
     useRef,
     useState,
@@ -20,8 +21,9 @@ import {
     TrendingUp,
 } from "lucide-react";
 import { formatInAppTz } from "@/lib/formatDate";
-import { startOfMonth, endOfMonth, addMonths, getAppTzYear } from "@/lib/dates";
+import { startOfMonth, endOfMonth, addMonths, getAppTzYear, getAppTzMonth } from "@/lib/dates";
 import { compactMoney } from "@/lib/chartBucket";
+import { MoversList } from "@/features/analytics/MoversList";
 import { toast } from "sonner";
 import { PermissionGate } from "@/components/shared/PermissionGate";
 import { EnvelopeAllocateDialog } from "@/features/allocations/EnvelopeAllocateDialog";
@@ -86,6 +88,22 @@ export default function BudgetDetailPage() {
         [now, monthOffset]
     );
     const periodStart = useMemo(() => startOfMonth(viewingDate), [viewingDate]);
+    /* The monthly-bars chart navigates by driving this page's own month
+       offset, so the chart and the header's ◀/▶ stay one control. Offsets are
+       whole months from the current one, which is exactly what the nav is. */
+    const monthlyBarsYear = getAppTzYear(viewingDate);
+    const openMonthlyBarMonth = useCallback(
+        (monthIdx: number) => {
+            const offset =
+                (monthlyBarsYear - getAppTzYear(now)) * 12 + (monthIdx - getAppTzMonth(now));
+            /* Never forward of the current month — the nav's own ▶ is capped
+               the same way, and a future month has nothing to show. */
+            setMonthOffset(Math.min(0, offset));
+        },
+        [monthlyBarsYear, now]
+    );
+    /* Months after the current one don't exist yet for the viewed year. */
+    const monthlyBarsNavUntil = monthlyBarsYear === getAppTzYear(now) ? getAppTzMonth(now) + 1 : 12;
     const periodEnd = useMemo(() => endOfMonth(viewingDate), [viewingDate]);
     // The dailyComparison "anchor" is where the period + the "today" marker
     // land. For the current month that's now (mid-month); for a past month we
@@ -148,12 +166,14 @@ export default function BudgetDetailPage() {
         let curAcc = 0;
         let prvAcc = 0;
         let avgAcc = 0;
+        let avgAtToday = 0;
         let curAtToday = 0;
         let prvAtToday = 0;
         for (let i = 0; i < len; i++) {
             curAcc += cur[i] ?? 0;
             prvAcc += prv[i] ?? 0;
             if (avg) avgAcc += avg[i] ?? 0;
+            if (i === today - 1) avgAtToday = avgAcc;
             if (i === today - 1) {
                 curAtToday = curAcc;
                 prvAtToday = prvAcc;
@@ -161,8 +181,11 @@ export default function BudgetDetailPage() {
         }
         const perDayThisMonth = today > 0 ? curAtToday / today / bucketDays : 0;
         const perDayLastMonth = today > 0 ? prvAtToday / today / bucketDays : 0;
-        const perDayTypical =
-            avg && daily.periodLength > 0 ? avgAcc / (daily.periodLength * bucketDays) : null;
+        /* Elapsed window, matching the two rows beside it. A whole-period rate
+           here made this card and the page's own typical-pace sentence give
+           opposite verdicts in the first week of every month — the same defect
+           already fixed on the Spending Trends card. */
+        const perDayTypical = avg && today > 0 ? avgAtToday / (today * bucketDays) : null;
         const acceleration = prvAtToday > 0 ? (curAtToday / prvAtToday - 1) * 100 : null;
         return { perDayThisMonth, perDayLastMonth, perDayTypical, acceleration, today };
     }, [dailyQuery.data]);
@@ -220,6 +243,38 @@ export default function BudgetDetailPage() {
     // "Where it went" — this envelope's spend split across its categories for
     // the period. Reuses the analytics categoryBreakdown query (envelope-scoped)
     // + the shared Donut chart.
+    /* Category movers, scoped to this envelope and to the month the page is
+       showing. Same procedure the Spending Trends page uses; `prevStart` is
+       passed calendar-aligned because the proc's own default subtracts the
+       window's own length, which lands off a calendar boundary.
+
+       The prior month is compared WHOLE against this one so far. Truncating it
+       to the elapsed slice made a category with a full month of prior spend
+       read as its first day alone on the 1st, and made this page disagree with
+       that month's own view. */
+    const moversPrevStart = useMemo(() => addMonths(periodStart, -1), [periodStart]);
+    const moversQuery = trpc.analytics.trends.categoryMovers.useQuery(
+        {
+            spaceId: space.id,
+            periodStart,
+            periodEnd,
+            prevStart: moversPrevStart,
+            envelopeIds: envelopeId ? [envelopeId] : [],
+            limit: 5,
+        },
+        { enabled: !!envelope && !isGoal }
+    );
+
+    const moversData = moversQuery.data?.items ?? [];
+    /* Drives BOTH the list and the chrome above it, so the heading can't promise
+       a comparison the list isn't rendering. */
+    const moversHasPrevious = moversData.some((m) => m.previousTotal > 0);
+    /* Three-char month, never a year: "Jun 2026 → Jul 2026 so far" wrapped the
+       header cell, and the year is already stated by the page's month nav and
+       the section subtitle. */
+    const moversCurShort = formatInAppTz(viewingDate, "MMM");
+    const moversPrevShort = formatInAppTz(moversPrevStart, "MMM");
+
     const catQuery = trpc.analytics.categoryBreakdown.useQuery(
         {
             spaceId: space.id,
@@ -507,16 +562,22 @@ export default function BudgetDetailPage() {
         let ca = 0,
             pa = 0,
             aa = 0;
-        const len = Math.max(pl, daily.previous.length);
-        for (let i = 0; i < len; i++) {
+        /* Each series over its OWN length. `previous` is sized to the PRIOR
+           period's bucket count, which can exceed this period's (January has
+           31 days, February 28) — running all three to `max(…)` padded `cur`
+           and `avg` with repeats of their final value, and the chart's single
+           x-scale then drew those extra points past its right edge. */
+        for (let i = 0; i < pl; i++) {
             ca += daily.current[i] ?? 0;
-            pa += daily.previous[i] ?? 0;
             cur.push(ca);
-            prv.push(pa);
             if (avg && daily.average) {
                 aa += daily.average[i] ?? 0;
                 avg.push(aa);
             }
+        }
+        for (let i = 0; i < daily.previous.length; i++) {
+            pa += daily.previous[i] ?? 0;
+            prv.push(pa);
         }
         const spentToDate = cur[today - 1] ?? 0;
         const projected = today > 0 ? (spentToDate / today) * pl : 0;
@@ -1271,6 +1332,37 @@ export default function BudgetDetailPage() {
                                                         yearThis={monthly.year}
                                                         yearLast={monthly.year - 1}
                                                         color={envelope.color}
+                                                        /* Clicking a month drives
+                                                           the page's own month
+                                                           nav, so the chart is a
+                                                           way *into* a month
+                                                           rather than a picture
+                                                           of one. */
+                                                        /* Monthly cadence only. The
+                                                           header's stepper is
+                                                           withheld from rolling
+                                                           and goal envelopes on
+                                                           purpose — their hero is
+                                                           a lifetime pool that
+                                                           can't move with the
+                                                           month — so navigating
+                                                           from here would strand
+                                                           the user in a month
+                                                           nothing else on the
+                                                           page names. */
+                                                        onSelectMonth={
+                                                            isMonthlyCadence
+                                                                ? openMonthlyBarMonth
+                                                                : undefined
+                                                        }
+                                                        selectedMonthIdx={
+                                                            isMonthlyCadence &&
+                                                            getAppTzYear(viewingDate) ===
+                                                                monthly.year
+                                                                ? getAppTzMonth(viewingDate)
+                                                                : null
+                                                        }
+                                                        navUntilIdx={monthlyBarsNavUntil}
                                                     />
                                                 </div>
                                                 {isMonthlyCadence
@@ -1394,6 +1486,49 @@ export default function BudgetDetailPage() {
                             </section>
                         );
                     })()}
+
+                {/* Biggest movers, scoped to this envelope. Renders the SAME
+                    shared component the Spending Trends page uses, so the two
+                    can't drift; only the section chrome (card, heading, sub) is
+                    this page's. */}
+                {!isGoal && envelope && (
+                    <section className="od-card ed-movers">
+                        <div className="ed-row3-head">
+                            <h2 className="display ed-row3-title">
+                                {moversHasPrevious ? "Biggest movers" : "Top categories"}
+                            </h2>
+                            <span className="ed-row3-sub">
+                                {moversHasPrevious
+                                    ? `Categories in this envelope · ${
+                                          monthOffset === 0 ? `${monthLabel} so far` : monthLabel
+                                      } vs all of ${formatInAppTz(moversPrevStart, "MMM yyyy")}`
+                                    : `Categories in this envelope · ${monthLabel}`}
+                            </span>
+                        </div>
+                        {moversQuery.isLoading ? (
+                            <Skeleton height={132} />
+                        ) : moversData.length === 0 ? (
+                            <div className="ed-empty">No category movement in {monthLabel}.</div>
+                        ) : (
+                            /* The same component the Spending Trends page
+                               renders. It was a separate `.orbit-design`
+                               implementation here and drifted immediately —
+                               each row was its own grid container with an
+                               `auto` column, so every row's diverging bar had
+                               a different centre. Sharing it is the only way
+                               the two pages stay identical. */
+                            <MoversList
+                                items={moversData}
+                                hasPrevious={moversHasPrevious}
+                                isLive={monthOffset === 0}
+                                /* Bare labels: the component appends "so far"
+                                   itself when `isLive`. */
+                                periodShort={moversCurShort}
+                                prevShort={moversPrevShort}
+                            />
+                        )}
+                    </section>
+                )}
             </div>
         </div>
     );
@@ -1568,6 +1703,9 @@ function EnvelopeMonthlyBars({
     yearThis,
     yearLast,
     color,
+    onSelectMonth,
+    selectedMonthIdx = null,
+    navUntilIdx = 12,
 }: {
     labels: string[];
     thisYear: number[];
@@ -1583,6 +1721,13 @@ function EnvelopeMonthlyBars({
      *  page's charts read as one consistent identity per envelope instead
      *  of an unrelated fixed palette. */
     color: string;
+    /** Open a month of `yearThis` in the page's month nav. Omit to leave the
+     *  chart read-only. */
+    onSelectMonth?: (monthIdx: number) => void;
+    /** The month the page is currently showing, highlighted. */
+    selectedMonthIdx?: number | null;
+    /** First month index that hasn't happened yet — not navigable. */
+    navUntilIdx?: number;
 }) {
     const bulletMode = !!allocated;
     const w = 600;
@@ -1765,13 +1910,46 @@ function EnvelopeMonthlyBars({
                     })}
                 </svg>
 
+                {/* Click targets — full-height HTML buttons per navigable
+                    column, not SVG handlers: a bar can be zero-height, and real
+                    buttons bring keyboard focus and accessible names with them.
+                    Un-navigable months render nothing rather than a `disabled`
+                    button, because browsers don't dispatch mouse events to
+                    disabled controls and that would swallow the hover tooltip
+                    for columns whose prior-year bar is still worth reading. */}
+                {onSelectMonth
+                    ? labels.map((l, i) => {
+                          if (i >= navUntilIdx) return null;
+                          const selected = selectedMonthIdx === i;
+                          return (
+                              <button
+                                  key={`nav-${l}`}
+                                  type="button"
+                                  aria-label={`Show ${l} ${yearThis}`}
+                                  aria-current={selected ? "true" : undefined}
+                                  title={`Show ${l} ${yearThis}`}
+                                  onClick={() => onSelectMonth(i)}
+                                  className="absolute top-0 cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  style={{
+                                      left: `${xPct(p + i * cw)}%`,
+                                      width: `${xPct(cw)}%`,
+                                      height: h - p + 16,
+                                      background: selected
+                                          ? "color-mix(in oklab, var(--fg) 7%, transparent)"
+                                          : "transparent",
+                                  }}
+                              />
+                          );
+                      })
+                    : null}
+
                 {[0, 1, 2, 3].map((i) => {
                     const yPx = p + (i * (h - p * 2)) / 3;
                     const value = ((3 - i) * max) / 3;
                     return (
                         <span
                             key={`yt-${i}`}
-                            className="absolute text-[10px] tabular-nums text-muted-foreground"
+                            className="pointer-events-none absolute text-[10px] tabular-nums text-muted-foreground"
                             style={{
                                 left: `${xPct(p - 4)}%`,
                                 top: yPx,
@@ -1789,7 +1967,11 @@ function EnvelopeMonthlyBars({
                     return (
                         <span
                             key={l}
-                            className="absolute text-[10.5px] text-muted-foreground"
+                            /* `pointer-events-none` is load-bearing: these paint
+                               after the nav buttons with no z-index, so without
+                               it the month name — the most natural thing to
+                               click — swallowed the click. */
+                            className="pointer-events-none absolute text-[10.5px] text-muted-foreground"
                             style={{
                                 left: `${xPct(cx)}%`,
                                 top: h - p + 4,
@@ -2123,6 +2305,7 @@ const ED_STYLES = `
    an orphaned pair of columns; shrinking (flex-shrink:1, the default)
    instead keeps all 3 columns on one row, just narrower, until the
    max-width query below stacks them properly. */
+.ed-movers { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
 .ed-row3 { display: flex; align-items: stretch; gap: 24px; padding: 20px 22px; flex-wrap: nowrap; }
 .ed-row3-col { display: flex; flex-direction: column; min-width: 0; flex: 1 1 320px; }
 .ed-row3-col-donut { flex: 0 1 240px; }

@@ -3,10 +3,7 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { authorizedProcedure } from "../../trpc/middlewares/authorized.mjs";
 import { safeAwait } from "../../utils/safeAwait.mjs";
-import {
-    ALL_ROLES,
-    resolveSpaceMembership,
-} from "../space/utils/resolveSpaceMembership.mjs";
+import { ALL_ROLES, resolveSpaceMembership } from "../space/utils/resolveSpaceMembership.mjs";
 import {
     categoryFilterWhere,
     envelopeFilterWhere,
@@ -41,6 +38,14 @@ export const trendsYearOverYear = authorizedProcedure
         z.object({
             spaceId: z.string().uuid(),
             year: z.number().int().min(1970).max(9999).optional(),
+            /**
+             * Must match `trendsDailyComparison`'s mode or the two charts on
+             * the Trends page disagree — the year-over-year bars are
+             * click-through navigation, so a July bar showing cash-mode
+             * spend that opens an operational-mode total reads as a bug.
+             * See that proc for the mode semantics.
+             */
+            mode: z.enum(["cash", "operational"]).default("cash"),
             ...trendsFilterInputShape,
         })
     )
@@ -55,10 +60,11 @@ export const trendsYearOverYear = authorizedProcedure
                 });
 
                 const now = new Date();
+                /* Derived from the Zod enum, so no injection surface —
+                   same pattern as cashFlow.mts / trendsDailyComparison. */
+                const xferFactor = input.mode === "cash" ? 1 : 0;
 
-                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [
-                    input.spaceId,
-                ]);
+                const catCTE = selectedCategoriesCTEClause(input.categoryIds, [input.spaceId]);
                 const catWhere = categoryFilterWhere(input.categoryIds);
                 const envWhere = envelopeFilterWhere(input.envelopeIds);
                 const acctScope = scopeAccountsFilter(input.accountIds);
@@ -103,7 +109,7 @@ export const trendsYearOverYear = authorizedProcedure
                                     AND t.source_account_id IN (SELECT account_id FROM scope_accounts) THEN t.amount
                                 WHEN t.type = 'transfer'
                                     AND t.source_account_id IN (SELECT account_id FROM scope_accounts)
-                                    AND t.destination_account_id NOT IN (SELECT account_id FROM scope_accounts) THEN t.amount
+                                    AND t.destination_account_id NOT IN (SELECT account_id FROM scope_accounts) THEN t.amount * ${xferFactor}
                                 ELSE 0
                             END
                         )::text AS expense
@@ -151,8 +157,7 @@ export const trendsYearOverYear = authorizedProcedure
 
                 for (const r of rows.rows) {
                     if (r.year === year) thisYear[r.month_idx] = Number(r.expense);
-                    else if (r.year === year - 1)
-                        lastYear[r.month_idx] = Number(r.expense);
+                    else if (r.year === year - 1) lastYear[r.month_idx] = Number(r.expense);
                 }
 
                 return {
@@ -167,9 +172,7 @@ export const trendsYearOverYear = authorizedProcedure
             if (error instanceof TRPCError) throw error;
             throw new TRPCError({
                 code: "INTERNAL_SERVER_ERROR",
-                message:
-                    error.message ||
-                    "Failed to compute trends year over year",
+                message: error.message || "Failed to compute trends year over year",
             });
         }
         return result;

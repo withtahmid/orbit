@@ -39,3 +39,14 @@
 - [Quantile-bucket count tautology](quantile-bucket-count-tautology.md) — "Days by intensity" count-donut over quantile bins = ~5 equal slices always; chart dollars-per-bucket instead. Also: HeatmapView bar chart ships with invisible reference lines (contrast + behind-bars occlusion).
 - [Transfer fee + destination semantics](transfer_fee_and_destination_semantics.md) — fee's account/date/event follow the parent transfer; income destinations allow space-membership-only accounts, transfers don't.
 - [Category ancestry display canon](category_ancestry_display_canon.md) — ROOT is the ancestor to surface (analytics slices roots); root color dot is weak; 3 pickers = 3 search behaviours.
+- [Two period-selection idioms](period_selection_two_idioms.md) — ragged PeriodChip ranges vs aligned path-param steppers; pick by whether the view's math divides by period length.
+- [Trends period-history SHIPPED](trends_view_period_history_shipped.md) — rounds 1+2 verdicts; owner rejections that stuck; `?p` push settled; the young-space incoherence that remains.
+- [Trends prev-period truncation](trends_prev_period_bucket_truncation.md) — RESOLVED via previousLength/Total; its fallout: Velocity's closed-period "change" is a totals ratio labelled a rate ratio.
+- [Trends YoY ignores MetricToggle](trends_yoy_mode_mismatch.md) — RESOLVED; keep the principle: a click-through chart must share its target's metric mode, filters and scope.
+- [Trends "Typical" excludes prior period](trends_typical_excludes_prior_period.md) — prev excluded + first partial period counted; disclosing the sample count made that falsifiable.
+- [Trends movers bar = normalised](trends_movers_bar_normalised.md) — 4 rejected bar designs; final = share-of-own-prior-spend diverging bar; sorted absolute vs drawn relative, accepted.
+- [Trends movers roll-up ladder](trends_movers_rollup_ladder.md) — roots → selected → direct children; sub-copy only describes rung 1; roots CTE deliberately unscoped by space.
+- [Velocity = the rates card](velocity_card_rates_card_rule.md) — every row same window, chip = ratio of two rows; broken twice (closed-period totals, full-period Typical vs elapsed peers).
+- ["Click a bar to open that period"](click_a_period_to_open_it.md) — canonical gesture on 2 charts; only offer it where the page has a visible period control, and say so in copy.
+- [Movers comparison window SETTLED](trends_movers_comparison_window.md) — whole prior period vs current-so-far; elapsed-truncation rejected because it made two views disagree about one month.
+- [Shared component vs page-native](shared_component_vs_page_native_boundary.md) — chrome may be page-native; anything with cross-row/cross-page invariants must be one component.
