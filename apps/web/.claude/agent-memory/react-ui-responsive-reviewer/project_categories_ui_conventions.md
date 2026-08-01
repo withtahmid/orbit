@@ -1,6 +1,6 @@
 ---
 name: categories-ui-conventions
-description: /categories master-detail workbench (CategoriesPage.tsx) — CSS multicol masonry, slide-over stacking, OrbitField-label trap, dirty-discard, tree a11y; 4 rounds of fixes, near-clean
+description: /categories master-detail workbench (CategoriesPage.tsx) — CSS multicol masonry, priority bands + view-mode toggle, slide-over stacking, OrbitField-label trap, toolbar width budget; 5 rounds
 metadata:
   type: project
 ---
@@ -20,6 +20,14 @@ metadata:
 - `.ct-root height: calc(100dvh - 53px)` hardcodes the mobile-header height (currently correct: 10px pad ×2 + 32px content + 1px border); drifts if header padding changes.
 - No print stylesheet: fixed `100dvh` + `overflow:hidden` clips to one viewport when printed (not a print target).
 
-**Reusable trap — OrbitField renders as `<label>` wrapping children** (OrbitModalShell) unless `interactiveHint`; a label around a button group forwards label-text clicks to the first button (Priority → resets to "None"). Both Priority + Style fields correctly pass `interactiveHint`.
+**Reusable trap — OrbitField renders as `<label>` wrapping children** (`OrbitModalShell.tsx` ~line 193: `const Tag = noWrapperLabel ? "div" : "label"`). The opt-out prop is **`noWrapperLabel`** (earlier notes called it `interactiveHint` — that name is gone). Without it, clicking the field's label text activates the first control inside, which for the Priority radio list means silently selecting "None". Both Priority + Style fields pass it.
+
+**Toolbar width budget (`.ct-tree-toolbar`, the tightest place on the page).** Every child except `.ct-search` is `flex-shrink: 0`, so the search input is the only thing that gives — it never overflows, it just starves. At 375px, content width = 375 − 24 (`.ct-body` padding ≤640) − 2 (card border) − 24 (toolbar padding) = **325px**. Fixed costs: `.ct-mode` icon-only = 76px (2×34 + 2 gap + 4 pad + 2 border), each `.ct-tool-btn` = 34px / **40px under `@media (hover:none)`**, gaps 8px. Tree mode (mode toggle + 2 bulk buttons) leaves the search **145px → 101px of input, 61px once the 32px clear button appears**. Any new toolbar control must be paid for out of that 101px.
+
+**`@media (hover: none)` vs `@media (max-width: 640px)` — the recurring gate bug.** Touch sizing bumps in this file live in `hover:none` (correct: catches iPads and landscape phones); but `.ct-search { height: 40px }` and `.ct-mode { height: 40px }` are *also* declared under `max-width: 640px`. Anything sized only in the 640px block is 34px on a touch device wider than 640 → sub-44px targets plus a visible height mismatch against its 40px neighbours in the same flex row. Same class of bug as the old `.ct-search-input` iOS-zoom miss.
+
+**Multicol per band is sound — do not "fix" it.** `columns: 3 260px` derives its used column count from available width only, never from content, so every `.ct-band`'s `.ct-groups` gets identical column geometry and cards line up band-to-band. A 1-card band renders as one normal-width card at the left with dead space to its right; that is standard masonry appearance, not a defect. Forcing `columns: 1` for short bands would stretch the lone card to full width and strand `.ct-row-actions` ~800px from the name (the exact thing the 260px minimum exists to prevent).
+
+**`.ct-row-name` truncation budget is ~112px** at a 1440px viewport / 309px column (row content 285px − chevron 22 − avatar 28 (`EntityAvatar size="sm"` is `size-7`, i.e. **28px, not 20**) − count chip 24 − badge 17 − actions 40 − 5 gaps). It is a single `white-space: nowrap; text-overflow: ellipsis` run, so any *prefix* added inside it (breadcrumb, tag) is spent before the category name and the name is what disappears.
 
 **Dirty-discard:** Inspector `dirty` shows a save bar; scrim click / Escape / selecting another node are all routed through `guardDirty` → ConfirmDialog (no longer silent).

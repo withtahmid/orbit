@@ -1,6 +1,6 @@
 - [APP_TZ formatting trap](apptz_format_trap.md) — Dates built via makeAppTzDate must be displayed with formatInAppTz, never native toLocaleString.
 - [Budget tz & ledger traps](budget_tz_and_ledger_traps.md) — Browser-local period math + stale delta-ledger SUMs over the new absolute-amount allocation rows.
 - [Analytics filter traps](analytics_filter_traps.md) — Shared analytics filter bar + trends SQL helpers: empty-set ANY semantics, WITH RECURSIVE empty CTE, what NOT to "fix".
-- [Categories tree traps](categories_tree_traps.md) — No server cycle guard on changeParent, tree helpers lack visited-guards, Inspector derived-dirty phantom.
+- [Categories tree traps](categories_tree_traps.md) — filterActive vs chevronLocked, hasChildRows must mean rendered rows, card sort must be expansion-independent, walkTier is sound.
 - [Event detail charts traps](event_detail_charts_traps.md) — Timeline 2000-day cap drops folded spend; hero Spent (eventTotals) vs cumulative (eventDailySpend) are separate procedures.
 - [Trends period stepper traps](trends_period_stepper_traps.md) — Movers roots-rollup vs category filter & cross-space categories; avg_pool_start is safe; previous[] own-length; scrollIntoView page-jump.

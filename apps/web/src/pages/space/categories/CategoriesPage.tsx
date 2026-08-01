@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+    Check,
     FolderTree,
+    Layers,
     Plus,
     Trash2,
     ChevronRight,
@@ -36,14 +38,20 @@ import { APP_TIMEZONE } from "@/lib/dates";
 
 type Priority = "essential" | "important" | "discretionary" | "luxury";
 
-const PRIORITIES: Record<Priority, { label: string; color: string; desc: string }> = {
-    essential: { label: "Essential", color: "var(--income)", desc: "Must-spend" },
-    important: { label: "Important", color: "var(--ent-2)", desc: "Should-spend" },
-    discretionary: { label: "Discretionary", color: "var(--gold)", desc: "Want-spend" },
-    luxury: { label: "Luxury", color: "var(--expense)", desc: "Splurge" },
+/** `letter` is the row badge glyph — priority must never be color-only. */
+const PRIORITIES: Record<Priority, { label: string; letter: string; color: string }> = {
+    essential: { label: "Essential", letter: "E", color: "var(--income)" },
+    important: { label: "Important", letter: "I", color: "var(--ent-2)" },
+    discretionary: { label: "Discretionary", letter: "D", color: "var(--gold)" },
+    luxury: { label: "Luxury", letter: "L", color: "var(--expense)" },
 };
 
 const PRIORITY_KEYS = Object.keys(PRIORITIES) as Priority[];
+
+/** Tree-pane filter value: a tier, or "none" for "no effective priority". */
+type PriorityFilter = Priority | "none";
+
+const VIEW_MODE_KEY = "orbit.categories.viewMode";
 
 interface CategoryUsage {
     id: string;
@@ -68,7 +76,35 @@ interface VisibleRow {
     effectivePriority: Priority | null;
     priorityInherited: boolean;
     descendants: number;
+    /** Children of this node that are also rows in the same section. */
+    hasChildRows: boolean;
+    /** Priority mode only: ancestors that live in a different tier, so a
+        subtree lifted into this card still shows where it came from. */
+    pathLabel?: string;
 }
+
+/** A masonry card: one top-level category and its visible descendants. */
+interface TreeGroup {
+    key: string;
+    rows: VisibleRow[];
+    /** Sort weight. Deliberately NOT `rows.length` in tree mode: expanding a
+        node would change it and the card would jump out from under the
+        pointer mid-click. Whole-subtree size is expansion-independent. */
+    size: number;
+}
+
+/** A full-width band of cards. Tree mode has exactly one (unlabelled);
+    priority mode stacks one per tier, so no card column ever runs long. */
+interface TreeSection {
+    key: string;
+    groups: TreeGroup[];
+    /** Set in priority mode; drives the band header. */
+    tier?: PriorityFilter;
+    /** Categories in this band — same as the sum of its cards' rows. */
+    count: number;
+}
+
+type ViewMode = "tree" | "priority";
 
 function buildTree(flat: CategoryUsage[]): {
     roots: CategoryNode[];
@@ -94,8 +130,11 @@ function buildTree(flat: CategoryUsage[]): {
     return { roots, byId };
 }
 
-/* All tree walkers carry visited-guards so that corrupt data (a
-   parent_id cycle) degrades gracefully instead of hanging the tab. */
+/* Walkers that start from an arbitrary node carry visited-guards so that
+   corrupt data degrades gracefully instead of hanging the tab. The ones that
+   descend from `roots` (the render walkers, `effectivePriorities`) don't need
+   one: a parent_id cycle is unreachable from any root, so those nodes are
+   never visited. Start a new walk from a non-root and that stops being true. */
 
 function countDescendants(n: CategoryNode): number {
     const seen = new Set<string>([n.id]);
@@ -136,6 +175,32 @@ function ancestorIds(id: string, byId: Map<string, CategoryNode>): string[] {
         cur = byId.get(cur.parent_id);
     }
     return out;
+}
+
+/** Biggest cards first, so masonry columns pack evenly instead of leaving a
+    tall tree stranded next to a stack of one-liners. Name breaks ties. */
+function byCardSize(a: TreeGroup, b: TreeGroup): number {
+    return (
+        b.size - a.size ||
+        a.rows[0].node.name.localeCompare(b.rows[0].node.name, undefined, {
+            sensitivity: "base",
+        })
+    );
+}
+
+/** Nearest ancestor priority walking up from `parentId` (exclusive of self). */
+function resolveInherited(
+    parentId: string | null,
+    byId: Map<string, CategoryNode>
+): Priority | null {
+    const seen = new Set<string>();
+    let cur = parentId ? byId.get(parentId) : null;
+    while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        if (cur.priority) return cur.priority;
+        cur = cur.parent_id ? byId.get(cur.parent_id) : null;
+    }
+    return null;
 }
 
 function formatLastUsed(v: Date | string | null): string | null {
@@ -281,72 +346,226 @@ function CategoriesWorkbench() {
         guardDirty(apply);
     };
 
-    /* ---- search ---- */
-    const [search, setSearch] = useState("");
-    const query = search.trim().toLowerCase();
-
-    /** ids visible while searching: matches + all their ancestors. */
-    const searchVisible = useMemo(() => {
-        if (!query) return null;
-        const visible = new Set<string>();
-        for (const c of categories) {
-            if (c.name.toLowerCase().includes(query)) {
-                visible.add(c.id);
-                ancestorIds(c.id, byId).forEach((a) => visible.add(a));
-            }
-        }
-        return visible;
-    }, [query, categories, byId]);
-
-    /* ---- flatten to visible rows, grouped per top-level category ----
-       Each root becomes a masonry card in the tree pane, so the page
-       spreads across the full width instead of one long skinny column
-       (nesting tops out at 3-4 levels, so cards stay compact). */
-    const groups = useMemo(() => {
-        const out: { root: CategoryNode; rows: VisibleRow[] }[] = [];
-        const walk = (
-            acc: VisibleRow[],
-            nodes: CategoryNode[],
-            depth: number,
-            inherited: Priority | null
-        ) => {
+    /* ---- effective priority for every category ----
+       Resolved top-down once so the footer counts and the priority filter
+       agree with the badge each row renders. */
+    const effectivePriorities = useMemo(() => {
+        const m = new Map<string, Priority | null>();
+        const walk = (nodes: CategoryNode[], inherited: Priority | null) => {
             for (const n of nodes) {
-                if (searchVisible && !searchVisible.has(n.id)) continue;
-                const effective = n.priority ?? inherited;
-                acc.push({
-                    node: n,
-                    depth,
-                    effectivePriority: effective,
-                    priorityInherited: !n.priority && !!inherited,
-                    descendants: countDescendants(n),
-                });
-                const open = searchVisible ? true : expanded.has(n.id);
-                if (open && n.children.length > 0) {
-                    walk(acc, n.children, depth + 1, effective);
-                }
+                const eff = n.priority ?? inherited;
+                m.set(n.id, eff);
+                walk(n.children, eff);
             }
         };
-        for (const root of roots) {
-            const acc: VisibleRow[] = [];
-            walk(acc, [root], 0, null);
-            if (acc.length > 0) out.push({ root, rows: acc });
+        // Nodes unreachable from roots (a parent_id cycle) never render, so
+        // leaving them out of the map — counted as unset — is harmless.
+        walk(roots, null);
+        return m;
+    }, [roots]);
+
+    /* ---- view mode ---- */
+    // Remembered across visits: which grouping you work in is a lasting
+    // preference, not a per-visit decision.
+    const [viewMode, setViewMode] = useState<ViewMode>(() =>
+        localStorage.getItem(VIEW_MODE_KEY) === "priority" ? "priority" : "tree"
+    );
+    const changeViewMode = (m: ViewMode) => {
+        setViewMode(m);
+        localStorage.setItem(VIEW_MODE_KEY, m);
+    };
+
+    /* ---- search + priority filter ---- */
+    const [search, setSearch] = useState("");
+    const query = search.trim().toLowerCase();
+    const [priorityFilter, setPriorityFilter] = useState<PriorityFilter | null>(null);
+    const filterActive = !!query || !!priorityFilter;
+    /* Rows are force-open (and the chevron inert) whenever the visible set is
+       computed rather than chosen: while filtering, and in priority mode. */
+    const chevronLocked = filterActive || viewMode === "priority";
+
+    /** `matchIds` = strict hits. `visibleIds` = hits + ancestors, so the
+        tree view can still show the path down to a match. */
+    const { visibleIds, matchIds, matchCount } = useMemo(() => {
+        if (!filterActive) return { visibleIds: null, matchIds: null, matchCount: 0 };
+        const visible = new Set<string>();
+        const matched = new Set<string>();
+        for (const c of categories) {
+            if (query && !c.name.toLowerCase().includes(query)) continue;
+            if (priorityFilter) {
+                const eff = effectivePriorities.get(c.id) ?? "none";
+                if (eff !== priorityFilter) continue;
+            }
+            matched.add(c.id);
+            visible.add(c.id);
+            ancestorIds(c.id, byId).forEach((a) => visible.add(a));
+        }
+        return { visibleIds: visible, matchIds: matched, matchCount: matched.size };
+    }, [filterActive, query, priorityFilter, categories, byId, effectivePriorities]);
+
+    /* Each chip promises "this many if you click me", so the counts follow the
+       text search but ignore the tier filter — otherwise the chip you're on
+       would read its own count and the other four would read 0. */
+    const priorityCounts = useMemo(() => {
+        const counts = { none: 0 } as Record<PriorityFilter, number>;
+        for (const p of PRIORITY_KEYS) counts[p] = 0;
+        for (const c of categories) {
+            if (query && !c.name.toLowerCase().includes(query)) continue;
+            counts[effectivePriorities.get(c.id) ?? "none"]++;
+        }
+        return counts;
+    }, [categories, effectivePriorities, query]);
+
+    const clearFilters = () => {
+        setSearch("");
+        setPriorityFilter(null);
+    };
+
+    /** Human description of the active filter, for the empty state. */
+    const filterLabel = [
+        query ? `“${search.trim()}”` : null,
+        priorityFilter
+            ? priorityFilter === "none"
+                ? "no priority"
+                : PRIORITIES[priorityFilter].label
+            : null,
+    ]
+        .filter(Boolean)
+        .join(" · ");
+
+    /* ---- flatten to visible rows, grouped into cards ----
+       Within a band, each top-level category becomes a masonry card so the
+       pane spreads across the full width instead of one long skinny column
+       (nesting tops out at 3-4 levels, so cards stay compact).
+       Priority mode adds a band per tier, stacked vertically: a category
+       only ever appears in its effective tier's band, so every row still
+       has exactly one home and no single column runs long. */
+    const sections = useMemo(() => {
+        const out: TreeSection[] = [];
+
+        if (viewMode === "tree") {
+            const walk = (
+                acc: VisibleRow[],
+                nodes: CategoryNode[],
+                depth: number,
+                inherited: Priority | null
+            ) => {
+                for (const n of nodes) {
+                    if (visibleIds && !visibleIds.has(n.id)) continue;
+                    const effective = n.priority ?? inherited;
+                    const row: VisibleRow = {
+                        node: n,
+                        depth,
+                        effectivePriority: effective,
+                        priorityInherited: !n.priority && !!inherited,
+                        descendants: countDescendants(n),
+                        // Must mean "children that are rows here", not "children
+                        // in the data" — a filter can strip every child, and a
+                        // chevron over nothing claims aria-expanded on an empty
+                        // branch. Collapsed-and-unfiltered still counts, so the
+                        // chevron survives to reopen the node.
+                        hasChildRows: visibleIds
+                            ? n.children.some((c) => visibleIds.has(c.id))
+                            : n.children.length > 0,
+                    };
+                    acc.push(row);
+                    const open = visibleIds ? true : expanded.has(n.id);
+                    const before = acc.length;
+                    if (open && n.children.length > 0) {
+                        walk(acc, n.children, depth + 1, effective);
+                    }
+                    // Filtering force-opens rows, so the rows beneath are the
+                    // whole truth; unfiltered a collapsed node keeps its
+                    // subtree size, which is what makes the chip worth reading.
+                    if (visibleIds) row.descendants = acc.length - before;
+                }
+            };
+            const groups: TreeGroup[] = [];
+            let count = 0;
+            for (const root of roots) {
+                const acc: VisibleRow[] = [];
+                walk(acc, [root], 0, null);
+                if (acc.length > 0) {
+                    groups.push({
+                        key: root.id,
+                        rows: acc,
+                        size: countDescendants(root) + 1,
+                    });
+                    count += acc.length;
+                }
+            }
+            groups.sort(byCardSize);
+            if (groups.length > 0) out.push({ key: "all", groups, count });
+            return out;
+        }
+
+        /* Priority mode. Rows are always force-open: a tier band is already
+           a filtered view, and a chevron that hides nothing reads as broken.
+           Each depth-0 member starts a new card within the band. */
+        const walkTier = (
+            groups: TreeGroup[],
+            nodes: CategoryNode[],
+            tier: PriorityFilter,
+            depth: number,
+            /** Ancestors skipped since the last row in this card. */
+            skipped: string[]
+        ) => {
+            for (const n of nodes) {
+                const eff = effectivePriorities.get(n.id) ?? "none";
+                const isMember = eff === tier && (!matchIds || matchIds.has(n.id));
+                if (!isMember) {
+                    // Belongs to another tier — keep descending at the same
+                    // depth, collecting the name so a member further down can
+                    // show which parent it actually hangs off.
+                    walkTier(groups, n.children, tier, depth, [...skipped, n.name]);
+                    continue;
+                }
+                // NOTE: the row below must be pushed unconditionally right
+                // after this — `byCardSize` reads `rows[0]`.
+                if (depth === 0) groups.push({ key: n.id, rows: [], size: 0 });
+                const acc = groups[groups.length - 1].rows;
+                const row: VisibleRow = {
+                    node: n,
+                    depth,
+                    effectivePriority: tier === "none" ? null : tier,
+                    priorityInherited: !n.priority,
+                    // Counted within the card, not the whole tree — a chip
+                    // saying 4 while 2 rows sit under it would just mislead.
+                    descendants: 0,
+                    hasChildRows: false,
+                    pathLabel: skipped.length > 0 ? skipped.join(" › ") : undefined,
+                };
+                acc.push(row);
+                const before = acc.length;
+                walkTier(groups, n.children, tier, depth + 1, []);
+                row.descendants = acc.length - before;
+                row.hasChildRows = row.descendants > 0;
+            }
+        };
+        for (const tier of [...PRIORITY_KEYS, "none" as const]) {
+            const groups: TreeGroup[] = [];
+            walkTier(groups, roots, tier, 0, []);
+            // Band rows don't depend on `expanded`, so row count is a stable
+            // sort key here.
+            groups.forEach((g) => (g.size = g.rows.length));
+            groups.sort(byCardSize);
+            const count = groups.reduce((sum, g) => sum + g.rows.length, 0);
+            if (count > 0) out.push({ key: `tier-${tier}`, tier, groups, count });
         }
         return out;
-    }, [roots, expanded, searchVisible]);
+    }, [viewMode, roots, expanded, visibleIds, matchIds, effectivePriorities]);
 
-    /* Flat DFS order across all groups — keyboard nav + selection walk. */
-    const rows = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
+    /* Flat DFS order across all cards — keyboard nav + selection walk. */
+    const rows = useMemo(
+        () => sections.flatMap((s) => s.groups.flatMap((g) => g.rows)),
+        [sections]
+    );
     /* Search can filter the selected node out of the DOM — never point
        aria-activedescendant at an id that isn't rendered. */
     const selectedIsRendered = useMemo(
         () => !!selectedId && rows.some((r) => r.node.id === selectedId),
         [rows, selectedId]
     );
-
-    const matchCount = useMemo(() => {
-        if (!query) return 0;
-        return categories.filter((c) => c.name.toLowerCase().includes(query)).length;
-    }, [query, categories]);
 
     /* ---- drag & drop reparenting ---- */
     const [dragId, setDragId] = useState<string | null>(null);
@@ -497,12 +716,15 @@ function CategoriesWorkbench() {
             case "ArrowRight": {
                 if (idx < 0) return;
                 e.preventDefault();
-                const n = rows[idx].node;
-                // While searching, rows are force-open — don't mutate the
-                // stored expansion state, just move.
-                if (!query && n.children.length > 0 && !expanded.has(n.id)) {
+                const { node: n, hasChildRows } = rows[idx];
+                /* Rows are force-open whenever the chevron is locked (filtering
+                   or priority mode) — mutating `expanded` there would silently
+                   rewrite tree-mode state and make the first keypress a no-op.
+                   `hasChildRows`, not `children.length`: in a tier band a node
+                   whose children sit in other tiers renders as a leaf. */
+                if (!chevronLocked && hasChildRows && !expanded.has(n.id)) {
                     toggleExpand(n.id);
-                } else if (n.children.length > 0) {
+                } else if (hasChildRows) {
                     go(idx + 1);
                 }
                 break;
@@ -510,10 +732,13 @@ function CategoriesWorkbench() {
             case "ArrowLeft": {
                 if (idx < 0) return;
                 e.preventDefault();
-                const n = rows[idx].node;
-                if (!query && n.children.length > 0 && expanded.has(n.id)) {
+                const { node: n, hasChildRows } = rows[idx];
+                if (!chevronLocked && hasChildRows && expanded.has(n.id)) {
                     toggleExpand(n.id);
-                } else if (n.parent_id) {
+                } else if (n.parent_id && rows.some((r) => r.node.id === n.parent_id)) {
+                    // Tier bands carry no ancestor context rows, so the parent
+                    // is often not on screen; jumping to it would drop the
+                    // cursor and send the next ArrowDown back to row 0.
                     selectNode(n.parent_id);
                 }
                 break;
@@ -568,6 +793,34 @@ function CategoriesWorkbench() {
                     inert={overlayOpen || undefined}
                 >
                     <div className="ct-tree-toolbar">
+                        {/* Grouping toggle sits first and never unmounts, so it
+                            keeps one fixed home. Anything to its right may come
+                            and go without moving it under the pointer. */}
+                        <div className="ct-mode" role="group" aria-label="Group categories by">
+                            <button
+                                type="button"
+                                className={`ct-mode-btn ${viewMode === "tree" ? "is-active" : ""}`}
+                                aria-pressed={viewMode === "tree"}
+                                onClick={() => changeViewMode("tree")}
+                                title="Group by top-level category"
+                                /* The label is hidden on narrow screens. */
+                                aria-label="Group by top-level category"
+                            >
+                                <FolderTree className="size-3.5" />
+                                <span className="ct-mode-label">Tree</span>
+                            </button>
+                            <button
+                                type="button"
+                                className={`ct-mode-btn ${viewMode === "priority" ? "is-active" : ""}`}
+                                aria-pressed={viewMode === "priority"}
+                                onClick={() => changeViewMode("priority")}
+                                title="Group by priority tier"
+                                aria-label="Group by priority tier"
+                            >
+                                <Layers className="size-3.5" />
+                                <span className="ct-mode-label">Priority</span>
+                            </button>
+                        </div>
                         <div className="ct-search">
                             <Search className="size-3.5 ct-search-icon" />
                             <input
@@ -588,27 +841,40 @@ function CategoriesWorkbench() {
                                 </button>
                             )}
                         </div>
+                        {/* Priority bands are force-open, so expand / collapse
+                            has nothing to act on — kept mounted but disabled so
+                            the toolbar geometry doesn't change with the mode. */}
                         <button
                             type="button"
-                            className="ct-tool-btn"
+                            className="ct-tool-btn ct-tool-bulk"
                             onClick={expandAll}
-                            title="Expand all"
+                            disabled={viewMode === "priority"}
+                            title={
+                                viewMode === "priority"
+                                    ? "Expand all — tree view only"
+                                    : "Expand all"
+                            }
                             aria-label="Expand all"
                         >
                             <ChevronsUpDown className="size-3.5" />
                         </button>
                         <button
                             type="button"
-                            className="ct-tool-btn"
+                            className="ct-tool-btn ct-tool-bulk"
                             onClick={collapseAll}
-                            title="Collapse all"
+                            disabled={viewMode === "priority"}
+                            title={
+                                viewMode === "priority"
+                                    ? "Collapse all — tree view only"
+                                    : "Collapse all"
+                            }
                             aria-label="Collapse all"
                         >
                             <ChevronsDownUp className="size-3.5" />
                         </button>
                     </div>
 
-                    {query && (
+                    {filterActive && (
                         /* Stays mounted at 0 so the live region still announces,
                            but visually the body empty state covers that case. */
                         <div
@@ -617,7 +883,7 @@ function CategoriesWorkbench() {
                         >
                             {matchCount === 0
                                 ? "No matches"
-                                : `${matchCount} match${matchCount === 1 ? "" : "es"}`}
+                                : `${matchCount} match${matchCount === 1 ? "" : "es"} · ${filterLabel}`}
                         </div>
                     )}
 
@@ -671,62 +937,131 @@ function CategoriesWorkbench() {
                         ) : rows.length === 0 ? (
                             <div className="ct-empty">
                                 <Search className="size-5" />
-                                <p className="ct-empty-title">Nothing matches “{search.trim()}”</p>
-                                <button
-                                    type="button"
-                                    className="od-btn od-btn-sm"
-                                    onClick={() => setSearch("")}
-                                >
-                                    Clear search
-                                </button>
+                                <p className="ct-empty-title">
+                                    {/* No filter + no rows only happens on corrupt data
+                                        (every category inside a parent_id cycle). */}
+                                    {filterActive
+                                        ? `Nothing matches ${filterLabel}`
+                                        : "Nothing to show"}
+                                </p>
+                                {filterActive && (
+                                    <button
+                                        type="button"
+                                        className="od-btn od-btn-sm"
+                                        onClick={clearFilters}
+                                    >
+                                        Clear filters
+                                    </button>
+                                )}
                             </div>
                         ) : (
-                            <div className="ct-groups">
-                                {groups.map((g) => (
-                                    <div key={g.root.id} className="ct-group" role="none">
-                                        {g.rows.map((r) => (
-                                            <TreeRow
-                                                key={r.node.id}
-                                                row={r}
-                                                query={query}
-                                                isOwner={isOwner}
-                                                isSelected={r.node.id === selectedId}
-                                                isExpanded={query ? true : expanded.has(r.node.id)}
-                                                isDragging={r.node.id === dragId}
-                                                isDropTarget={r.node.id === dropId}
-                                                dropAllowed={canDropOn(r.node.id)}
-                                                onSelect={() => selectNode(r.node.id)}
-                                                onToggle={() => toggleExpand(r.node.id)}
-                                                onAddChild={() => openCreate(r.node.id)}
-                                                onDragStart={(e) => handleDragStart(e, r.node)}
-                                                onDragOver={(e) => handleDragOver(e, r.node)}
-                                                onDragLeave={() =>
-                                                    setDropId((d) => (d === r.node.id ? null : d))
-                                                }
-                                                onDrop={(e) => handleDrop(e, r.node.id)}
-                                                onDragEnd={handleDragEnd}
-                                            />
+                            sections.map((s) => (
+                                <div
+                                    key={s.key}
+                                    className={`ct-band ${s.tier ? "is-tier" : ""}`}
+                                    style={
+                                        s.tier && s.tier !== "none"
+                                            ? ({
+                                                  "--tier": PRIORITIES[s.tier].color,
+                                              } as React.CSSProperties)
+                                            : undefined
+                                    }
+                                    role="none"
+                                >
+                                    {s.tier && (
+                                        /* aria-hidden: role="tree" only wants treeitems as
+                                           children, and every row already announces its own
+                                           tier through the badge. */
+                                        <div className="ct-band-head" aria-hidden="true">
+                                            <PriorityBadge tier={s.tier} decorative />
+                                            <span className="ct-band-name">
+                                                {s.tier === "none"
+                                                    ? "No priority"
+                                                    : PRIORITIES[s.tier].label}
+                                            </span>
+                                            <span className="ct-count-chip tabular">{s.count}</span>
+                                        </div>
+                                    )}
+                                    <div className="ct-groups">
+                                        {s.groups.map((g) => (
+                                            <div key={g.key} className="ct-group" role="none">
+                                                {g.rows.map((r) => (
+                                                    <TreeRow
+                                                        key={r.node.id}
+                                                        row={r}
+                                                        query={query}
+                                                        isOwner={isOwner}
+                                                        isSelected={r.node.id === selectedId}
+                                                        isExpanded={
+                                                            chevronLocked
+                                                                ? true
+                                                                : expanded.has(r.node.id)
+                                                        }
+                                                        chevronLocked={chevronLocked}
+                                                        isDragging={r.node.id === dragId}
+                                                        isDropTarget={r.node.id === dropId}
+                                                        dropAllowed={canDropOn(r.node.id)}
+                                                        onSelect={() => selectNode(r.node.id)}
+                                                        onToggle={() => toggleExpand(r.node.id)}
+                                                        onAddChild={() => openCreate(r.node.id)}
+                                                        onDragStart={(e) =>
+                                                            handleDragStart(e, r.node)
+                                                        }
+                                                        onDragOver={(e) =>
+                                                            handleDragOver(e, r.node)
+                                                        }
+                                                        onDragLeave={() =>
+                                                            setDropId((d) =>
+                                                                d === r.node.id ? null : d
+                                                            )
+                                                        }
+                                                        onDrop={(e) => handleDrop(e, r.node.id)}
+                                                        onDragEnd={handleDragEnd}
+                                                    />
+                                                ))}
+                                            </div>
                                         ))}
                                     </div>
-                                ))}
-                            </div>
+                                </div>
+                            ))
                         )}
                     </div>
 
+                    {/* Legend doubles as a tier filter — the counts are the
+                        "how many sit in each tier" answer at a glance. */}
                     <footer className="ct-tree-foot">
-                        {PRIORITY_KEYS.map((p) => (
-                            <span key={p} className="ct-legend-item">
-                                <span
-                                    className="ct-pri-dot"
-                                    style={{ background: PRIORITIES[p].color }}
-                                />
-                                {PRIORITIES[p].label}
-                            </span>
-                        ))}
-                        <span className="ct-legend-item ct-legend-muted">
-                            <span className="ct-pri-dot is-inherited" />
-                            inherited
-                        </span>
+                        {([...PRIORITY_KEYS, "none"] as PriorityFilter[]).map((p) => {
+                            const on = priorityFilter === p;
+                            const label = p === "none" ? "No priority" : PRIORITIES[p].label;
+                            return (
+                                <button
+                                    key={p}
+                                    type="button"
+                                    className={`ct-legend-chip ${on ? "is-active" : ""}`}
+                                    aria-pressed={on}
+                                    onClick={() => setPriorityFilter(on ? null : p)}
+                                    title={
+                                        on
+                                            ? `Show all tiers again`
+                                            : `Show only ${label}${p === "none" ? "" : " categories"}`
+                                    }
+                                    style={
+                                        p !== "none"
+                                            ? ({
+                                                  "--tier": PRIORITIES[p].color,
+                                              } as React.CSSProperties)
+                                            : undefined
+                                    }
+                                >
+                                    <PriorityBadge tier={p} decorative />
+                                    {label}
+                                    <span className="ct-legend-count tabular">
+                                        {priorityCounts[p]}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                        <span className="ct-legend-item ct-legend-muted">dashed = inherited</span>
                         {isOwner && <span className="ct-legend-hint">Drag rows to re-nest</span>}
                     </footer>
                 </section>
@@ -855,6 +1190,41 @@ function CategoriesWorkbench() {
 }
 
 /* ============================================================
+   Priority badge — the letter carries the meaning so the tier is
+   never signalled by colour alone.
+   ============================================================ */
+
+function PriorityBadge({
+    tier,
+    inherited = false,
+    decorative = false,
+}: {
+    tier: PriorityFilter;
+    inherited?: boolean;
+    /** Inside a chip/header that already names the tier in text. */
+    decorative?: boolean;
+}) {
+    const unset = tier === "none";
+    const label = unset ? "No priority" : PRIORITIES[tier].label;
+    return (
+        <span
+            className={`ct-pri-badge ${inherited ? "is-inherited" : ""} ${unset ? "is-unset" : ""}`}
+            style={
+                unset ? undefined : ({ "--tier": PRIORITIES[tier].color } as React.CSSProperties)
+            }
+            role={decorative ? undefined : "img"}
+            aria-hidden={decorative || undefined}
+            aria-label={decorative ? undefined : `${label}${inherited ? ", inherited" : ""}`}
+            title={
+                decorative ? undefined : `${label}${inherited ? " · inherited from parent" : ""}`
+            }
+        >
+            {unset ? "–" : PRIORITIES[tier].letter}
+        </span>
+    );
+}
+
+/* ============================================================
    Tree row
    ============================================================ */
 
@@ -864,6 +1234,7 @@ function TreeRow({
     isOwner,
     isSelected,
     isExpanded,
+    chevronLocked,
     isDragging,
     isDropTarget,
     dropAllowed,
@@ -881,6 +1252,7 @@ function TreeRow({
     isOwner: boolean;
     isSelected: boolean;
     isExpanded: boolean;
+    chevronLocked: boolean;
     isDragging: boolean;
     isDropTarget: boolean;
     dropAllowed: boolean;
@@ -893,8 +1265,8 @@ function TreeRow({
     onDrop: (e: React.DragEvent) => void;
     onDragEnd: () => void;
 }) {
-    const { node, depth, effectivePriority, priorityInherited, descendants } = row;
-    const hasKids = node.children.length > 0;
+    const { node, depth, effectivePriority, priorityInherited, descendants, hasChildRows } = row;
+    const hasKids = hasChildRows;
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -938,7 +1310,7 @@ function TreeRow({
                         e.stopPropagation();
                         onToggle();
                     }}
-                    disabled={!!query}
+                    disabled={chevronLocked}
                     aria-label={isExpanded ? "Collapse" : "Expand"}
                 >
                     {isExpanded ? (
@@ -955,8 +1327,24 @@ function TreeRow({
 
             <EntityAvatar size="sm" color={node.color} icon={node.icon} />
 
-            <span className="ct-row-name" title={node.name}>
-                <Highlight text={node.name} query={query} />
+            {/* Flex, not one nowrap run: the ellipsis always eats the tail, so
+                a single run would truncate the category name and leave the
+                breadcrumb intact. The path absorbs the shrink instead. */}
+            <span
+                className="ct-row-name"
+                title={row.pathLabel ? `${row.pathLabel} › ${node.name}` : node.name}
+            >
+                {row.pathLabel && (
+                    <>
+                        <span className="ct-row-path">{row.pathLabel}</span>
+                        <span className="ct-row-sep" aria-hidden="true">
+                            ›
+                        </span>
+                    </>
+                )}
+                <span className="ct-row-leaf">
+                    <Highlight text={node.name} query={query} />
+                </span>
             </span>
 
             {hasKids && (
@@ -968,14 +1356,11 @@ function TreeRow({
                 </span>
             )}
 
+            {/* Solid badge = tier set on this category, dashed = inherited.
+                Kept inside tier cards too: the header names the tier, only
+                the badge says whether this row is where it was set. */}
             {effectivePriority && (
-                <span
-                    className={`ct-pri-dot ${priorityInherited ? "is-inherited" : ""}`}
-                    style={{
-                        background: PRIORITIES[effectivePriority].color,
-                    }}
-                    title={`${PRIORITIES[effectivePriority].label}${priorityInherited ? " (inherited)" : ""}`}
-                />
+                <PriorityBadge tier={effectivePriority} inherited={priorityInherited} />
             )}
 
             <span className="ct-row-spacer" />
@@ -1176,16 +1561,11 @@ function Inspector({
         [node.id, byId]
     );
 
-    const inheritedPriority = useMemo(() => {
-        const seen = new Set<string>();
-        let cur = parentId ? byId.get(parentId) : null;
-        while (cur && !seen.has(cur.id)) {
-            seen.add(cur.id);
-            if (cur.priority) return cur.priority;
-            cur = cur.parent_id ? byId.get(cur.parent_id) : null;
-        }
-        return null;
-    }, [parentId, byId]);
+    /* Follows the *draft* parent, so re-parenting updates the inheritance
+       hint before you save. */
+    const inheritedPriority = useMemo(() => resolveInherited(parentId, byId), [parentId, byId]);
+    /* Saved state, for what this node's children actually inherit today. */
+    const childInherits = node.priority ?? resolveInherited(node.parent_id, byId);
 
     const lastUsed = formatLastUsed(node.last_used);
     const hasKids = node.children.length > 0;
@@ -1249,7 +1629,7 @@ function Inspector({
                             <span className="ct-dim">Top level</span>
                         )}
                     </ReadOnlyRow>
-                    <ChildrenSection node={node} onSelect={onSelect} />
+                    <ChildrenSection node={node} inherits={childInherits} onSelect={onSelect} />
                 </div>
             ) : (
                 <>
@@ -1276,46 +1656,13 @@ function Inspector({
                         <OrbitField
                             label="Priority"
                             noWrapperLabel
-                            hint={
-                                priority === "" && inheritedPriority
-                                    ? `Inheriting ${PRIORITIES[inheritedPriority].label} from parent`
-                                    : "Descendants inherit unless they override"
-                            }
+                            hint="Descendants inherit unless they override"
                         >
-                            <div className="ct-pri-choices" role="group" aria-label="Priority">
-                                <button
-                                    type="button"
-                                    aria-pressed={priority === ""}
-                                    className={`ct-pri-choice ${priority === "" ? "is-active" : ""}`}
-                                    onClick={() => setPriority("")}
-                                >
-                                    None
-                                </button>
-                                {PRIORITY_KEYS.map((p) => (
-                                    <button
-                                        key={p}
-                                        type="button"
-                                        aria-pressed={priority === p}
-                                        className={`ct-pri-choice ${priority === p ? "is-active" : ""}`}
-                                        style={
-                                            priority === p
-                                                ? {
-                                                      color: PRIORITIES[p].color,
-                                                      borderColor: `color-mix(in oklab, ${PRIORITIES[p].color} 45%, transparent)`,
-                                                      background: `color-mix(in oklab, ${PRIORITIES[p].color} 10%, transparent)`,
-                                                  }
-                                                : undefined
-                                        }
-                                        title={PRIORITIES[p].desc}
-                                    >
-                                        <span
-                                            className="ct-pri-dot"
-                                            style={{ background: PRIORITIES[p].color }}
-                                        />
-                                        {PRIORITIES[p].label}
-                                    </button>
-                                ))}
-                            </div>
+                            <PrioritySelect
+                                value={priority}
+                                onChange={setPriority}
+                                inherited={inheritedPriority}
+                            />
                         </OrbitField>
 
                         <OrbitField
@@ -1332,7 +1679,12 @@ function Inspector({
                             />
                         </OrbitField>
 
-                        <ChildrenSection node={node} onSelect={onSelect} onAddChild={onAddChild} />
+                        <ChildrenSection
+                            node={node}
+                            inherits={childInherits}
+                            onSelect={onSelect}
+                            onAddChild={onAddChild}
+                        />
 
                         {/* Danger zone */}
                         <div className="ct-danger">
@@ -1423,19 +1775,76 @@ function PriorityChipStatic({
                 opacity: inherited ? 0.8 : 1,
             }}
         >
-            <span className="ct-pri-dot" style={{ background: m.color }} />
+            <PriorityBadge tier={priority} inherited={inherited} decorative />
             {m.label}
             {inherited && <span className="ct-dim"> · inherited</span>}
         </span>
     );
 }
 
+/* ============================================================
+   Priority picker — real radios, so arrow keys, labels and screen
+   readers all come for free.
+   ============================================================ */
+
+function PrioritySelect({
+    value,
+    onChange,
+    inherited,
+}: {
+    value: Priority | "";
+    onChange: (v: Priority | "") => void;
+    inherited: Priority | null;
+}) {
+    // Radios only group by name, so each mounted picker needs its own.
+    const groupName = useId();
+    return (
+        /* Native radios sharing a name are exposed as a set with no name of
+           their own — OrbitField's noWrapperLabel renders a div, not a label,
+           so the group needs its own. */
+        <div className="ct-pri-select" role="radiogroup" aria-label="Priority">
+            {(["", ...PRIORITY_KEYS] as (Priority | "")[]).map((key) => {
+                const meta = key === "" ? null : PRIORITIES[key];
+                const active = value === key;
+                return (
+                    <label
+                        key={key || "none"}
+                        className={`ct-pri-opt ${active ? "is-active" : ""}`}
+                        style={meta ? ({ "--tier": meta.color } as React.CSSProperties) : undefined}
+                    >
+                        <input
+                            className="ct-pri-radio"
+                            type="radio"
+                            name={groupName}
+                            checked={active}
+                            onChange={() => onChange(key)}
+                        />
+                        <PriorityBadge tier={key === "" ? "none" : key} decorative />
+                        <span className="ct-pri-opt-label">{meta ? meta.label : "None"}</span>
+                        {/* Only the None row carries a second line, and only to
+                            spell out what "unset" resolves to here. */}
+                        {!meta && inherited && (
+                            <span className="ct-pri-opt-desc">
+                                inherits {PRIORITIES[inherited].label}
+                            </span>
+                        )}
+                        <Check className="size-3.5 ct-pri-check" aria-hidden="true" />
+                    </label>
+                );
+            })}
+        </div>
+    );
+}
+
 function ChildrenSection({
     node,
+    inherits,
     onSelect,
     onAddChild,
 }: {
     node: CategoryNode;
+    /** Effective priority a child gets when it sets none of its own. */
+    inherits: Priority | null;
     onSelect: (id: string) => void;
     onAddChild?: () => void;
 }) {
@@ -1455,21 +1864,27 @@ function ChildrenSection({
                 <p className="ct-children-empty">None — this is a leaf category.</p>
             ) : (
                 <div className="ct-children-list">
-                    {node.children.map((c) => (
-                        <button
-                            key={c.id}
-                            type="button"
-                            className="ct-child-row"
-                            onClick={() => onSelect(c.id)}
-                        >
-                            <EntityAvatar size="sm" color={c.color} icon={c.icon} />
-                            <span className="ct-child-name">{c.name}</span>
-                            {c.children.length > 0 && (
-                                <span className="ct-count-chip tabular">{countDescendants(c)}</span>
-                            )}
-                            <ChevronRight className="size-3 ct-child-arrow" />
-                        </button>
-                    ))}
+                    {node.children.map((c) => {
+                        const eff = c.priority ?? inherits;
+                        return (
+                            <button
+                                key={c.id}
+                                type="button"
+                                className="ct-child-row"
+                                onClick={() => onSelect(c.id)}
+                            >
+                                <EntityAvatar size="sm" color={c.color} icon={c.icon} />
+                                <span className="ct-child-name">{c.name}</span>
+                                {c.children.length > 0 && (
+                                    <span className="ct-count-chip tabular">
+                                        {countDescendants(c)}
+                                    </span>
+                                )}
+                                {eff && <PriorityBadge tier={eff} inherited={!c.priority} />}
+                                <ChevronRight className="size-3 ct-child-arrow" />
+                            </button>
+                        );
+                    })}
                 </div>
             )}
         </div>
@@ -1523,16 +1938,7 @@ function CreatePanel({
         return parent ? [...chain, parent] : chain;
     }, [parentId, byId]);
 
-    const inheritedPriority = useMemo(() => {
-        const seen = new Set<string>();
-        let cur = parentId ? byId.get(parentId) : null;
-        while (cur && !seen.has(cur.id)) {
-            seen.add(cur.id);
-            if (cur.priority) return cur.priority;
-            cur = cur.parent_id ? byId.get(cur.parent_id) : null;
-        }
-        return null;
-    }, [parentId, byId]);
+    const inheritedPriority = useMemo(() => resolveInherited(parentId, byId), [parentId, byId]);
 
     const submit = () => {
         if (create.isPending || !name.trim()) return;
@@ -1606,49 +2012,12 @@ function CreatePanel({
                     </div>
                 </OrbitField>
 
-                <OrbitField
-                    label="Priority"
-                    noWrapperLabel
-                    hint={
-                        inheritedPriority
-                            ? `Unset inherits ${PRIORITIES[inheritedPriority].label}`
-                            : "Optional"
-                    }
-                >
-                    <div className="ct-pri-choices" role="group" aria-label="Priority">
-                        <button
-                            type="button"
-                            aria-pressed={priority === ""}
-                            className={`ct-pri-choice ${priority === "" ? "is-active" : ""}`}
-                            onClick={() => setPriority("")}
-                        >
-                            None
-                        </button>
-                        {PRIORITY_KEYS.map((p) => (
-                            <button
-                                key={p}
-                                type="button"
-                                aria-pressed={priority === p}
-                                className={`ct-pri-choice ${priority === p ? "is-active" : ""}`}
-                                style={
-                                    priority === p
-                                        ? {
-                                              color: PRIORITIES[p].color,
-                                              borderColor: `color-mix(in oklab, ${PRIORITIES[p].color} 45%, transparent)`,
-                                              background: `color-mix(in oklab, ${PRIORITIES[p].color} 10%, transparent)`,
-                                          }
-                                        : undefined
-                                }
-                                title={PRIORITIES[p].desc}
-                            >
-                                <span
-                                    className="ct-pri-dot"
-                                    style={{ background: PRIORITIES[p].color }}
-                                />
-                                {PRIORITIES[p].label}
-                            </button>
-                        ))}
-                    </div>
+                <OrbitField label="Priority" noWrapperLabel hint="Optional">
+                    <PrioritySelect
+                        value={priority}
+                        onChange={setPriority}
+                        inherited={inheritedPriority}
+                    />
                 </OrbitField>
 
                 <OrbitField label="Parent" hint="Optional" noWrapperLabel>
@@ -1826,8 +2195,61 @@ const CT_STYLES = `
     flex-shrink: 0;
     transition: all 140ms ease;
 }
-.ct-tool-btn:hover { background: var(--bg-elev-2); color: var(--fg); border-color: var(--line-strong); }
+.ct-tool-btn:hover:not(:disabled) { background: var(--bg-elev-2); color: var(--fg); border-color: var(--line-strong); }
 .ct-tool-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ct-tool-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ---------- grouping toggle (tree / priority) ---------- */
+.ct-mode {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 34px;
+    padding: 2px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--bg-elev-1);
+}
+.ct-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 100%;
+    padding: 0 9px;
+    border-radius: 7px;
+    border: 0;
+    background: transparent;
+    color: var(--fg-3);
+    font-size: 11.5px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 140ms ease, color 140ms ease;
+}
+.ct-mode-btn:hover { color: var(--fg-2); }
+/* elev-3 on the elev-1 track is only 1.16:1, and --shadow-1 is a dark shadow
+   on a dark surface — the ring is what actually marks the active mode. */
+.ct-mode-btn.is-active {
+    background: var(--bg-elev-3);
+    color: var(--fg);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 55%, transparent);
+}
+.ct-mode-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* Icon-only below ~520px: the search field needs the width more than the
+   labels do, and each button keeps its title + aria-pressed. */
+@media (max-width: 520px) {
+    .ct-mode-label { display: none; }
+    .ct-mode-btn { padding: 0 10px; }
+    /* Every row's chevron does this one node at a time; the search field
+       needs the width more than the bulk buttons do. */
+    .ct-tool-bulk { display: none; }
+}
+@media (hover: none) {
+    .ct-mode { height: 44px; }
+    .ct-mode-btn { min-width: 44px; justify-content: center; }
+}
 
 .ct-search-meta {
     flex-shrink: 0;
@@ -1888,6 +2310,33 @@ const CT_STYLES = `
     padding: 5px;
     margin-bottom: 12px;
 }
+
+/* ---------- priority grouping ----------
+   Tiers stack as full-width bands, each running the same masonry inside,
+   so cards stay short and wide instead of forming four tall columns. */
+.ct-band + .ct-band { margin-top: 4px; }
+.ct-band.is-tier {
+    padding-top: 2px;
+}
+.ct-band-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 8px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    border: 1px solid color-mix(in oklab, var(--tier, var(--fg-4)) 22%, var(--line));
+    border-left: 3px solid color-mix(in oklab, var(--tier, var(--fg-4)) 65%, transparent);
+    background: color-mix(in oklab, var(--tier, var(--fg-4)) 8%, var(--bg-elev-2));
+}
+.ct-band-name {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--fg);
+}
+
+/* Lifted subtree: its parent sits in another tier, so the path comes along. */
 .ct-row.is-root {
     font-weight: 500;
     color: var(--fg);
@@ -1962,10 +2411,23 @@ const CT_STYLES = `
 
 .ct-row-name {
     min-width: 0;
+    display: flex;
+    align-items: center;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* flex 0 20 auto: soak up ~all the shrink, so the breadcrumb ellipses long
+   before the category name does. */
+.ct-row-path {
+    flex: 0 20 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--fg-3);
+}
+/* Own span so the path's ellipsis can't swallow the separator. */
+.ct-row-sep { flex: none; padding: 0 4px; color: var(--fg-4); }
+.ct-row-leaf { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ct-mark {
     background: color-mix(in oklab, var(--gold) 30%, transparent);
     color: var(--fg);
@@ -1986,14 +2448,41 @@ const CT_STYLES = `
 }
 .ct-row-spacer { flex: 1; }
 
-.ct-pri-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 99px;
+/* Priority badge — letter + colour, so the tier survives greyscale and
+   colour-blind vision. Solid = set here, dashed = inherited. */
+.ct-pri-badge {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 3px;
+    border-radius: 5px;
+    /* On a tree row the letter is the whole tier signal for sighted users,
+       and title tooltips never fire on touch — don't shrink it further. */
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--tier);
+    background: color-mix(in oklab, var(--tier) 16%, transparent);
+    border: 1px solid color-mix(in oklab, var(--tier) 70%, transparent);
 }
-.ct-pri-dot.is-inherited { opacity: 0.4; }
-.ct-legend-item .ct-pri-dot.is-inherited { background: var(--fg-3); }
+/* Inherited is the majority state, so it can't be the illegible one. A dashed
+   border loses ~half its ink, hence the *higher* alpha than the solid case;
+   the fill is what still reads as "set here". */
+.ct-pri-badge.is-inherited {
+    background: transparent;
+    border-style: dashed;
+    border-color: color-mix(in oklab, var(--tier) 80%, transparent);
+    color: color-mix(in oklab, var(--tier) 80%, var(--fg-3));
+    font-weight: 600;
+}
+.ct-pri-badge.is-unset {
+    color: var(--fg-3);
+    background: transparent;
+    border: 1px dashed var(--line-strong);
+}
 
 .ct-row-actions {
     display: inline-flex;
@@ -2042,12 +2531,14 @@ const CT_STYLES = `
     .ct-children-add { min-height: 36px; padding: 0 10px; }
     .ct-search-clear { width: 32px; height: 32px; }
     .ct-danger-btn { height: 40px; }
-    .ct-pri-choice { min-height: 40px; }
     .ct-insp-crumb { padding: 6px 4px; }
     /* iOS zooms on focusing any input under 16px — the width-based 640px
        rule misses landscape phones and tablets, so fix it by input type. */
     .ct-search-input { font-size: 16px; }
-    .ct-search { height: 40px; }
+    /* Toolbar row: search / mode toggle / bulk buttons all share one height
+       so the row reads as a single band, and all clear 44px. */
+    .ct-search { height: 44px; }
+    .ct-tree-toolbar .ct-tool-btn { width: 44px; height: 44px; }
 }
 
 /* ---------- tree footer / legend ---------- */
@@ -2055,11 +2546,19 @@ const CT_STYLES = `
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     flex-wrap: wrap;
-    padding: 8px 14px;
+    padding: 6px 10px;
     border-top: 1px solid var(--line-soft);
     background: var(--bg-elev-2);
+}
+/* Phones keep wrapping rather than scrolling: five chips overflow ~190px at
+   375px, and a scroll container with no scrollbar hides two filters with no
+   hint they exist. The drag hint goes instead — HTML5 drag doesn't fire on
+   touch at all, while "dashed = inherited" is the only place the badge
+   grammar is explained (title tooltips don't fire on touch either). */
+@media (max-width: 640px) {
+    .ct-legend-chip { flex-shrink: 0; }
 }
 .ct-legend-item {
     display: inline-flex;
@@ -2068,7 +2567,47 @@ const CT_STYLES = `
     font-size: 10.5px;
     color: var(--fg-3);
 }
+/* --fg-4 tops out at 2.9:1 against every surface in this palette — fine for
+   decoration, never for text that carries meaning. */
 .ct-legend-muted { color: var(--fg-3); }
+
+/* Legend chips double as tier filters — count first, colour second. */
+.ct-legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 7px 0 5px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--fg-3);
+    font-size: 10.5px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.ct-legend-chip:hover { background: var(--bg-elev-3); color: var(--fg-2); }
+/* Background tints top out near 1.3:1 in this palette, so the pressed state
+   has to live in the border. --fg-2 fallback keeps the "No priority" chip —
+   the one most likely to be used — from disappearing when active. */
+.ct-legend-chip.is-active {
+    color: var(--fg);
+    border-color: color-mix(in oklab, var(--tier, var(--fg-2)) 75%, transparent);
+    background: color-mix(in oklab, var(--tier, var(--fg-2)) 18%, transparent);
+}
+.ct-legend-chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* These are filters now, not swatches — grow the hit area on touch without
+   growing the footer. */
+@media (hover: none) {
+    .ct-legend-chip { position: relative; }
+    .ct-legend-chip::after { content: ""; position: absolute; inset: -10px 0; }
+}
+.ct-legend-count {
+    color: var(--fg-3);
+    font-size: 10.5px;
+}
+.ct-legend-chip.is-active .ct-legend-count { color: var(--fg-2); }
 .ct-legend-hint {
     margin-left: auto;
     font-size: 10.5px;
@@ -2274,28 +2813,61 @@ const CT_STYLES = `
     text-align: right;
 }
 
-/* priority chips */
-.ct-pri-choices { display: flex; flex-wrap: wrap; gap: 6px; }
-.ct-pri-choice {
-    display: inline-flex;
+/* priority picker — one row per tier */
+.ct-pri-select { display: flex; flex-direction: column; gap: 4px; }
+.ct-pri-opt {
+    position: relative; /* keeps the visually-hidden radio inside the row */
+    display: flex;
     align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 11px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
+    gap: 9px;
+    min-height: 34px;
+    padding: 4px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--line-soft);
     background: var(--bg-elev-1);
-    color: var(--fg-3);
-    font-size: 12px;
-    font-weight: 500;
     cursor: pointer;
-    font-family: inherit;
-    transition: all 140ms ease;
+    transition: border-color 140ms ease, background 140ms ease;
 }
-.ct-pri-choice:hover { border-color: var(--line-strong); color: var(--fg); }
-.ct-pri-choice.is-active { color: var(--fg); border-color: var(--line-strong); background: var(--bg-elev-3); }
-.ct-pri-choice:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.ct-pri-choice .ct-pri-dot { width: 6px; height: 6px; }
+.ct-pri-opt:hover { border-color: var(--line-strong); background: var(--bg-elev-2); }
+.ct-pri-opt.is-active {
+    border-color: color-mix(in oklab, var(--tier, var(--brand)) 45%, transparent);
+    background: color-mix(in oklab, var(--tier, var(--brand)) 10%, transparent);
+}
+/* The radio stays focusable (and keyboard-navigable) but invisible — the
+   whole row is the label, so the ring belongs on the row. */
+.ct-pri-radio {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+}
+.ct-pri-opt:has(.ct-pri-radio:focus-visible) {
+    outline: 2px solid var(--brand);
+    outline-offset: 1px;
+}
+.ct-pri-opt-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ct-pri-opt.is-active .ct-pri-opt-label { color: var(--fg); }
+.ct-pri-opt-desc {
+    font-size: 11.5px;
+    color: var(--fg-3);
+    white-space: nowrap;
+}
+.ct-pri-check { flex-shrink: 0; color: var(--tier, var(--brand)); opacity: 0; }
+.ct-pri-opt.is-active .ct-pri-check { opacity: 1; }
+@media (hover: none) {
+    .ct-pri-opt { min-height: 44px; }
+}
 
 .ct-pri-chip {
     display: inline-flex;
