@@ -40,3 +40,14 @@ Verified fix: add `basis-full lg:basis-auto` to the values `<div>` so it takes i
 `lg`. Measured after: uniform name widths (253 @375, 382 @768, 637 @1023), `documentElement`
 scrollWidth == clientWidth at 320–1440 for typical/long/no-prior data, and **≥1024 is byte-identical**
 (nameW 192, barW 158/414/574). Cost: `moversH` 408 → 554 at 375.
+
+**2026-08 (branch `demo`): the explanatory footnote `<p>` under the list was deleted.** The axis
+key now lives ONLY in the column-header row, which is `hidden … lg:flex` — so below 1024px the
+bars carry no scale, no zero-centre statement and no direction key. The comment at
+`MoversList.tsx:160-168` still claims "the note under the list carries the same facts in prose
+there" and is now false (it also says "below sm" while the class is `lg:`). Mitigation that makes
+this survivable: the bar is `aria-hidden` and every number it encodes is printed as text in the
+same row. `clipped` is still computed in the `useMemo` but no longer destructured — dead.
+
+`ViewModeToggle` (Tree/Flat) now sits in BOTH hosts' movers headers — see
+[[filter-row-and-viewmode-toggle]] for the measured wrap thresholds.

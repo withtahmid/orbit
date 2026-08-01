@@ -15,6 +15,8 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                See space-scoped twin for why equal-duration subtraction
                misses calendar boundaries. */
             prevStart: z.coerce.date().optional(),
+            /** Roll-up shape — see the space-scoped twin. */
+            shape: z.enum(["tree", "flat"]).default("tree"),
             limit: z.number().int().min(1).max(50).default(10),
             /* Personal trends only supports account filtering — see
                daily-comparison twin for the rationale. */
@@ -28,16 +30,17 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                 const owned = intersectAccountIds(ownedAll, input.accountIds);
                 const memberSpaces = await resolveMemberSpaceIds(ctx.services.qb, ctx.auth.user.id);
                 /* Response shape matches the space-scoped twin so the
-                   frontend renders both via a single code path. Personal
-                   can never enter drill-in mode (no category filter),
-                   so `mode` is always "standard". */
+                   frontend renders both via a single code path. */
                 if (owned.length === 0 || memberSpaces.length === 0) {
-                    return {
-                        mode: "standard" as const,
-                        drillRootCategoryId: null as string | null,
-                        items: [],
-                    };
+                    return { shape: input.shape, hasPrevious: false, items: [] };
                 }
+                const isFlat = input.shape === "flat";
+                const rootsJoin = isFlat
+                    ? sql``
+                    : sql`LEFT JOIN roots r ON r.id = t.expense_category_id`;
+                const categoryExpr = isFlat
+                    ? sql`t.expense_category_id`
+                    : sql`COALESCE(r.root_id, t.expense_category_id)`;
 
                 const durationMs = input.periodEnd.getTime() - input.periodStart.getTime();
                 const prevStart =
@@ -74,11 +77,11 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                     ),
                     spending AS (
                         SELECT
-                            COALESCE(r.root_id, t.expense_category_id) AS category_id,
+                            ${categoryExpr} AS category_id,
                             t.amount,
                             t.transaction_datetime AS dt
                         FROM transactions t
-                        LEFT JOIN roots r ON r.id = t.expense_category_id
+                        ${rootsJoin}
                         WHERE t.type = 'expense'
                           AND t.space_id = ANY(${memberSpaces})
                           AND t.source_account_id = ANY(${owned})
@@ -115,11 +118,14 @@ export const personalTrendsCategoryMovers = authorizedProcedure
                     };
                 });
                 items.sort((a, b) => Math.abs(b.deltaAmount) - Math.abs(a.deltaAmount));
-                return {
-                    mode: "standard" as const,
-                    drillRootCategoryId: null as string | null,
-                    items: items.slice(0, input.limit),
-                };
+                /* Computed over the FULL set, before the limit. Callers use it
+                   to decide whether the list is a comparison or a ranking, and
+                   deriving it from the returned slice let the answer depend on
+                   which rows happened to make the top N — flipping the whole
+                   card between two chart types when the shape changed, with no
+                   change in the underlying data. */
+                const hasPrevious = items.some((i) => i.previousTotal > 0);
+                return { shape: input.shape, hasPrevious, items: items.slice(0, input.limit) };
             })()
         );
         if (error) {

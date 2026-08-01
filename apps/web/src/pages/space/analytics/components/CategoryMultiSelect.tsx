@@ -3,7 +3,6 @@ import { ChevronDown, FolderTree } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
-    DropdownMenuCheckboxItem,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuLabel,
@@ -11,7 +10,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { EntityAvatar } from "@/components/shared/EntityAvatar";
+import { FilterCheckRow } from "./FilterCheckRow";
 import { cn } from "@/lib/utils";
 
 export interface CategoryRow {
@@ -204,37 +203,27 @@ export function CategoryMultiSelect({
                                 </p>
                             ) : (
                                 filtered.map((n) => (
-                                    <DropdownMenuCheckboxItem
+                                    <FilterCheckRow
                                         key={n.id}
                                         checked={selectedSet.has(n.id)}
-                                        onCheckedChange={() => toggle(n.id)}
-                                        onSelect={(e) => e.preventDefault()}
+                                        onToggle={() => toggle(n.id)}
+                                        color={n.color}
+                                        icon={n.icon}
                                         /* Flat results read flat. `filtered` is a
                                            plain name match that drops ancestors,
                                            so keeping the depth indent left a child
                                            indented under a parent that isn't on
                                            screen — the indentation pointed at
                                            nothing. */
-                                        style={{
-                                            paddingLeft: query.trim()
-                                                ? "0.5rem"
-                                                : `${0.5 + n.depth * 0.75}rem`,
-                                        }}
-                                    >
-                                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                                            <EntityAvatar size="sm" color={n.color} icon={n.icon} />
-                                            <span className="truncate">
-                                                {n.name}
-                                                {dupNames.has(n.name) && n.space_name && (
-                                                    <span className="text-muted-foreground">
-                                                        {" · "}
-                                                        {n.space_name}
-                                                    </span>
-                                                )}
-                                            </span>
-                                            {n.descendantCount > 0 && (
+                                        /* Clamped: the indent is unbounded and
+                                           the popover is 288px, so past depth
+                                           ~6 the name column starves and at 14
+                                           it overflows the row. */
+                                        indent={query.trim() ? 0 : Math.min(n.depth, 5) * 0.75}
+                                        trailing={
+                                            n.descendantCount > 0 ? (
                                                 <span
-                                                    className="ml-auto rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                                                    className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
                                                     title={`Includes ${n.descendantCount} sub-categor${
                                                         n.descendantCount === 1 ? "y" : "ies"
                                                     }`}
@@ -244,9 +233,17 @@ export function CategoryMultiSelect({
                                                 >
                                                     +{n.descendantCount}
                                                 </span>
-                                            )}
-                                        </span>
-                                    </DropdownMenuCheckboxItem>
+                                            ) : undefined
+                                        }
+                                    >
+                                        {n.name}
+                                        {dupNames.has(n.name) && n.space_name && (
+                                            <span className="text-muted-foreground">
+                                                {" · "}
+                                                {n.space_name}
+                                            </span>
+                                        )}
+                                    </FilterCheckRow>
                                 ))
                             )}
                         </div>

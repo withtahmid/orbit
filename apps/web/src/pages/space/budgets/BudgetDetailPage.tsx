@@ -23,6 +23,7 @@ import {
 import { formatInAppTz } from "@/lib/formatDate";
 import { startOfMonth, endOfMonth, addMonths, getAppTzYear, getAppTzMonth } from "@/lib/dates";
 import { compactMoney } from "@/lib/chartBucket";
+import { ViewModeToggle } from "@/pages/space/analytics/components/ViewModeToggle";
 import { MoversList } from "@/features/analytics/MoversList";
 import { toast } from "sonner";
 import { PermissionGate } from "@/components/shared/PermissionGate";
@@ -180,7 +181,14 @@ export default function BudgetDetailPage() {
             }
         }
         const perDayThisMonth = today > 0 ? curAtToday / today / bucketDays : 0;
-        const perDayLastMonth = today > 0 ? prvAtToday / today / bucketDays : 0;
+        /* Over the prior period's OWN length, never more: on March 30th
+           February's total spans 28 days, not 30. Dividing by `today` let
+           `prvAcc` saturate at February's whole total while the divisor kept
+           climbing, understating the bar it labels "last month per day" by up
+           to 9.7%. Same form as TrendsView's `prevDailyAvg`. */
+        const prevLen = daily.previousLength;
+        const perDayLastMonth =
+            prevLen > 0 ? prvAtToday / Math.max(1, Math.min(today, prevLen)) / bucketDays : 0;
         /* Elapsed window, matching the two rows beside it. A whole-period rate
            here made this card and the page's own typical-pace sentence give
            opposite verdicts in the first week of every month — the same defect
@@ -253,6 +261,12 @@ export default function BudgetDetailPage() {
        read as its first day alone on the 1st, and made this page disagree with
        that month's own view. */
     const moversPrevStart = useMemo(() => addMonths(periodStart, -1), [periodStart]);
+    /* Same Tree/Flat choice the Spending Trends card offers, over the same
+       procedure — inside one envelope, Flat is often the useful one, since a
+       single envelope's spend frequently lives entirely under one top-level
+       category and Tree then has one row to show. Local rather than URL state:
+       this page's shareable coordinate is the month, not the roll-up. */
+    const [moversFlat, setMoversFlat] = useState(true);
     const moversQuery = trpc.analytics.trends.categoryMovers.useQuery(
         {
             spaceId: space.id,
@@ -260,6 +274,7 @@ export default function BudgetDetailPage() {
             periodEnd,
             prevStart: moversPrevStart,
             envelopeIds: envelopeId ? [envelopeId] : [],
+            shape: moversFlat ? ("flat" as const) : ("tree" as const),
             limit: 5,
         },
         { enabled: !!envelope && !isGoal }
@@ -267,8 +282,12 @@ export default function BudgetDetailPage() {
 
     const moversData = moversQuery.data?.items ?? [];
     /* Drives BOTH the list and the chrome above it, so the heading can't promise
-       a comparison the list isn't rendering. */
-    const moversHasPrevious = moversData.some((m) => m.previousTotal > 0);
+       a comparison the list isn't rendering. Read from the server, which
+       computes it over the FULL row set: deriving it from the returned top-5
+       let Tree and Flat disagree about whether there is anything to compare,
+       flipping the card between a diverging share axis and a plain magnitude
+       ranking on one click with no change in the data. */
+    const moversHasPrevious = moversQuery.data?.hasPrevious ?? false;
     /* Three-char month, never a year: "Jun 2026 → Jul 2026 so far" wrapped the
        header cell, and the year is already stated by the page's month nav and
        the section subtitle. */
@@ -1493,17 +1512,27 @@ export default function BudgetDetailPage() {
                     this page's. */}
                 {!isGoal && envelope && (
                     <section className="od-card ed-movers">
-                        <div className="ed-row3-head">
-                            <h2 className="display ed-row3-title">
-                                {moversHasPrevious ? "Biggest movers" : "Top categories"}
-                            </h2>
-                            <span className="ed-row3-sub">
-                                {moversHasPrevious
-                                    ? `Categories in this envelope · ${
-                                          monthOffset === 0 ? `${monthLabel} so far` : monthLabel
-                                      } vs all of ${formatInAppTz(moversPrevStart, "MMM yyyy")}`
-                                    : `Categories in this envelope · ${monthLabel}`}
-                            </span>
+                        <div className="ed-row3-head ed-head-split">
+                            <div className="ed-head-main">
+                                <h2 className="display ed-row3-title">
+                                    {moversHasPrevious ? "Biggest movers" : "Top categories"}
+                                </h2>
+                                <span className="ed-row3-sub">
+                                    {moversHasPrevious
+                                        ? `Categories in this envelope · ${
+                                              monthOffset === 0
+                                                  ? `${monthLabel} so far`
+                                                  : monthLabel
+                                          } vs all of ${formatInAppTz(moversPrevStart, "MMM yyyy")}`
+                                        : `Categories in this envelope · ${monthLabel}`}
+                                </span>
+                            </div>
+                            <ViewModeToggle
+                                flat={moversFlat}
+                                onChange={setMoversFlat}
+                                treeTitle="Roll each row up to its category, including everything tagged beneath it"
+                                flatTitle="One row per category that carries spend directly, at any depth"
+                            />
                         </div>
                         {moversQuery.isLoading ? (
                             <Skeleton height={132} />
@@ -2311,6 +2340,10 @@ const ED_STYLES = `
 .ed-row3-col-donut { flex: 0 1 240px; }
 .ed-row3-divider { width: 1px; align-self: stretch; background: var(--line-soft); flex: 0 0 auto; }
 .ed-row3-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+/* Heading block on the left, its control on the right. Wraps rather than
+   squeezing the subtitle, which is a full sentence at narrow widths. */
+.ed-row3-head.ed-head-split { flex-direction: row; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.ed-row3-head.ed-head-split > .ed-head-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ed-row3-title { font-size: 14px; font-weight: 500; letter-spacing: -0.01em; color: var(--fg); margin: 0; }
 .ed-row3-sub { font-size: 11.5px; color: var(--fg-3); }
 @media (max-width: 1280px) {

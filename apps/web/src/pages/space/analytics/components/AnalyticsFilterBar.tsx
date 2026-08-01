@@ -3,7 +3,6 @@ import { ChevronDown, Tags, Wallet, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
-    DropdownMenuCheckboxItem,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuLabel,
@@ -11,11 +10,11 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { EntityAvatar } from "@/components/shared/EntityAvatar";
 import { trpc } from "@/trpc";
 import { cn } from "@/lib/utils";
 import type { FilterKey } from "./useAnalyticsFilters";
 import { CategoryMultiSelect, type CategoryRow } from "./CategoryMultiSelect";
+import { FilterCheckRow } from "./FilterCheckRow";
 
 /** Which filter dimensions to surface. Envelopes/Categories are always
  *  hidden on personal (`/s/me`) regardless of this, since they're
@@ -287,21 +286,15 @@ function ChipMultiSelect({
                                 </p>
                             ) : (
                                 filtered.map((it) => (
-                                    <DropdownMenuCheckboxItem
+                                    <FilterCheckRow
                                         key={it.id}
                                         checked={selectedSet.has(it.id)}
-                                        onCheckedChange={() => toggle(it.id)}
-                                        onSelect={(e) => e.preventDefault()}
+                                        onToggle={() => toggle(it.id)}
+                                        color={it.color}
+                                        icon={it.icon}
                                     >
-                                        <span className="flex min-w-0 items-center gap-2">
-                                            <EntityAvatar
-                                                size="sm"
-                                                color={it.color}
-                                                icon={it.icon}
-                                            />
-                                            <span className="truncate">{it.name}</span>
-                                        </span>
-                                    </DropdownMenuCheckboxItem>
+                                        {it.name}
+                                    </FilterCheckRow>
                                 ))
                             )}
                         </div>

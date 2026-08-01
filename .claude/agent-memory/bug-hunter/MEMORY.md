@@ -42,3 +42,5 @@
 - [OrbitField label click forwarding](orbitfield_label_click_forwarding.md) — OrbitField defaults to <label>; any field owning a button/radio forwards row clicks to it. noWrapperLabel opts out. Unfixed sites listed.
 - [Transfer fee row follows parent](transfer_fee_row_follows_parent.md) — update.mts syncs a fee row's source/datetime/event to its parent transfer on every transfer edit; prose columns deliberately don't follow. Permission + trigger assumptions listed.
 - [Shared MoversList hasPrevious split](movers_list_shared.md) — one component, two pages, two different `hasPrevious` derivations (dailyComparison vs the limit-sliced rows); only TrendsView gates its copy on it.
+- [Trends movers shape input](trends_movers_shape.md) — drill-in mode deleted for `shape:"tree"|"flat"`; SQL verified correct on live DB (totals reconcile, no double count, unreferenced recursive CTE never executes). Risk is client-side.
+- [Unlayered page <style> beats Tailwind](unlayered_page_styles_beat_tailwind.md) — ED_STYLES is unlayered so it outranks every `@layer utilities` class; `.foo > div` rules silently restyle shared components dropped in.

@@ -36,3 +36,5 @@
 - [heatmap-fix branch round-3 audit](heatmap_fix_branch_round3.md) — categoryMonthlyTrend SQL, YTD/combined trend charts, MultiSeriesLineChart, operational zero-day handling all verified CLEAN; CategoryMultiSelect has unguarded tree recursion (hang risk, non-calc).
 - [Optimistic totals delta contract](optimistic_totals_delta_filter_blind.md) — RESOLVED: creates patch totals (space-scoped via queryKey[1].input.spaceId), edits never do, personal twin resyncs via invalidate.
 - [Transfer fee follows its parent](transfer_fee_parent_lockstep.md) — Transfer edits copy source/datetime/event onto the linked fee row; balance-safe because trigger 018 reverses OLD and applies NEW per UPDATE.
+- [Movers tree/flat partition proof](movers_shape_partition.md) — Both shapes provably sum identically (verified on real data); DISTINCT ON picks the NEAREST selected ancestor, not the shallowest.
+- [Prior-period per-day divisor](velocity_prev_length_divisor.md) — "Last month per day" must divide by previousLength, not `today`. TrendsView correct; BudgetDetailPage velocity still wrong.
