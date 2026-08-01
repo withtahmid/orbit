@@ -7,3 +7,5 @@
 - [Read-only copy leaks](anomaly_readonly_copy_leaks.md) — isOwner gating covers buttons but descriptive strings naming edit verbs are the missed leak; audit empty-state/helper copy for non-owners
 - [Account distribution relocation](project_account_distribution_relocation.md) — donut moved from analytics (now 9 views) onto /accounts hero; server twins still feed Overview; docs went stale
 - [Event Detail dashboard](event_detail_dashboard.md) — /s/:id/events/:eventId redesign; new eventDailySpend/eventTopLocations twins; re-triggers Spent-3x redundancy, viewer copy leaks, categorical-axis pace distortion
+- [Priority tiers: two palettes](priority_tiers_two_palettes.md) — CategoriesPage vs server TIER_COLOR disagree on all four tiers (Essential green↔red); Must/Want rollup; unclassified = residue
+- [CategoriesPage priority UX](categories_page_priority_ux.md) — Tree⇄Priority band review; bands count categories not money; drag-in-priority re-parents; use URL params not localStorage
