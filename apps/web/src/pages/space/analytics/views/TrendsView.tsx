@@ -8,6 +8,7 @@ import { KpiStrip, type KpiItem } from "@/components/shared/KpiStrip";
 import { MetricToggle, useMetricMode } from "@/components/shared/MetricMode";
 import { AnalyticsDetailLayout } from "./_AnalyticsLayout";
 import { AnalyticsFilterBar } from "../components/AnalyticsFilterBar";
+import { ViewModeToggle } from "../components/ViewModeToggle";
 import { useAnalyticsFilters } from "../components/useAnalyticsFilters";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/trpc";
@@ -116,6 +117,23 @@ export default function TrendsView() {
     const isPersonal = space.isPersonal;
 
     const [params, setParams] = useSearchParams();
+    /* Roll-up shape for Biggest movers — the same flag name Spending-by-
+       category uses, since it is the same concept. URL-backed so a shared link
+       keeps the shape the sender was looking at; this page already keeps
+       granularity, period anchor and every filter there. Meaningful at any
+       filter width: with nothing selected Tree gives top-level roots and Flat
+       gives every spending leaf. */
+    const moversFlat = params.get("flat") === "1";
+    const setMoversFlat = (on: boolean) => {
+        setParams(
+            (q) => {
+                if (on) q.set("flat", "1");
+                else q.delete("flat");
+                return q;
+            },
+            { preventScrollReset: true }
+        );
+    };
     const granularity = ((): Granularity => {
         const q = params.get("g");
         return q === "week" || q === "quarter" || q === "year" ? q : "month";
@@ -362,6 +380,7 @@ export default function TrendsView() {
                May 31 → Jul 1. */
             prevStart: prevPeriod.start,
             limit: 6,
+            shape: moversFlat ? ("flat" as const) : ("tree" as const),
             envelopeIds: envelopeIdsArg,
             accountIds: accountIdsArg,
             categoryIds: categoryIdsArg,
@@ -374,14 +393,13 @@ export default function TrendsView() {
             periodEnd: period.end,
             prevStart: prevPeriod.start,
             limit: 6,
+            shape: moversFlat ? ("flat" as const) : ("tree" as const),
             accountIds: accountIdsArg,
         },
         { enabled: isPersonal, ...keepPrevious }
     );
     const moversResponse = (isPersonal ? moversPersonalQ.data : moversSpaceQ.data) ?? null;
     const moversData = moversResponse?.items ?? [];
-    const moversMode: "standard" | "drill" = moversResponse?.mode ?? "standard";
-    const moversDrillRootId = moversResponse?.drillRootCategoryId ?? null;
 
     const TODAY = dailyData?.today ?? 1;
     const DAYS_IN_MONTH = dailyData?.periodLength ?? 30;
@@ -531,7 +549,10 @@ export default function TrendsView() {
        and at 10.5px in a quarter-width cell it truncated away the very digit
        it existed to show. The chart's sub-copy carries the quantified
        version. */
-    const typicalLabel = `Typical ${noun}`;
+    /* Names the sample. "Typical" without a count is unfalsifiable, and the
+       count is also what discloses that the prior period is deliberately
+       excluded from the pool. */
+    const typicalLabel = AVG_PERIODS > 0 ? `Typical of ${AVG_PERIODS} ${noun}s` : `Typical ${noun}`;
 
     /* Bucket-unit-aware label so KPIs read sensibly across granularities
        ("Day 5 of 7" for week, "Week 3 of 13" for quarter, etc.). */
@@ -556,14 +577,6 @@ export default function TrendsView() {
     }, [CUR_DAILY, TODAY, BUCKET_UNIT, period.start]);
 
     const bucketNoun = bucketLabel.toLowerCase();
-
-    /* Split into two fixed lines — see the chart card's header. */
-    const chartProgressCopy = isLive
-        ? `${bucketLabel} ${TODAY} of ${DAYS_IN_MONTH} · the dotted line projects to ${noun}-end at the current pace.`
-        : `Complete ${noun} · all ${DAYS_IN_MONTH} ${bucketNoun}s.`;
-    const chartTypicalCopy = typicalSeries
-        ? `The green line is a typical ${noun}, averaged across the ${AVG_PERIODS} ${noun}s before ${prevShort}.`
-        : `Not enough history before ${prevShort} to draw a typical ${noun} yet.`;
 
     /* Four tiles, always — one per question: how much, versus last time,
        versus normal, and (live) where it's heading / (closed) when the
@@ -596,7 +609,15 @@ export default function TrendsView() {
                          *matching the filters*", so it can't be reported as
                          the prior period not existing while a filter is on. */
                       hasPrevious || hasAnyFilter
-                        ? `No spend in ${prevShort} to compare`
+                        ? isLive && lastMonthFull > 0
+                            ? /* The live comparison is rate-vs-rate over the
+                                 same elapsed slice, so a prior period that
+                                 spent nothing in its first TODAY buckets has no
+                                 rate to compare — even though its total isn't
+                                 zero. Saying "no spend in June" there would be
+                                 flatly false. */
+                              `No spend yet by ${bucketNoun} ${TODAY} of ${prevShort}`
+                            : `No spend in ${prevShort} to compare`
                         : `Before your first record`
                     : isLive
                       ? paceDelta > 0
@@ -696,6 +717,10 @@ export default function TrendsView() {
         for (let i = 0; i < yoyWindowMonths; i++) {
             const cur = yoyData.thisYear[i];
             const prv = yoyData.lastYear[i];
+            /* A month whose prior year was zero is skipped, not ranked: 0 -> X
+               has no finite ratio, and in a space's first full year EVERY month
+               qualifies, so ranking them would pick one arbitrarily and caption
+               it as the year's heaviest growth. */
             if (cur == null || prv == null || prv === 0) continue;
             const p = (cur / prv - 1) * 100;
             if (p > bestPct) {
@@ -837,19 +862,6 @@ export default function TrendsView() {
                                 Cumulative spend · {periodLabel}
                                 {granularity === "year" || !hasPrevious ? "" : ` vs ${prevShort}`}
                             </CardTitle>
-                            {/* Two single-line spans rather than one wrapping
-                                paragraph: the live and closed sentences differ
-                                enough in length that one flipped between 1 and
-                                2 rendered lines, moving every card below by a
-                                line box on each period step. */}
-                            <div className="flex flex-col text-xs text-muted-foreground">
-                                <span className="truncate" title={chartProgressCopy}>
-                                    {chartProgressCopy}
-                                </span>
-                                <span className="truncate" title={chartTypicalCopy}>
-                                    {chartTypicalCopy}
-                                </span>
-                            </div>
                         </CardHeader>
                         <CardContent
                             className={cn(
@@ -953,10 +965,7 @@ export default function TrendsView() {
                                 <CardTitle>
                                     Year-over-year · {yoyYear} vs {yoyYear - 1}
                                 </CardTitle>
-                                <p className="text-xs text-muted-foreground">
-                                    {yoyYear} (solid) vs {yoyYear - 1} (faded). Click any month to
-                                    open it.
-                                </p>
+                                <YoYLegend year={yoyYear} />
                             </CardHeader>
                             <CardContent
                                 className={cn(
@@ -1144,18 +1153,10 @@ export default function TrendsView() {
                     </div>
 
                     <Card>
-                        <CardHeader className="flex flex-row items-start justify-between gap-3">
-                            <div>
+                        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 gap-y-1">
+                            <div className="min-w-0">
                                 <CardTitle>
-                                    {moversMode === "drill" ? (
-                                        <DrillRootTitle
-                                            spaceId={space.id}
-                                            rootId={moversDrillRootId}
-                                            periodShort={periodShort}
-                                            prevShort={prevShort}
-                                            isLive={isLive}
-                                        />
-                                    ) : hasPrevious ? (
+                                    {hasPrevious ? (
                                         <>
                                             Biggest movers ·{" "}
                                             {isLive ? `${periodShort} so far` : periodShort} vs{" "}
@@ -1167,29 +1168,15 @@ export default function TrendsView() {
                                         <>Top categories · {periodShort}</>
                                     )}
                                 </CardTitle>
-                                <p className="text-xs text-muted-foreground">
-                                    {/* Three states, keyed off the filter rather
-                                        than off `mode`: with 2+ categories
-                                        selected the rows are the SELECTED
-                                        categories at whatever depth the user
-                                        picked, so calling them top-level is
-                                        false. */}
-                                    {moversMode === "drill"
-                                        ? `Sub-categories with the largest change vs ${prevShort}.`
-                                        : !hasPrevious
-                                          ? `Where the money went in ${periodShort}.`
-                                          : categoryIds.length >= 2
-                                            ? `The categories you've selected, with the largest change vs ${prevShort} — each including everything tagged beneath it.`
-                                            : `Top-level categories with the largest change vs ${prevShort}, including everything tagged beneath them.`}
-                                    {/* A running period compares equal elapsed
-                                        slices, so on the 1st it is one day
-                                        against one day — the card has to say so
-                                        rather than implying two whole months. */}
-                                    {isLive && hasPrevious
-                                        ? ` ${periodShort} is only part-way through, so most categories will read as falls until it catches up with all of ${prevShort}.`
-                                        : ""}
-                                </p>
                             </div>
+                            {/* On the card, not the page header: it reshapes
+                                this list alone, not the charts above it. */}
+                            <ViewModeToggle
+                                flat={moversFlat}
+                                onChange={setMoversFlat}
+                                treeTitle="Roll each row up to its category, including everything tagged beneath it"
+                                flatTitle="One row per category that carries spend directly, at any depth"
+                            />
                         </CardHeader>
                         <CardContent
                             className={cn(
@@ -2043,6 +2030,40 @@ function GranularityToggle({
  * 12-month nav rail under the main chart — keeps the same twelve numbers
  * from being drawn twice on one page.
  */
+/* The two year-over-year marks, defined once and consumed by both the bars
+   and the legend below the title — a key that states a different fill or
+   opacity than the chart it describes is worse than no key. */
+/* 0.55, not 0.35: composited over --card the fainter step measures 2.01:1,
+   under the 3:1 floor for a non-text mark the reader has to match against a
+   10px legend swatch. 0.55 measures 3.16:1 — and it is the tone the bars
+   already flashed to on hover. */
+const YOY_PRV = { fill: "var(--muted-foreground)", opacity: 0.55, hover: 0.75 };
+const YOY_CUR = { fill: "var(--warning)", opacity: 0.9, hover: 1 };
+
+/** Swatch + label, one per series. Square marks because the chart draws bars. */
+function YoYLegend({ year }: { year: number }) {
+    return (
+        <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
+            {[
+                { mark: YOY_CUR, label: year },
+                { mark: YOY_PRV, label: year - 1 },
+            ].map((s) => (
+                <span key={s.label} className="inline-flex items-center gap-1.5">
+                    <span
+                        className="size-2.5 rounded-[2px]"
+                        style={{ background: s.mark.fill, opacity: s.mark.opacity }}
+                    />
+                    <span className="tabular-nums">{s.label}</span>
+                </span>
+            ))}
+            {/* The month hit areas start at sm, and hover — their only other
+                signal — never fires on a touch tablet. Folded into the legend
+                so it costs no vertical space. */}
+            <span className="ml-auto hidden sm:inline">Tap a month to open it</span>
+        </div>
+    );
+}
+
 function YoYBars({
     labels,
     thisYear,
@@ -2211,8 +2232,8 @@ function YoYBars({
                                 y={yl}
                                 width={bw}
                                 height={h - p - yl}
-                                fill="var(--muted-foreground)"
-                                opacity={isHover ? 0.55 : 0.35}
+                                fill={YOY_PRV.fill}
+                                opacity={isHover ? YOY_PRV.hover : YOY_PRV.opacity}
                                 rx={2}
                             />
                             <rect
@@ -2220,8 +2241,8 @@ function YoYBars({
                                 y={yt}
                                 width={bw}
                                 height={h - p - yt}
-                                fill="var(--warning)"
-                                opacity={isHover ? 1 : 0.9}
+                                fill={YOY_CUR.fill}
+                                opacity={isHover ? YOY_CUR.hover : YOY_CUR.opacity}
                                 rx={2}
                             />
                         </g>
@@ -2595,48 +2616,4 @@ function VelocityBars({
 
 function formatMoneyShort(n: number): string {
     return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
-
-/** Drill-mode card title — fetches the selected category's name so the
- *  movers card can read "Biggest movers within Groceries · this month
- *  vs last month" instead of a generic header. Falls back to the
- *  standard (non-drill) title while the name resolves so a deep-link
- *  with a cold cache doesn't flash an ellipsis. The query shares its
- *  cache key with `CategoryMultiSelect` so a user who opened the
- *  filter bar pays no extra round-trip. */
-function DrillRootTitle({
-    spaceId,
-    rootId,
-    periodShort,
-    prevShort,
-    isLive,
-}: {
-    spaceId: string;
-    rootId: string | null;
-    periodShort: string;
-    prevShort: string;
-    isLive: boolean;
-}) {
-    const q = trpc.expenseCategory.listBySpace.useQuery({ spaceId }, { enabled: !!rootId });
-    const name = q.data?.find((c) => c.id === rootId)?.name;
-    /* Matches the non-drill title's hedge: a running period's number is a
-       partial one, and dropping "so far" here made the same card claim a
-       whole-month comparison the moment a category filter was applied. */
-    const cur = isLive ? `${periodShort} so far` : periodShort;
-    if (!name) {
-        return (
-            <>
-                Biggest movers · {cur} vs {prevShort}
-            </>
-        );
-    }
-    return (
-        <>
-            Biggest movers within{" "}
-            <span className="inline-block max-w-[55vw] truncate align-bottom sm:max-w-none">
-                {name}
-            </span>{" "}
-            · {cur} vs {prevShort}
-        </>
-    );
 }

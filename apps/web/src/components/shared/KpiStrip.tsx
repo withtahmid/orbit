@@ -37,7 +37,7 @@ export function KpiStrip({
     return (
         <div
             className={cn(
-                "kpi-strip grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border/60 sm:grid-cols-[var(--kpi-cols-sm)] lg:grid-cols-[var(--kpi-cols-lg)]",
+                "kpi-strip grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-[var(--kpi-cols-sm)] lg:grid-cols-[var(--kpi-cols-lg)]",
                 className
             )}
             style={

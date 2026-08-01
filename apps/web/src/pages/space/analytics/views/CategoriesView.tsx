@@ -7,7 +7,6 @@ import {
     CornerDownLeft,
     Folder,
     Home,
-    ListTree,
     Minus,
     Rows3,
 } from "lucide-react";
@@ -33,6 +32,7 @@ import { EntityAvatar } from "@/components/shared/EntityAvatar";
 import { KpiStrip, type KpiItem } from "@/components/shared/KpiStrip";
 import { AnalyticsDetailLayout } from "./_AnalyticsLayout";
 import { AnalyticsFilterBar } from "../components/AnalyticsFilterBar";
+import { ViewModeToggle } from "../components/ViewModeToggle";
 import { useAnalyticsFilters } from "../components/useAnalyticsFilters";
 import { trpc } from "@/trpc";
 import { useCurrentSpace } from "@/hooks/useCurrentSpace";
@@ -1004,45 +1004,6 @@ function BreadcrumbItem({
             {leading}
             <span className="truncate">{label}</span>
         </button>
-    );
-}
-
-/** Tree ⇄ Flat segmented toggle for the category view. Tree keeps the
- *  existing drill-down; Flat lists every direct-spend category at once. */
-function ViewModeToggle({ flat, onChange }: { flat: boolean; onChange: (flat: boolean) => void }) {
-    return (
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5">
-            <button
-                type="button"
-                onClick={() => onChange(false)}
-                aria-pressed={!flat}
-                title="Drill into the category tree one level at a time"
-                className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-colors sm:px-2.5 sm:py-1",
-                    !flat
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                )}
-            >
-                <ListTree className="size-3.5" />
-                Tree
-            </button>
-            <button
-                type="button"
-                onClick={() => onChange(true)}
-                aria-pressed={flat}
-                title="Show every category with direct spend at once"
-                className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-colors sm:px-2.5 sm:py-1",
-                    flat
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                )}
-            >
-                <Rows3 className="size-3.5" />
-                Flat
-            </button>
-        </div>
     );
 }
 

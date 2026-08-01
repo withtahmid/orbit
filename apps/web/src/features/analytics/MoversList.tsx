@@ -133,26 +133,17 @@ export function MoversList({
 
        `cap` is only needed for the no-prior-period branch, where there is no
        share to normalise against and the bar falls back to plotting spend. */
-    const { cap, clipped } = useMemo(() => {
+    const { cap } = useMemo(() => {
         if (hasPrevious) {
             /* A rise has no ceiling, so the axis tops out at "doubled" and
-               anything past it is marked off-scale. */
-            /* `deltaPct === 1` is the server's sentinel for "appeared from
-               nothing", where a share is undefined — not a measured +100%. It
-               must read as off-scale or a 0→35M row is drawn identically to one
-               that exactly doubled. */
-            return {
-                cap: 1,
-                clipped: items.some((m) =>
-                    m.previousTotal === 0 ? m.currentTotal > 0 : Math.abs(m.deltaPct) > 1
-                ),
-            };
+               anything past it is drawn off-scale by the row itself. */
+            return { cap: 1 };
         }
         const totals = items.map((m) => m.currentTotal).sort((x, y) => y - x);
         const top = totals[0] ?? 0;
         const second = totals[1] ?? 0;
         const useSecond = second > 0 && top > second * 4;
-        return { cap: useSecond ? second : top, clipped: useSecond };
+        return { cap: useSecond ? second : top };
     }, [items, hasPrevious]);
 
     return (
@@ -160,9 +151,9 @@ export function MoversList({
             {/* Column headers, carrying the axis. A diverging bar is only
                 readable once zero is marked and the ends are named — without
                 it the reader has to infer both the centre and which side means
-                what. Hidden below sm, where the bar sits on its own line per
-                row and no single header could align with it; the note under the
-                list carries the same facts in prose there.
+                what. Hidden below lg, where the bar sits on its own line
+                per row and no single header could align with it — the one-line
+                caption under the list states the same axis there.
                 Column widths mirror the rows exactly (size-7 avatar, basis-48
                 label, flex-1 bar, then the three value columns), so the ticks
                 sit over the geometry they describe. */}
@@ -387,29 +378,13 @@ export function MoversList({
                     );
                 })}
             </ul>
-            {/* The axis, stated. Bar length is only quantitative if the reader
-                can put a number on it — naming what a full half-track is worth
-                turns the bars from decoration into a scale, and the direction
-                key means left/right isn't something you have to infer. */}
-            <p className="mt-3 border-t border-border/30 pt-2.5 text-[10.5px] leading-relaxed text-muted-foreground">
-                {hasPrevious ? (
-                    <>
-                        Rows are ordered by how much the amount moved. Bar length is each change as
-                        a share of that category&rsquo;s own {prevShort}, so every category is on
-                        the same footing whatever it spends — the centre line is no change, left is
-                        less, right is more.
-                    </>
-                ) : (
-                    <>
-                        One shared scale — a full bar is{" "}
-                        <span className="tabular-nums text-foreground/70">{moverAmount(cap)}</span>.
-                    </>
-                )}
-                {clipped
-                    ? hasPrevious
-                        ? " Bars at the very edge grew by more than 100%."
-                        : " The top category is far beyond the rest, so its bar stops at the edge rather than flattening the others."
-                    : ""}
+            {/* The axis for every width the column headers don't cover. Without
+                it a phone or tablet reader gets a bar diverging about an
+                unmarked centre with no scale — decoration, not a chart. */}
+            <p className="mt-2 text-[10.5px] leading-relaxed text-muted-foreground lg:hidden">
+                {hasPrevious
+                    ? `Bar: change as a share of each category's own ${prevShort} — centre is no change, left is less, right is more.`
+                    : `Bar: spend on one shared scale — a full bar is ${moverAmount(cap)}.`}
             </p>
         </div>
     );

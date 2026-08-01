@@ -1,4 +1,6 @@
 - [Orbit design token scoping](orbit-design-scoping.md) — `--bg/--fg/--brand/...` only resolve inside `.orbit-design`; new pages using these tokens must wrap their root.
+- [CSS cascade traps](css_cascade_traps.md) — Unlayered page CSS (ED_STYLES, orbit-design.css) beats EVERY Tailwind utility; `DropdownMenuItem`'s `[&_svg]:size-4` beats a child `size-3.5`.
+- [FilterCheckRow + ViewModeToggle](filter_row_and_viewmode_toggle.md) — Shared analytics primitives: indent/name-width budgets, 141/133px toggle widths, ~847px wrap threshold, checked-tint 1.19:1.
 - [Tap target sizes in Orbit](tap-target-sizes.md) — default button heights (shadcn `h-9` 36px, `.od-btn` 36px, `.od-btn-sm` 30px, `.ai-btn` 40px) are below 44px. Flag only in sticky bars, destructive controls, or dense rows.
 - [OrbitField <label> click forwarding](orbitfield_label_click_forwarding.md) — default `<label>` wrapper forwards stray clicks to the first labelable descendant; when to pass `noWrapperLabel`.
 - [Transaction sheet architecture](transaction-sheet-architecture.md) — How New/Edit tx sheets, OrbitDrawerShell, NT_STYLES sharing, TransactionDatePicker popover styles, and FieldPin compose.
