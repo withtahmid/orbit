@@ -3,9 +3,11 @@ import {
     type InputHTMLAttributes,
     type TextareaHTMLAttributes,
     forwardRef,
+    useId,
 } from "react";
-import { ChevronDown, Check, Info } from "lucide-react";
+import { ChevronDown, Check, Delete, Info } from "lucide-react";
 import * as SelectPrimitive from "@radix-ui/react-select";
+import { CALC_KEYS, CALC_KEY_LABELS, useCalcField } from "@/lib/useCalcField";
 
 /* ============================================================
    Editorial-dark form primitives, shared by every modal/drawer.
@@ -164,6 +166,18 @@ export function OrbitSelect({
 
 /* ----- Hero amount card ----- */
 
+/**
+ * Hero amount input, with an inline calculator built in.
+ *
+ * The field accepts arithmetic (`1200+340+85`, `3*250`) so the user never has
+ * to leave the form to add up a receipt. All of the draft/emit/caret mechanics
+ * live in `useCalcField` — this component is the hero presentation of it (see
+ * `OrbitCalcInput` for the compact one).
+ *
+ * `type="text"` (not `number`) is required: a number input rejects operator
+ * characters outright. `inputMode="decimal"` keeps the phone keypad numeric,
+ * and the operator strip supplies the symbols that keypad lacks.
+ */
 export function OrbitAmountCard({
     value,
     onChange,
@@ -194,6 +208,11 @@ export function OrbitAmountCard({
                   : tone === "gold"
                     ? "var(--gold)"
                     : "var(--fg)";
+
+    const resultId = useId();
+    const calcField = useCalcField(value, onChange);
+    const { message } = calcField;
+
     return (
         <div className="of-amount-card">
             <span className="of-amount-eyebrow">{eyebrow}</span>
@@ -204,19 +223,192 @@ export function OrbitAmountCard({
                     </span>
                 )}
                 <input
+                    ref={calcField.inputRef}
                     className="of-amount-input"
-                    type="number"
+                    type="text"
                     inputMode="decimal"
-                    min="0"
-                    step="0.01"
+                    autoComplete="off"
                     placeholder="0.00"
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
+                    value={calcField.draft}
+                    onChange={(e) => calcField.commit(e.target.value)}
+                    onBlur={calcField.onBlur}
+                    onKeyDown={calcField.onKeyDown}
                     autoFocus={autoFocus}
+                    /* The eyebrow is a plain span, so without this the field
+                       announces as "edit text, blank". */
+                    aria-label={typeof eyebrow === "string" ? eyebrow : "Amount"}
+                    /* Referenced unconditionally: a describedby that appears
+                       and disappears is never re-announced while focus stays
+                       put. The live region is deliberately NOT referenced —
+                       accname would concatenate it and read the message twice
+                       on focus. */
+                    aria-describedby={resultId}
+                    aria-invalid={message?.tone === "warn" || undefined}
                     style={{ color: toneColor }}
                 />
                 {suffix ? <span className="of-amount-unit">{suffix}</span> : null}
             </div>
+
+            {/* Always mounted with a reserved height. Conditional mounting
+                shifted the key strip ~22px vertically the instant the user
+                tapped an operator — i.e. under their finger. */}
+            <div
+                id={resultId}
+                className={`of-amount-result ${message?.tone === "warn" ? "is-warn" : ""}`}
+                aria-hidden="true"
+            >
+                {message?.text ?? ""}
+            </div>
+            {/* Separate always-present live region: a live region that enters
+                the DOM together with its first content is commonly dropped by
+                screen readers, and that first announcement is the one that
+                matters. Debounced inside the hook. */}
+            <span className="of-sr-only" aria-live="polite" aria-atomic="true">
+                {calcField.announcement}
+            </span>
+
+            <OrbitCalcKeys
+                field={calcField}
+                label={typeof eyebrow === "string" ? eyebrow : "Amount"}
+            />
+        </div>
+    );
+}
+
+/**
+ * Compact calculator-enabled money input, for the secondary amount fields.
+ * Same arithmetic and same feedback line as the hero card, minus the eyebrow
+ * and the 40px type.
+ *
+ * The rule is *every money field in the transaction sheets takes arithmetic* —
+ * a capability that applies to some of them and not others is worse than one
+ * that applies to none, because the user can't form a rule. That covers the
+ * hero amount, the transfer fee, and the adjustment's reconciled balance.
+ *
+ * Outside the sheets the gap is real and deliberate, and it is NOT all one
+ * reason: the envelope allocate / move / top-up dialogs are shadcn `Input`
+ * inside dialogs that never render `OrbitFormStyles`, so this component can't
+ * drop in there unstyled; but `BudgetsPage`'s envelope target IS an
+ * `OrbitInput` on a page that already renders `OrbitFormStyles`, i.e. a
+ * literal drop-in that simply wasn't in scope. Extending to either is a
+ * separate change — just don't cite the styling reason for the second one.
+ */
+export function OrbitCalcInput({
+    value,
+    onChange,
+    label,
+    placeholder = "0.00",
+    allowNegative,
+}: {
+    value: string;
+    onChange: (v: string) => void;
+    /**
+     * Required. The host `OrbitField` must pass `noWrapperLabel` (this
+     * component owns the input AND the key strip), and that drops the
+     * implicit <label> association — without this the field announces as
+     * "edit text, blank".
+     */
+    label: string;
+    placeholder?: string;
+    allowNegative?: boolean;
+}) {
+    const resultId = useId();
+    const calcField = useCalcField(value, onChange, { allowNegative });
+    const { message } = calcField;
+
+    return (
+        <div className="of-calc-wrap">
+            <span className="of-input">
+                <input
+                    ref={calcField.inputRef}
+                    className="of-input-control"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder={placeholder}
+                    value={calcField.draft}
+                    onChange={(e) => calcField.commit(e.target.value)}
+                    onBlur={calcField.onBlur}
+                    onKeyDown={calcField.onKeyDown}
+                    aria-label={label}
+                    aria-describedby={resultId}
+                    aria-invalid={message?.tone === "warn" || undefined}
+                />
+            </span>
+            <div
+                id={resultId}
+                className={`of-amount-result ${message?.tone === "warn" ? "is-warn" : ""}`}
+                aria-hidden="true"
+            >
+                {message?.text ?? ""}
+            </div>
+            <span className="of-sr-only" aria-live="polite" aria-atomic="true">
+                {calcField.announcement}
+            </span>
+            <OrbitCalcKeys field={calcField} label={label} />
+        </div>
+    );
+}
+
+/**
+ * The operator strip. A pointer affordance only — it exists because the
+ * iOS/Android decimal keypad has digits and `.` and nothing else. Every key is
+ * `tabIndex={-1}`: a keyboard user already has all four symbols on their
+ * keyboard and should not tab through them to reach the next field.
+ */
+export function OrbitCalcKeys({
+    field,
+    label = "Calculator",
+}: {
+    field: ReturnType<typeof useCalcField>;
+    /** Distinguishes the two strips on the Transfer tab (amount vs fee). */
+    label?: string;
+}) {
+    const { canResolve } = field;
+    return (
+        <div className="of-amount-keys" role="group" aria-label={`${label} keys`}>
+            {CALC_KEYS.map((k) => (
+                <button
+                    key={k}
+                    type="button"
+                    tabIndex={-1}
+                    className="of-amount-key"
+                    /* preventDefault keeps the caret in the input, so
+                       inserting at the cursor still targets the right spot
+                       after the tap. */
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => field.insert(k)}
+                    aria-label={CALC_KEY_LABELS[k]}
+                >
+                    {k}
+                </button>
+            ))}
+            <button
+                type="button"
+                tabIndex={-1}
+                className="of-amount-key of-amount-key-back"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={field.backspace}
+                aria-label="Backspace"
+            >
+                <Delete className="size-3.5" />
+            </button>
+            {/* Collapses the expression into its result in the field. The
+                readout alone told the user what WOULD be saved but left
+                `1200+340` sitting there permanently — the field never became
+                the number. Dimmed rather than hidden on a plain literal, so
+                the strip's geometry never shifts mid-entry. */}
+            <button
+                type="button"
+                tabIndex={-1}
+                className={`of-amount-key of-amount-key-eq ${canResolve ? "" : "is-idle"}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={field.resolve}
+                aria-label="Equals — resolve to total"
+                aria-disabled={!canResolve || undefined}
+            >
+                =
+            </button>
         </div>
     );
 }
@@ -582,18 +774,174 @@ const ORBIT_FORM_STYLES = `
     color: var(--fg);
 }
 .of-amount-input::placeholder { color: var(--fg-4); font-weight: 400; }
-.of-amount-input::-webkit-outer-spin-button,
-.of-amount-input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
-.of-amount-input { -moz-appearance: textfield; }
 .of-amount-unit {
     margin-left: auto;
     font-size: 11px;
     color: var(--fg-4);
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+/* Inline calculator — live result readout + operator strip. Both are always
+   mounted: conditional mounting shifted the strip ~22px under the user's
+   finger the moment an operator was tapped, and a live region that appears
+   together with its first content is commonly never announced. */
+.of-amount-result {
+    /* Fixed height + nowrap, not min-height: the "from <expression>" tape is
+       variable-length and wrapped at 6 terms on a 320px hero, dropping the key
+       strip 18px — under the user's finger, which is the exact defect the
+       reserved box was introduced to prevent. */
+    height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-3);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+    margin-top: -2px;
+}
+/* --warn, not --fg-4: this is the only signal that Save is blocked, and
+   --fg-4 is the placeholder token (~2.8:1 on the card) — it rendered the
+   blocked state *less* legibly than the everything-is-fine state. */
+.of-amount-result.is-warn { color: var(--warn); }
+
+.of-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Compact calculator input (transfer fee, reconciled balance). */
+.of-calc-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* Fixed 6-column grid, NOT wrapping flex. As a wrapping flex row the
+   44px touch-size keys overran the 238px card interior at 320px, so the
+   strip broke onto a second row and margin-left:auto flung the backspace to
+   the far right, alone. Grid tracks shrink instead: at 320px each track is
+   (238 - 5*6)/6 = 34.6px, still clear of the WCAG 2.5.8 24px floor. */
+.of-amount-keys {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 44px));
+    gap: 6px;
+    margin-top: 4px;
+    /* Pays for .of-amount-key-eq's gutter out of the track budget. The keys
+       are width:100% of their grid area, so a margin SHIFTS one out of its
+       track rather than narrowing it — the = key hung 4px past the strip
+       (and into the drift card's column gap) wherever tracks were shrinking. */
+    padding-right: 4px;
+}
+.of-amount-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* 28px clears the WCAG 2.5.8 24px floor on pointer devices; the
+       (hover: none) block below grows it to a comfortable touch target. */
+    height: 28px;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border-radius: 8px;
+    /* elev-3 on an elev-2 card: elev-1 was DARKER than its container, so the
+       keys read as recessed holes rather than raised controls. */
+    background: var(--bg-elev-3);
+    border: 1px solid var(--line-strong);
+    color: var(--fg-2);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+/* States are mixed FROM the key's own base rather than set to absolute
+   elevation tokens. The strip now sits on three different surfaces (elev-2
+   amount card, elev-2 drift card, elev-1 drawer body for the transfer fee),
+   and a hard-coded :hover of elev-2 rendered at 1.00:1 — invisible — on the
+   two elev-2 hosts, while :active at elev-1 vanished in the fee field. Mixing
+   toward --fg keeps every state lighter than every host. */
+.of-amount-key:hover {
+    background: color-mix(in oklab, var(--bg-elev-3) 84%, var(--fg));
+    color: var(--fg);
+}
+.of-amount-key:active {
+    background: color-mix(in oklab, var(--bg-elev-3) 68%, var(--fg));
+    /* Lighter than the pressed fill; --fg-4 sat at 1.04:1 against it and did
+       no work at all. */
+    border-color: color-mix(in oklab, var(--bg-elev-3) 20%, var(--fg));
+    color: var(--fg);
+}
+/* Dead code today — the keys are tabIndex -1 and preventDefault their
+   mousedown, so they never take focus. Kept deliberately: if they are ever
+   made focusable the ring must already be here. */
+.of-amount-key:focus-visible {
+    outline: none;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 2px var(--brand-soft);
+}
+.of-amount-key-back { color: var(--fg-3); }
+/* The resolve key is the one that changes the field's contents, so it reads
+   as the accent action. is-idle (a plain literal — nothing to resolve) dims
+   it in place rather than removing it, keeping the strip geometry stable
+   while the user types. */
+.of-amount-key-eq {
+    /* Extra gutter: backspace and resolve are the two thumb-landing keys at
+       the right edge of the strip, and a mis-tap on backspace silently eats a
+       digit out of a resolved total. */
+    margin-left: 4px;
+    color: var(--brand);
+    border-color: color-mix(in oklab, var(--brand) 60%, transparent);
+    font-weight: 600;
+}
+.of-amount-key-eq:hover {
+    background: color-mix(in oklab, var(--brand) 16%, var(--bg-elev-3));
+    color: var(--brand);
+}
+.of-amount-key-eq.is-idle {
+    /* Dimmed brand (5.27:1), not --fg-4 (2.51:1) — the key must still read as
+       the accent control, just unavailable. --line-strong keeps the outline
+       matching its five siblings; plain --line is 1.03:1 against the key's own
+       fill, which erased the key rather than dimming it. */
+    color: color-mix(in oklab, var(--brand) 70%, var(--fg-4));
+    border-color: var(--line-strong);
+    font-weight: 400;
+}
+/* Pointer devices cap the track narrower: against the hero card's 440px
+   interior the 44px cap gave 44x28 keys, a 1.57:1 slab that reads as a
+   toolbar rather than a keypad. Touch keeps the full 44/40. */
+@media (hover: hover) {
+    .of-amount-keys { grid-template-columns: repeat(6, minmax(0, 34px)); }
+}
+@media (hover: none) {
+    .of-amount-key { height: 40px; font-size: 16px; }
+}
+
+/* Paired 2-column cells: reserve the label row's height so a cell WITH a
+   hint control (the Date field's Keep pill) stays aligned with one whose
+   hint renders null (the Account pin on /s/me, or before an account is
+   picked). Scoped to .of-row — putting it on bare .oms-field-row would add
+   ~19px to every field in every Orbit form on touch. */
+/* Gated to the 2-column breakpoint: below 520px .of-row is a single column,
+   so there is no sibling to align to and the reserved height is pure dead
+   space — up to 46px per row on a phone. */
+@media (min-width: 520px) {
+    .of-row > .oms-field > .oms-field-row {
+        align-items: center;
+        min-height: 24px;
+    }
+}
+@media (min-width: 520px) and (hover: none) {
+    .of-row > .oms-field > .oms-field-row { min-height: 36px; }
 }
 
 /* Phone — scale the hero amount card down so the 40px serif input doesn't

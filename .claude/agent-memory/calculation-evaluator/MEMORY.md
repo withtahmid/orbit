@@ -38,3 +38,5 @@
 - [Transfer fee follows its parent](transfer_fee_parent_lockstep.md) — Transfer edits copy source/datetime/event onto the linked fee row; balance-safe because trigger 018 reverses OLD and applies NEW per UPDATE.
 - [Movers tree/flat partition proof](movers_shape_partition.md) — Both shapes provably sum identically (verified on real data); DISTINCT ON picks the NEAREST selected ancestor, not the shallowest.
 - [Prior-period per-day divisor](velocity_prev_length_divisor.md) — "Last month per day" must divide by previousLength, not `today`. TrendsView correct; BudgetDetailPage velocity still wrong.
+- [Amount expression evaluator](amount_expression_evaluator.md) — round-4: completeExpression-as-resolver P1-P5 clean over 8.6M; OPEN: roundTo2 loses a cent above |value| 1e10.
+- [Date pin time projection](date_pin_time_projection.md) — round-4 CLOSED: Now-preset seconds inversion fixed (setMilliseconds(0)); re-verified in 11 timezones.

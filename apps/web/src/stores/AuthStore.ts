@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from "mobx";
+import { clearDatePin } from "@/features/transactions/useDatePin";
 
 const TOKEN_KEY = "auth_token";
 
@@ -90,5 +91,9 @@ export class AuthStore {
         this.user = null;
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem("auth_user");
+        /* The kept entry date is per-person, not per-browser: on a shared
+           machine the next user's first entry would otherwise be back-dated to
+           whatever day the previous one was backfilling. */
+        clearDatePin();
     }
 }

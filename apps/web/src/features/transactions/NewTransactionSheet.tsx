@@ -1,7 +1,14 @@
-import { useRef, useState, useMemo, useEffect, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, useMemo, useEffect, useId, type FormEvent, type ReactNode } from "react";
 import { useCanEdit } from "@/hooks/useCurrentSpace";
 import { useStore } from "@/stores/useStore";
 import { usePins, type PinField } from "./usePins";
+import {
+    useDatePin,
+    dayOfInputDateTime,
+    defaultEntryDateTime,
+    todayDayKey,
+    touchDatePin,
+} from "./useDatePin";
 import { PinControl, PIN_CONTROL_STYLES } from "./PinControl";
 import {
     useOptimisticTransactionCache,
@@ -17,6 +24,7 @@ import {
     SlidersHorizontal,
     Check,
     Calendar,
+    CalendarClock,
     Wallet,
     Layers,
     ChevronDown,
@@ -29,6 +37,8 @@ import { Button } from "@/components/ui/button";
 import { OrbitDrawerShell, OrbitField } from "@/components/orbit/OrbitModalShell";
 import {
     OrbitAmountCard,
+    OrbitCalcInput,
+    OrbitCalcKeys,
     OrbitFieldRow,
     OrbitFormStyles,
     OrbitInput,
@@ -41,13 +51,14 @@ import {
 import { CategoryTreeSelect } from "@/components/shared/CategoryTreeSelect";
 import { FileUploadField } from "@/components/file-upload-field";
 import { UserAvatar } from "@/components/shared/UserAvatar";
+import { useCalcField } from "@/lib/useCalcField";
 import { trpc } from "@/trpc";
 import type { RouterOutput } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
 import { cn } from "@/lib/utils";
 import { useCurrentSpaceId } from "@/hooks/useCurrentSpace";
 import { useIdempotencyKey } from "@/hooks/useIdempotencyKey";
-import { toInputDateTime, fromInputDateTime, startOfMonth, endOfMonth } from "@/lib/dates";
+import { fromInputDateTime, shiftForFormat, startOfMonth, endOfMonth } from "@/lib/dates";
 import { getIcon } from "@/lib/entityIcons";
 
 type SpaceAccount = RouterOutput["account"]["listBySpace"][number];
@@ -717,12 +728,28 @@ export const NT_STYLES = `
     font-size: 22px; color: var(--fg); font-weight: 500;
     padding: 0;
 }
-.nt-drift-actual-input > input::-webkit-outer-spin-button,
-.nt-drift-actual-input > input::-webkit-inner-spin-button {
-    -webkit-appearance: none; margin: 0;
-}
-.nt-drift-actual-input > input { -moz-appearance: textfield; }
 .nt-drift-foot { font-size: 10.5px; color: var(--fg-4); }
+/* Calculator feedback reuses the foot slot. BOTH tones have to leave --fg-4
+   behind, not just the warn one: --fg-4 is the placeholder token (2.78:1) and
+   the "= total" line is the number that actually gets saved. line-height pins
+   the box so swapping the 10.5px hint for the 12px readout doesn't shift the
+   key strip below it. */
+.nt-drift-foot {
+    /* Fixed + nowrap: this slot doubles as the calculator readout, and the
+       "from <expression>" tape is variable-length — wrapping it shifts the key
+       strip below under the user's finger. */
+    height: 18px;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.nt-drift-foot.is-warn { color: var(--warn); font-weight: 500; }
+.nt-drift-foot.is-calc {
+    color: var(--fg-3);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
 .nt-drift-divider { height: 1px; background: var(--line-soft); }
 .nt-drift-summary {
     display: flex;
@@ -801,17 +828,87 @@ export const NT_STYLES = `
     .nt-btn { flex: 1 1 auto; justify-content: center; height: 40px; }
 }
 
-/* Phone (<480px): single-column drift grid + smaller amount input. */
+/* Phone (<480px): smaller amount input + tighter drift card. */
 @media (max-width: 480px) {
     .nt-tab { font-size: 11px; gap: 4px; padding: 0 4px; }
     /* Hide the tab text label, keep the icon, when the screen can't fit
        all four labels comfortably. The lucide icon alone communicates
        expense / income / transfer / adjust. */
     .nt-tab svg { width: 14px; height: 14px; }
-    .nt-drift-grid { grid-template-columns: 1fr; gap: 12px; }
+    .nt-drift-grid { gap: 12px; }
     .nt-drift { padding: 14px; }
     .nt-drift-num { font-size: 20px; }
     .nt-drift-summary-num { font-size: 22px; }
+}
+
+/* The drift grid collapses at the SAME 520px breakpoint as .of-row, not at
+   480px. In the 481-519px gap the card was still 2-up while .of-row had
+   already gone single-column, and the narrow drift column starved the 6-key
+   calculator strip to 24.03px tracks — exactly on the WCAG 2.5.8 floor in
+   Chromium, and 23.88px (a real failure) with Firefox's 12px scrollbar. */
+@media (max-width: 519.98px) {
+    .nt-drift-grid { grid-template-columns: 1fr; }
+}
+
+/* Kept-date banner — the "you are back-dating" mode indicator. Warn-toned
+   because it is a state the user must not miss, not decoration. The slot is
+   always in the DOM (empty when inactive) so the role="status" region exists
+   before it first has content. */
+/* Both selectors: TDP_STYLES is rendered inside the trigger button, so it
+   sits later in document order than NT_STYLES and .tdp-trigger:hover won the
+   (0,2,0) specificity tie — the back-dated warning vanished the instant the
+   cursor entered the field the user was about to click. The extra selector
+   raises this to (0,3,0). [data-state="open"] is left alone on purpose: the
+   brand ring while the popover is open is correct. */
+.nt-date-backdated .tdp-trigger,
+.nt-date-backdated .tdp-trigger:hover {
+    border-color: color-mix(in oklab, var(--warn) 55%, transparent);
+}
+/* While the popover is open the brand ring owns the border; an amber edge
+   under an emerald box-shadow just reads muddy. */
+.nt-date-backdated .tdp-trigger[data-state="open"] {
+    border-color: var(--brand);
+}
+.nt-kept-banner {
+    display: flex;
+    /* flex-start, not center: with two lines of text a vertically centred
+       14px icon floats in the middle of the block. */
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 10px 9px 12px;
+    border-radius: 10px;
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in oklab, var(--warn) 28%, transparent);
+    color: var(--warn);
+    font-size: 12px;
+    line-height: 1.35;
+}
+.nt-kept-banner-text { min-width: 0; }
+/* nowrap: at 320px the text column is ~160px, enough for "Dating new entries
+   to Aug 20, 2025" to wrap mid-value and split after "Aug". */
+.nt-kept-banner-text strong { font-weight: 600; white-space: nowrap; }
+.nt-kept-banner-stop {
+    margin-left: auto;
+    flex-shrink: 0;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--warn) 60%, transparent);
+    background: transparent;
+    color: var(--warn);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 140ms ease;
+}
+.nt-kept-banner-stop:hover { background: color-mix(in oklab, var(--warn) 16%, transparent); }
+.nt-kept-banner-stop:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg-elev-1), 0 0 0 4px var(--warn);
+}
+@media (hover: none) {
+    .nt-kept-banner-stop { height: 36px; padding: 0 14px; }
 }
 
 @media (max-width: 360px) {
@@ -826,10 +923,167 @@ export const NT_STYLES = `
 }
 `;
 
-function defaultDateTime(): string {
-    const d = new Date();
-    d.setSeconds(0, 0);
-    return toInputDateTime(d);
+/**
+ * Date field + its "keep this day" control.
+ *
+ * Distinct vocabulary from the Account / Envelope / Event pins beside it
+ * (`variant="keep"`, CalendarClock, "Keep" / "Keeping") because it is a
+ * different kind of thing: those are durable defaults, this is a mode that
+ * expires with the sitting. See `useDatePin` for why.
+ *
+ * Keeping stores the calendar DAY only; each new form stamps a monotonically
+ * advancing time onto it so a batch keeps the order it was typed in.
+ */
+function DateField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+    const { keptDay, keepDay, stopKeeping } = useDatePin();
+    const day = dayOfInputDateTime(value);
+    const isKept = keptDay !== null && keptDay === day;
+
+    const dayLabel = useMemo(() => formatDayLabel(value), [value]);
+    const keptLabel = useMemo(
+        () => (keptDay ? formatDayLabel(`${keptDay}T00:00`) : null),
+        [keptDay]
+    );
+
+    const title = isKept
+        ? `New entries start on ${dayLabel} until you stop or the sitting ends. Click to stop.`
+        : keptLabel
+          ? `Keeping ${keptLabel} right now — click to switch to ${dayLabel}.`
+          : `Keep ${dayLabel} for the next entries.`;
+
+    return (
+        <OrbitField
+            label="Date"
+            /* noWrapperLabel: the hint slot holds its own button, so a
+               <label> wrapper would forward stray clicks into it. */
+            noWrapperLabel
+            hint={
+                <PinControl
+                    variant="keep"
+                    /* Amber only when the kept day is in the past — that is
+                       the state the banner and the trigger edge also warn
+                       about. Keeping today is benign and stays brand. */
+                    tone={isKept && day !== todayDayKey() ? "warn" : "brand"}
+                    state={isKept ? "pinned" : "pinnable"}
+                    onClick={() => (isKept ? stopKeeping() : keepDay(day))}
+                    title={title}
+                    detail={
+                        isKept
+                            ? `stop dating new entries to ${dayLabel}`
+                            : keptLabel
+                              ? `currently keeping ${keptLabel}, switch to ${dayLabel}`
+                              : `start new entries on ${dayLabel}`
+                    }
+                />
+            }
+        >
+            {/* noWrapperLabel drops the implicit label association, and the
+                picker trigger is a button with no aria-label of its own — this
+                restores "Date" as the group name. */}
+            {/* The trigger itself carries a warn edge whenever this row is
+                back-dated. Without it, pressing Stop on the banner removes the
+                banner AND flips the chip to "Keep" — the corrective action
+                would strip every signal while the form still holds the past
+                date. Field-level because banner-level state can't see it. */}
+            <div
+                role="group"
+                aria-label="Date"
+                className={day !== todayDayKey() ? "nt-date-backdated" : undefined}
+            >
+                <TransactionDatePicker value={value} onChange={onChange} />
+            </div>
+        </OrbitField>
+    );
+}
+
+/**
+ * Full-width notice shown whenever new entries are being dated to a day that
+ * is not today.
+ *
+ * This is the one state in the sheet that can silently write a transaction to
+ * a date the user never looked at — and the date is not merely a display
+ * field, it is the period key for envelope spend, allocations and the Budgets
+ * page. A chip in a hint slot is not proportional to that: someone in backfill
+ * rhythm reads Amount → Envelope → Save, and the Date field is precisely the
+ * thing they stopped looking at on purpose. So it gets a banner at the top of
+ * the form body.
+ *
+ * It takes `currentDay` because the kept day and the open row's day can
+ * diverge — hand-pick another date for this one entry and the Keep chip flips
+ * to "Keep" (off), which reads identically to "nothing is kept" while the
+ * NEXT form will still open on the kept day. The banner is the only thing that
+ * can state both facts at once.
+ *
+ * Informational plus a Stop action only — it deliberately does NOT rewrite the
+ * open form's date. Changing a row the user is mid-way through filling would
+ * be a worse surprise than the one it is guarding against; the picker is right
+ * there for that.
+ *
+ * The announcement rides a separate, permanently-rendered `.of-sr-only` span
+ * rather than a role on the banner itself. An always-mounted wrapper looked
+ * like the fix, but it needed `:empty { display: none }` to avoid costing
+ * 16px of `.nt-form` gap on every form — and a live region inside a
+ * display:none subtree isn't monitored at all, so un-hiding it and filling it
+ * in the same frame is the very failure the wrapper was meant to prevent. The
+ * sr-only span is `position: absolute`, so it's out of flow, costs no gap, and
+ * is always observed. Same pattern as the amount fields.
+ */
+function KeptDateBanner({ currentDay }: { currentDay: string }) {
+    const { keptDay, stopKeeping } = useDatePin();
+    const active = keptDay !== null && keptDay !== todayDayKey();
+    const keptLabel = active ? formatDayLabel(`${keptDay}T00:00`) : "";
+    const matches = keptDay === currentDay;
+    const announcement = !active
+        ? ""
+        : matches
+          ? `Dating new entries to ${keptLabel}`
+          : `This entry is dated ${formatDayLabel(`${currentDay}T00:00`)}. New entries return to ${keptLabel}.`;
+
+    return (
+        <>
+            <span className="of-sr-only" aria-live="polite" aria-atomic="true">
+                {announcement}
+            </span>
+            {active && (
+                <div className="nt-kept-banner">
+                    <CalendarClock className="size-3.5 shrink-0 mt-px" aria-hidden />
+                    <span className="nt-kept-banner-text">
+                        {matches ? (
+                            <>
+                                Dating new entries to <strong>{keptLabel}</strong>
+                            </>
+                        ) : (
+                            <>
+                                This entry: <strong>{formatDayLabel(`${currentDay}T00:00`)}</strong>{" "}
+                                · new entries return to <strong>{keptLabel}</strong>
+                            </>
+                        )}
+                    </span>
+                    <button
+                        type="button"
+                        className="nt-kept-banner-stop"
+                        onClick={stopKeeping}
+                        aria-label={`Stop keeping ${keptLabel} for new entries`}
+                    >
+                        Stop
+                    </button>
+                </div>
+            )}
+        </>
+    );
+}
+
+/** "Aug 20" / "Aug 20, 2025" — year only when it isn't the current one. */
+function formatDayLabel(inputDateTime: string): string {
+    const d = fromInputDateTime(inputDateTime);
+    if (!Number.isFinite(d.getTime())) return "this date";
+    const shifted = shiftForFormat(d);
+    const sameYear = shifted.getFullYear() === shiftForFormat(new Date()).getFullYear();
+    return shifted.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        ...(sameYear ? {} : { year: "numeric" }),
+    });
 }
 
 /**
@@ -1194,7 +1448,7 @@ function IncomeForm({
     const lastAccountKey = `orbit:last-account:${spaceId}:income`;
     const [amount, setAmount] = useState("");
     const [description, setDescription] = useState("");
-    const [datetime, setDatetime] = useState(defaultDateTime());
+    const [datetime, setDatetime] = useState(defaultEntryDateTime);
     const [accountId, setAccountId] = useState<string>(() => {
         if (pinState.pins?.account) return pinState.pins.account.id;
         if (typeof window === "undefined") return "";
@@ -1299,6 +1553,10 @@ function IncomeForm({
                thing that clears the row's "saving" spinner (it can fail or
                be cancelled silently; see confirmPendingRow's doc). */
             if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
+            /* Slide the kept-date idle window forward — a save is the only
+               evidence that this entry sitting is still going. No-op when
+               nothing is kept. */
+            touchDatePin();
             toast.success("Income recorded");
             if (typeof window !== "undefined" && accountId) {
                 window.localStorage.setItem(lastAccountKey, accountId);
@@ -1340,7 +1598,7 @@ function IncomeForm({
                     return;
                 }
                 if (!(Number(amount) > 0)) {
-                    toast.error("Enter an amount");
+                    toast.error("Enter a valid amount");
                     return;
                 }
                 submittingRef.current = true;
@@ -1358,12 +1616,11 @@ function IncomeForm({
                 onDone();
             }}
         >
+            <KeptDateBanner currentDay={dayOfInputDateTime(datetime)} />
             <OrbitAmountCard value={amount} onChange={setAmount} tone="income" autoFocus />
 
             <OrbitFieldRow>
-                <OrbitField label="Date">
-                    <TransactionDatePicker value={datetime} onChange={setDatetime} />
-                </OrbitField>
+                <DateField value={datetime} onChange={setDatetime} />
                 <OrbitField
                     label="Account"
                     required
@@ -1471,7 +1728,7 @@ function ExpenseForm({
     // stale IDs (deleted/archived) silently fall back to empty.
     const lastAccountKey = `orbit:last-account:${spaceId}:expense`;
     const [amount, setAmount] = useState("");
-    const [datetime, setDatetime] = useState(defaultDateTime());
+    const [datetime, setDatetime] = useState(defaultEntryDateTime);
     const [sourceAccountId, setSource] = useState<string>(() => {
         if (pinState.pins?.account) return pinState.pins.account.id;
         if (typeof window === "undefined") return "";
@@ -1617,6 +1874,10 @@ function ExpenseForm({
             /* See IncomeForm's onSuccess: confirm in place first so the
                spinner never depends on the refetch landing. */
             if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
+            /* Slide the kept-date idle window forward — a save is the only
+               evidence that this entry sitting is still going. No-op when
+               nothing is kept. */
+            touchDatePin();
             toast.success("Expense recorded");
             // Remember this source account so the next expense entry
             // pre-fills with the same choice.
@@ -1662,7 +1923,7 @@ function ExpenseForm({
                     return;
                 }
                 if (!(Number(amount) > 0)) {
-                    toast.error("Enter an amount");
+                    toast.error("Enter a valid amount");
                     return;
                 }
                 submittingRef.current = true;
@@ -1681,6 +1942,7 @@ function ExpenseForm({
                 onDone();
             }}
         >
+            <KeptDateBanner currentDay={dayOfInputDateTime(datetime)} />
             <OrbitAmountCard value={amount} onChange={setAmount} tone="fg" autoFocus />
 
             <OrbitField label="Category" required noWrapperLabel>
@@ -1766,9 +2028,7 @@ function ExpenseForm({
             />
 
             <OrbitFieldRow>
-                <OrbitField label="Date">
-                    <TransactionDatePicker value={datetime} onChange={setDatetime} />
-                </OrbitField>
+                <DateField value={datetime} onChange={setDatetime} />
                 <OrbitField
                     label="Account"
                     required
@@ -1884,7 +2144,7 @@ function TransferForm({
 
     const lastSourceKey = `orbit:last-account:${spaceId}:transfer-source`;
     const [amount, setAmount] = useState("");
-    const [datetime, setDatetime] = useState(defaultDateTime());
+    const [datetime, setDatetime] = useState(defaultEntryDateTime);
     const [sourceAccountId, setSource] = useState<string>(() => {
         if (pinState.pins?.account) return pinState.pins.account.id;
         if (typeof window === "undefined") return "";
@@ -2020,6 +2280,10 @@ function TransferForm({
                spinner never depends on the refetch landing. The fee's
                expense row (if any) still arrives only via the refetch. */
             if (ctx) optimistic.confirmPendingRow(ctx.tempId, data.id);
+            /* Slide the kept-date idle window forward — a save is the only
+               evidence that this entry sitting is still going. No-op when
+               nothing is kept. */
+            touchDatePin();
             toast.success("Transfer recorded");
             if (typeof window !== "undefined" && sourceAccountId) {
                 window.localStorage.setItem(lastSourceKey, sourceAccountId);
@@ -2067,12 +2331,12 @@ function TransferForm({
                     return;
                 }
                 if (!(Number(amount) > 0)) {
-                    toast.error("Enter an amount");
+                    toast.error("Enter a valid amount");
                     return;
                 }
                 if (feeEnabled) {
                     if (!(feeNum > 0)) {
-                        toast.error("Fee must be greater than 0");
+                        toast.error("Enter a valid fee");
                         return;
                     }
                     if (!feeCategoryId) {
@@ -2102,6 +2366,7 @@ function TransferForm({
                 onDone();
             }}
         >
+            <KeptDateBanner currentDay={dayOfInputDateTime(datetime)} />
             <OrbitField
                 label="From"
                 required
@@ -2162,9 +2427,7 @@ function TransferForm({
 
             <OrbitAmountCard value={amount} onChange={setAmount} tone="brand" />
 
-            <OrbitField label="Date">
-                <TransactionDatePicker value={datetime} onChange={setDatetime} />
-            </OrbitField>
+            <DateField value={datetime} onChange={setDatetime} />
 
             <OrbitToggle
                 checked={feeEnabled}
@@ -2175,15 +2438,15 @@ function TransferForm({
 
             {feeEnabled && (
                 <OrbitFieldRow>
-                    <OrbitField label="Fee amount" hint="Charged by source" required>
-                        <OrbitInput
-                            type="number"
-                            inputMode="decimal"
-                            min="0"
-                            step="0.01"
+                    {/* noWrapperLabel: OrbitCalcInput owns more than one
+                        interactive element (the input plus the operator keys),
+                        so a <label> wrapper would forward clicks into the
+                        first key. */}
+                    <OrbitField label="Fee amount" hint="Charged by source" required noWrapperLabel>
+                        <OrbitCalcInput
+                            label="Fee amount"
                             value={feeAmount}
-                            onChange={(e) => setFeeAmount(e.target.value)}
-                            placeholder="0.00"
+                            onChange={setFeeAmount}
                         />
                     </OrbitField>
                     <OrbitField
@@ -2352,8 +2615,14 @@ function AdjustmentForm({
         return window.localStorage.getItem(lastAccountKey) ?? "";
     });
     const [newBalance, setNewBalance] = useState("");
+    /* Reconciling against a statement is the most arithmetic-heavy entry in
+       the app ("statement says 42,180, but that includes the 340 that hasn't
+       cleared"), so this field takes expressions too. allowNegative: a real
+       bank balance can be an overdraft. */
+    const balanceCalc = useCalcField(newBalance, setNewBalance, { allowNegative: true });
+    const balanceMsgId = useId();
     const [description, setDescription] = useState("");
-    const [datetime, setDatetime] = useState(defaultDateTime());
+    const [datetime, setDatetime] = useState(defaultEntryDateTime);
     const [reason, setReason] = useState<AdjReason>("bank-fee");
     const [attachmentFileIds, setAttachmentFileIds] = useState<string[]>([]);
 
@@ -2398,6 +2667,7 @@ function AdjustmentForm({
     const mutate = trpc.transaction.adjust.useMutation({
         onSuccess: async () => {
             toast.success("Balance adjusted");
+            touchDatePin();
             if (typeof window !== "undefined" && accountId) {
                 window.localStorage.setItem(lastAccountKey, accountId);
             }
@@ -2435,7 +2705,7 @@ function AdjustmentForm({
                     return;
                 }
                 if (delta == null) {
-                    toast.error("Enter the actual balance");
+                    toast.error("Enter a valid balance");
                     return;
                 }
                 if (delta === 0) {
@@ -2465,6 +2735,7 @@ function AdjustmentForm({
                 onDone();
             }}
         >
+            <KeptDateBanner currentDay={dayOfInputDateTime(datetime)} />
             <OrbitField
                 label="Account"
                 required
@@ -2514,16 +2785,52 @@ function AdjustmentForm({
                         <span className="nt-drift-eyebrow">Actual balance</span>
                         <div className="nt-drift-actual-input">
                             <input
-                                type="number"
+                                ref={balanceCalc.inputRef}
+                                type="text"
                                 inputMode="decimal"
-                                step="0.01"
-                                value={newBalance}
-                                onChange={(e) => setNewBalance(e.target.value)}
+                                autoComplete="off"
+                                value={balanceCalc.draft}
+                                onChange={(e) => balanceCalc.commit(e.target.value)}
+                                onBlur={balanceCalc.onBlur}
+                                onKeyDown={balanceCalc.onKeyDown}
                                 placeholder="0.00"
+                                aria-label="Actual balance"
+                                aria-describedby={balanceMsgId}
+                                aria-invalid={balanceCalc.message?.tone === "warn" || undefined}
+                                /* Only catches a genuinely blank field now:
+                                   under type="text" this validates the draft,
+                                   and a draft that is non-empty but unreadable
+                                   still emits "" and falls through to the
+                                   delta == null guard below. Not a substitute
+                                   for that guard. */
                                 required
                             />
                         </div>
-                        <span className="nt-drift-foot">What does your bank say?</span>
+                        {/* Feedback line BELOW the input and ABOVE the keys,
+                            matching OrbitAmountCard / OrbitCalcInput — the same
+                            "= 1,540.00" signal must not sit on the opposite
+                            side of the key strip on one tab out of four. */}
+                        <span
+                            id={balanceMsgId}
+                            className={`nt-drift-foot ${
+                                balanceCalc.message
+                                    ? balanceCalc.message.tone === "warn"
+                                        ? "is-warn"
+                                        : "is-calc"
+                                    : ""
+                            }`}
+                            aria-hidden="true"
+                        >
+                            {balanceCalc.message?.text ?? "What does your bank say?"}
+                        </span>
+                        {/* The debounced announcement, not message.text: a raw
+                            live region here would announce on every keystroke,
+                            which is exactly what useCalcField's debounce exists
+                            to prevent. */}
+                        <span className="of-sr-only" aria-live="polite" aria-atomic="true">
+                            {balanceCalc.announcement}
+                        </span>
+                        <OrbitCalcKeys field={balanceCalc} label="Actual balance" />
                     </div>
                 </div>
 
@@ -2632,9 +2939,7 @@ function AdjustmentForm({
                 />
             </OrbitField>
 
-            <OrbitField label="Date">
-                <TransactionDatePicker value={datetime} onChange={setDatetime} />
-            </OrbitField>
+            <DateField value={datetime} onChange={setDatetime} />
 
             <OrbitField label="Notes" hint="Optional but recommended">
                 <OrbitTextarea
