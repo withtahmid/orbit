@@ -11,12 +11,13 @@ import {
     getAppTzHours,
     getAppTzMinutes,
     getAppTzMonth,
+    getAppTzSeconds,
     getAppTzYear,
     makeAppTzDate,
     shiftForFormat,
     startOfDay,
     startOfMonth,
-    toInputDateTime,
+    toInputDateTimeSeconds,
 } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 
@@ -111,9 +112,14 @@ function TransactionDatePickerInner({
     /* Every edit goes through here: updates the local draft (so the
        calendar/time UI reflects it immediately) and pushes it up to the
        form in the same tick. Replaces the old draft-then-Apply flow. */
+    /* Serialised WITH seconds. Transaction entry seeds each new row with
+       second precision so a rapid batch keeps its order (list ties break on a
+       random uuid); emitting minute-only here would silently drop that
+       tie-break for any row whose date is touched — the same regression
+       `toInputDateTimeSeconds` was added to close on the edit-sheet side. */
     const commitDraft = (next: Date) => {
         setDraft(next);
-        onChange(toInputDateTime(next));
+        onChange(toInputDateTimeSeconds(next));
     };
 
     const today = useMemo(() => startOfDay(new Date()), []);
@@ -125,14 +131,25 @@ function TransactionDatePickerInner({
        for any user outside Asia/Dhaka. */
     const draftHours24 = getAppTzHours(draft);
     const draftMinutes = getAppTzMinutes(draft);
+    /* Carried through every rebuild below so changing the day or nudging the
+       time doesn't reset the row's seconds to :00 and jump it to the front of
+       its minute in the list. */
+    const draftSeconds = getAppTzSeconds(draft);
 
     /* Preset compute helpers — each returns a fully-resolved Date that
        represents "now" or "yesterday from today at the draft's current
        time-of-day" so the user's intent is preserved. */
     const setNow = () => {
         const now = new Date();
-        /* Strip seconds + ms — tz-agnostic so safe in any browser. */
-        now.setSeconds(0, 0);
+        /* Keep the real seconds; drop only ms (tz-agnostic, safe in any
+           browser). Zeroing them made "Now" the EARLIEST second of its minute,
+           so a row committed at 10:00:20 stored 10:00:00 and sorted ahead of
+           rows entered at :05 and :12 — the exact inversion `draftSeconds`
+           threading exists to prevent, through the one path that skipped it.
+           The Now chip is unaffected: `setNowBaseline` below receives this
+           same Date object, so `isNowPreset`'s getTime() equality holds
+           whether or not the seconds were stripped. */
+        now.setMilliseconds(0);
         commitDraft(now);
         setViewMonth(startOfMonth(now));
         /* Re-snap the baseline so the chip re-activates and stays active
@@ -150,7 +167,8 @@ function TransactionDatePickerInner({
             getAppTzMonth(yToday),
             getAppTzDate(yToday),
             draftHours24,
-            draftMinutes
+            draftMinutes,
+            draftSeconds
         );
         commitDraft(y);
         setViewMonth(startOfMonth(y));
@@ -171,7 +189,9 @@ function TransactionDatePickerInner({
        the chip honestly dim when the user opened a form long ago. */
     const [nowBaseline, setNowBaseline] = useState(() => {
         const n = new Date();
-        n.setSeconds(0, 0);
+        /* Milliseconds only, matching setNow — with seconds zeroed the 60s
+           snap window silently varied in width by the seed's seconds. */
+        n.setMilliseconds(0);
         return Math.abs(n.getTime() - draft.getTime()) <= 60_000 ? draft : n;
     });
     const isNowPreset = draft.getTime() === nowBaseline.getTime();
@@ -189,7 +209,8 @@ function TransactionDatePickerInner({
             getAppTzMonth(d),
             getAppTzDate(d),
             draftHours24,
-            draftMinutes
+            draftMinutes,
+            draftSeconds
         );
         commitDraft(next);
         /* When arrow-key nav (or any selection) crosses into a different
@@ -209,7 +230,8 @@ function TransactionDatePickerInner({
             getAppTzMonth(draft),
             getAppTzDate(draft),
             safe,
-            draftMinutes
+            draftMinutes,
+            draftSeconds
         );
         commitDraft(next);
     };
@@ -220,7 +242,8 @@ function TransactionDatePickerInner({
             getAppTzMonth(draft),
             getAppTzDate(draft),
             draftHours24,
-            safe
+            safe,
+            draftSeconds
         );
         commitDraft(next);
     };
@@ -242,7 +265,8 @@ function TransactionDatePickerInner({
             getAppTzMonth(draft),
             getAppTzDate(draft),
             nextH,
-            nextM
+            nextM,
+            draftSeconds
         );
         commitDraft(next);
     };

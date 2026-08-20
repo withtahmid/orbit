@@ -4,3 +4,4 @@
 - [Categories tree traps](categories_tree_traps.md) — filterActive vs chevronLocked, hasChildRows must mean rendered rows, card sort must be expansion-independent, walkTier is sound.
 - [Event detail charts traps](event_detail_charts_traps.md) — Timeline 2000-day cap drops folded spend; hero Spent (eventTotals) vs cumulative (eventDailySpend) are separate procedures.
 - [Trends period stepper traps](trends_period_stepper_traps.md) — Movers roots-rollup vs category filter & cross-space categories; avg_pool_start is safe; previous[] own-length; scrollIntoView page-jump.
+- [Calc evaluator traps](calc_evaluator_recursion_and_repair.md) — completeExpression must repair the RAW folded string; parseFactor recursion is uncapped and crashes render.

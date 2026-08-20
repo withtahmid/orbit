@@ -149,6 +149,9 @@ export function getAppTzHours(date: Date): number {
 export function getAppTzMinutes(date: Date): number {
     return projectToAppTz(date).getUTCMinutes();
 }
+export function getAppTzSeconds(date: Date): number {
+    return projectToAppTz(date).getUTCSeconds();
+}
 
 /**
  * Build an absolute Date from APP_TIMEZONE wall-clock fields. Mirror of
@@ -254,6 +257,27 @@ export function toInputDateTime(d: Date | null | undefined): string {
     return `${p.getUTCFullYear()}-${pad(p.getUTCMonth() + 1)}-${pad(
         p.getUTCDate()
     )}T${pad(p.getUTCHours())}:${pad(p.getUTCMinutes())}`;
+}
+
+/**
+ * Same as `toInputDateTime` but keeps the seconds (`yyyy-MM-ddTHH:mm:ss`).
+ *
+ * Transaction entry seeds its datetime with second precision on purpose:
+ * `transaction_datetime` ties are broken by a random uuid, so a rapid batch of
+ * entries saved inside one minute would otherwise render in arbitrary order.
+ * Any path that hydrates an existing row's datetime and writes it back must
+ * use this, or editing an unrelated field on one row silently truncates its
+ * seconds and jumps it to the front of its minute.
+ *
+ * `fromInputDateTime` already parses the optional seconds group, so this is a
+ * drop-in wherever the value is round-tripped rather than shown in a native
+ * `datetime-local` input (which ignores seconds unless `step` allows them).
+ */
+export function toInputDateTimeSeconds(d: Date | null | undefined): string {
+    if (!d) return "";
+    const p = projectToAppTz(d);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${toInputDateTime(d)}:${pad(p.getUTCSeconds())}`;
 }
 
 /**

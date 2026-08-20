@@ -1,4 +1,4 @@
-import { Pin } from "lucide-react";
+import { CalendarClock, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,24 +15,64 @@ import { cn } from "@/lib/utils";
  * space-wide pin). We still render so the affordance is visible — just
  * not actionable.
  */
+/**
+ * Two vocabularies, one control.
+ *
+ * `pin` — the server-side Account / Envelope / Event *defaults*: stored in
+ * Postgres, two of the three team-wide, meant to outlive the session.
+ *
+ * `keep` — the browser-local *kept date*: a mode ("which day am I entering
+ * for?") that expires with the sitting. It shares this button's geometry,
+ * states and focus ring because consistency of form is worth having, but it
+ * must not share the word "Pinned": that would teach the user one label
+ * spanning everything from "forever, shared with my partner" to "until I stop
+ * for the evening, on this device only".
+ */
+const VARIANTS = {
+    pin: { Icon: Pin, on: "Pinned", off: "Pin" },
+    keep: { Icon: CalendarClock, on: "Keeping", off: "Keep" },
+} as const;
+
 export function PinControl({
     state,
     onClick,
     disabled,
     title,
+    detail,
+    variant = "pin",
+    tone = "brand",
 }: {
     state: "pinned" | "pinnable" | "hidden";
     onClick: () => void;
     disabled?: boolean;
     title?: string;
+    /**
+     * Extra clause appended after the visible label in the announced name,
+     * e.g. "Aug 20 for new entries". WCAG 2.5.3 requires the accessible name
+     * to START with the visible text so speech-input users can say what they
+     * see — hence a suffix rather than a free-form override.
+     */
+    detail?: string;
+    variant?: keyof typeof VARIANTS;
+    /**
+     * Colour of the *pinned* fill. `warn` for a kept date that isn't today —
+     * a solid emerald pill reads as "confirmed, all good" directly beside the
+     * amber banner and amber trigger edge warning about that same fact.
+     * Keeping *today* is benign, so it stays brand.
+     */
+    tone?: "brand" | "warn";
 }) {
     if (state === "hidden") return null;
+    const { Icon, on, off } = VARIANTS[variant];
     const isPinned = state === "pinned";
+    const visibleLabel = isPinned ? on : off;
     const accessibleName = disabled
-        ? "Only owner or editor can pin this"
-        : isPinned
-          ? "Unpin this default"
-          : "Pin this as your default";
+        ? `${visibleLabel} — only owner or editor can change this`
+        : detail
+          ? `${visibleLabel} — ${detail}`
+          : isPinned
+            ? `${visibleLabel} — unpin this default`
+            : `${visibleLabel} — pin this as your default`;
     return (
         <button
             type="button"
@@ -42,7 +82,12 @@ export function PinControl({
                 if (disabled) return;
                 onClick();
             }}
-            className={cn("nt-pin-btn", isPinned && "is-pinned", disabled && "is-disabled")}
+            className={cn(
+                "nt-pin-btn",
+                isPinned && "is-pinned",
+                isPinned && tone === "warn" && "is-warn",
+                disabled && "is-disabled"
+            )}
             aria-pressed={isPinned}
             aria-label={accessibleName}
             /* aria-label is the canonical announcement; title is kept
@@ -50,8 +95,11 @@ export function PinControl({
                on touch devices and many screen readers ignore it. */
             title={title ?? accessibleName}
         >
-            <Pin className="size-3" style={isPinned ? { fill: "currentColor" } : undefined} />
-            <span className="nt-pin-label">{isPinned ? "Pinned" : "Pin"}</span>
+            <Icon
+                className="size-3"
+                style={isPinned && variant === "pin" ? { fill: "currentColor" } : undefined}
+            />
+            <span className="nt-pin-label">{visibleLabel}</span>
         </button>
     );
 }
@@ -95,6 +143,17 @@ export const PIN_CONTROL_STYLES = `
 }
 .nt-pin-btn.is-pinned:hover {
     filter: brightness(1.05);
+}
+/* Warn tone for a kept PAST date. Solid, matching the brand pinned pill's
+   weight — an 18% tint cleared AA on text (6.77:1) but measured 1.39:1 as a
+   fill against the drawer body, so the higher-stakes state ended up the
+   quieter one: benign "Keeping today" a bright solid pill, and the state that
+   can silently mis-date a transaction a near-invisible outline. --bg on
+   --warn is 9.69:1. */
+.nt-pin-btn.is-pinned.is-warn {
+    background: var(--warn);
+    border-color: var(--warn);
+    color: var(--bg);
 }
 .nt-pin-btn.is-disabled {
     opacity: 0.45;

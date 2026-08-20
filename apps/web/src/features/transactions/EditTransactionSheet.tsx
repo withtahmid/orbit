@@ -28,7 +28,7 @@ import { UserAvatar } from "@/components/shared/UserAvatar";
 import { trpc } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
 import type { RouterOutput } from "@/trpc";
-import { toInputDateTime, fromInputDateTime } from "@/lib/dates";
+import { toInputDateTimeSeconds, fromInputDateTime } from "@/lib/dates";
 import { formatInAppTz } from "@/lib/formatDate";
 import { getIcon } from "@/lib/entityIcons";
 import { NT_STYLES, SourceOverspendHint } from "./NewTransactionSheet";
@@ -205,7 +205,12 @@ function EditForm({
     const envelopesQuery = trpc.envelop.listBySpace.useQuery({ spaceId });
     const eventsQuery = trpc.event.listBySpace.useQuery({ spaceId });
 
-    const initialDatetime = toInputDateTime(new Date(transaction.transaction_datetime));
+    /* Seconds-preserving: the create path seeds entries with second precision
+       so a rapid batch keeps its order (list ties break on a random uuid).
+       Hydrating through the minute-only `toInputDateTime` and writing it back
+       would truncate them, so fixing a typo on one row of a 20-row batch would
+       silently jump that row to the front of its minute. */
+    const initialDatetime = toInputDateTimeSeconds(new Date(transaction.transaction_datetime));
 
     const [amount, setAmount] = useState(String(transaction.amount));
     const [datetime, setDatetime] = useState(initialDatetime);

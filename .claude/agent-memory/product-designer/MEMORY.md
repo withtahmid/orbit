@@ -50,3 +50,4 @@
 - ["Click a bar to open that period"](click_a_period_to_open_it.md) — canonical gesture on 2 charts; only offer it where the page has a visible period control, and say so in copy.
 - [Movers comparison window SETTLED](trends_movers_comparison_window.md) — whole prior period vs current-so-far; elapsed-truncation rejected because it made two views disagree about one month.
 - [Shared component vs page-native](shared_component_vs_page_native_boundary.md) — chrome may be page-native; anything with cross-row/cross-page invariants must be one component.
+- [Kept date + inline calculator](kept_date_and_inline_calculator.md) — settled calls on the "Keep" date mode and the arithmetic money fields, plus the seconds-truncation residual.

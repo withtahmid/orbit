@@ -44,3 +44,6 @@
 - [Shared MoversList hasPrevious split](movers_list_shared.md) — one component, two pages, two different `hasPrevious` derivations (dailyComparison vs the limit-sliced rows); only TrendsView gates its copy on it.
 - [Trends movers shape input](trends_movers_shape.md) — drill-in mode deleted for `shape:"tree"|"flat"`; SQL verified correct on live DB (totals reconcile, no double count, unreferenced recursive CTE never executes). Risk is client-side.
 - [Unlayered page <style> beats Tailwind](unlayered_page_styles_beat_tailwind.md) — ED_STYLES is unlayered so it outranks every `@layer utilities` class; `.foo > div` rules silently restyle shared components dropped in.
+- [calc.ts silent wrong number](calc_normalize_silent_wrong_number.md) — hasInvalidGrouping guards evaluateExpression, but completeExpression normalizes FIRST and bypasses it: "1200 340"→1200340 on blur.
+- [useCalcField draft/emit contract](amount_card_draft_emit_contract.md) — headless calc hook (3 consumers); emittedRef safe only because every reset is a remount; insert() trusts selectionStart on never-focused inputs.
+- [useDatePin kept-date store](date_pin_session_store.md) — localStorage + sliding 6h idle window (touchDatePin in onSuccess); emits SECONDS-bearing datetime strings; tz-clean; expiry fires no notification.
