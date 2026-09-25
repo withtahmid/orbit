@@ -51,3 +51,4 @@
 - [Movers comparison window SETTLED](trends_movers_comparison_window.md) — whole prior period vs current-so-far; elapsed-truncation rejected because it made two views disagree about one month.
 - [Shared component vs page-native](shared_component_vs_page_native_boundary.md) — chrome may be page-native; anything with cross-row/cross-page invariants must be one component.
 - [Kept date + inline calculator](kept_date_and_inline_calculator.md) — settled calls on the "Keep" date mode and the arithmetic money fields, plus the seconds-truncation residual.
+- [Icon picker review 2026-09-23](icon_picker_review_2026_09_23.md) — 4 rounds; the recurring defect is one mechanism: a weight applied to score but not to the sort key. Settled verdicts + shipped residuals.

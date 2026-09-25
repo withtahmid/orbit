@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { ENTITY_COLORS } from "@/lib/entityStyle";
 
@@ -47,20 +43,13 @@ export function ColorPicker({
 
     return (
         <div
-            className={cn(
-                "orbit-design op-picker",
-                className
-            )}
+            className={cn("orbit-design op-picker", className)}
             role="radiogroup"
             aria-label="Color"
         >
             <style>{COLOR_PICKER_STYLES}</style>
             <div className="op-picker-head">
-                <span
-                    className="op-picker-swatch"
-                    style={{ background: value }}
-                    aria-hidden
-                />
+                <span className="op-picker-swatch" style={{ background: value }} aria-hidden />
                 <span className="op-picker-name">Color</span>
                 <span className="op-picker-hex" aria-hidden>
                     {value.toLowerCase()}
@@ -75,8 +64,7 @@ export function ColorPicker({
                             <span className="op-color-group-label">{g.label}</span>
                             <div className="op-color-grid">
                                 {slice.map((c) => {
-                                    const active =
-                                        value?.toLowerCase() === c.toLowerCase();
+                                    const active = value?.toLowerCase() === c.toLowerCase();
                                     return (
                                         <button
                                             key={c}
@@ -86,10 +74,7 @@ export function ColorPicker({
                                             aria-label={c}
                                             title={c}
                                             onClick={() => onChange(c)}
-                                            className={cn(
-                                                "op-color-swatch",
-                                                active && "is-active"
-                                            )}
+                                            className={cn("op-color-swatch", active && "is-active")}
                                             style={{
                                                 background: c,
                                                 boxShadow: active
@@ -121,11 +106,7 @@ export function ColorPicker({
                         value={custom}
                         placeholder="3b82f6"
                         onChange={(e) =>
-                            setCustom(
-                                e.target.value
-                                    .replace(/[^0-9a-fA-F]/g, "")
-                                    .slice(0, 8)
-                            )
+                            setCustom(e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8))
                         }
                         onKeyDown={(e) => {
                             if (e.key === "Enter") {
@@ -181,14 +162,14 @@ export function ColorPickerButton({
                         style={{ backgroundColor: value }}
                         aria-hidden
                     />
-                    <span className="op-picker-trigger-hex">
-                        {value.toLowerCase()}
-                    </span>
+                    <span className="op-picker-trigger-hex">{value.toLowerCase()}</span>
                     <ChevronDown className="size-3 op-picker-trigger-chev" />
                 </button>
             </PopoverTrigger>
             <PopoverContent
                 portal={false}
+                collisionPadding={8}
+                aria-label="Color picker"
                 align="start"
                 className="orbit-design w-[min(20rem,calc(100vw-1.5rem))] p-0 bg-transparent border-0 shadow-none"
             >
@@ -198,7 +179,8 @@ export function ColorPickerButton({
     );
 }
 
-const PICKER_TRIGGER_STYLES = `
+/** Shared by ColorPickerButton and IconPickerButton — each injects it so either can stand alone. */
+export const PICKER_TRIGGER_STYLES = `
 .op-picker-trigger {
     height: 38px;
     padding: 0 10px;
@@ -355,11 +337,14 @@ const COLOR_PICKER_STYLES = `
     border: 0;
     outline: none;
     color: var(--fg);
-    font-size: 12px;
+    font-size: 16px; /* below 16px iOS Safari zooms the page on focus */
     font-family: "Geist Mono", ui-monospace, monospace;
     padding: 0 4px;
     text-transform: lowercase;
     min-width: 0;
+}
+@media (pointer: fine) {
+    .op-color-custom-input { font-size: 12px; }
 }
 .op-color-custom-apply {
     height: calc(100% - 6px);

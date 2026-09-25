@@ -1,5 +1,5 @@
 - [Orbit design token scoping](orbit-design-scoping.md) — `--bg/--fg/--brand/...` only resolve inside `.orbit-design`; new pages using these tokens must wrap their root.
-- [CSS cascade traps](css_cascade_traps.md) — Unlayered page CSS (ED_STYLES, orbit-design.css) beats EVERY Tailwind utility; `DropdownMenuItem`'s `[&_svg]:size-4` beats a child `size-3.5`.
+- [CSS cascade traps](css_cascade_traps.md) — Unlayered page CSS beats EVERY Tailwind utility; `[&_svg]:size-4` beats a child `size-3.5`; `.orbit-design` also paints opaque `--bg`.
 - [FilterCheckRow + ViewModeToggle](filter_row_and_viewmode_toggle.md) — Shared analytics primitives: indent/name-width budgets, 141/133px toggle widths, ~847px wrap threshold, checked-tint 1.19:1.
 - [Tap target sizes in Orbit](tap-target-sizes.md) — default button heights (shadcn `h-9` 36px, `.od-btn` 36px, `.od-btn-sm` 30px, `.ai-btn` 40px) are below 44px. Flag only in sticky bars, destructive controls, or dense rows.
 - [OrbitField <label> click forwarding](orbitfield_label_click_forwarding.md) — default `<label>` wrapper forwards stray clicks to the first labelable descendant; when to pass `noWrapperLabel`.
@@ -37,3 +37,5 @@
 - [Inline calculator strip](amount_card_calculator_strip.md) — 6-key strip: 24.03px pinch @481, margin-on-grid-item overflow, tape-wrap shift, all eq-key contrast numbers
 - [Kept-date banner + date pin](kept_date_banner_and_date_pin.md) — banner 56/68.6px @320; TDP_STYLES renders INSIDE the trigger so `.tdp-trigger:hover` beats any NT rule at equal specificity
 - [OrbitFieldRow label-row asymmetry](oms_field_row_height_asymmetry.md) — a hint-slot PinControl grows `.oms-field-row` 17→24/36px, so paired cells misalign when only one shows a pin.
+- [Popover-in-dialog clipping](popover_in_dialog_clipping.md) — portal={false} popovers size to the VIEWPORT only; collisionPadding shrinks availableHeight; FocusScope autofocuses first tabbable.
+- [IconPicker panel budget](icon_picker_panel_budget.md) — shell/panel split: 3 height tiers with 278/196/136px minimums; clipping now starts below 136px of popover room.

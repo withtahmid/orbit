@@ -34,6 +34,7 @@ pnpm build:watch      # tsc --watch (dev uses this + nodemon)
 pnpm dev              # vite --host on port 5173
 pnpm build            # tsc -b && vite build
 pnpm lint             # eslint .
+pnpm generate-icons   # regenerates src/lib/icons/*.generated.json (emoji dataset + Lucide search tags); needs network
 ```
 
 The server dev loop is: `tsc --watch` writes to `dist/`, nodemon (watching `./dist`) restarts Node. Source lives in `.mts`, output is `.mjs`.
@@ -82,4 +83,5 @@ The server dev loop is: `tsc --watch` writes to `dist/`, nodemon (watching `./di
 - **One procedure per file** under `procedures/<resource>/<action>.mts`; the feature router just re-exports them.
 - **Don't commit `types.mts`** edits by hand — regenerate after migrations.
 - **APP_TZ-aware date math (web):** `apps/web/src/lib/dates.ts` exports `getAppTzYear/Month/Date/Day/Hours/Minutes`, `makeAppTzDate`, and `addMonthsClamped` (alongside `addMonths`, `startOfDay`, etc.) — use these when reading or constructing wall-clock fields from an absolute `Date`. Native `Date.getHours()` / `setFullYear()` use the **browser's** local tz, which silently drifts the displayed and committed value for any user outside Asia/Dhaka. The transaction date picker (`features/transactions/TransactionDatePicker.tsx`) demonstrates the pattern; the `fromInputDateTime`/`toInputDateTime` round-trip stays the boundary with the form's `datetime-local` string shape.
+- **Entity icons are a Lucide key _or_ an emoji string.** The persisted `icon` column holds either a curated key from `apps/web/src/lib/entityIcons.ts` or a raw emoji (`"🍕"`, skin tones included). Always render through `getIcon(name)` — never index `ENTITY_ICONS` directly — so both kinds work. Lucide keys are persisted: append, never rename/remove, and put each key in exactly one category. After adding icons run `pnpm generate-icons` (from `apps/web/`) — it rebuilds the search tags and asserts the registry invariants. `src/lib/icons/*.generated.json` are generated; don't hand-edit them. See `contexts/modules/web/icons.md`.
 - **Event create paths reject closed events:** `resolveEventBelongsToSpace` takes an opt-in `requireActive?: boolean`. Pass `true` from any new create path that accepts an `eventId`; `update.mts` deliberately leaves it false so existing rows with now-closed events remain editable.

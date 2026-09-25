@@ -47,3 +47,4 @@
 - [calc.ts silent wrong number](calc_normalize_silent_wrong_number.md) — hasInvalidGrouping guards evaluateExpression, but completeExpression normalizes FIRST and bypasses it: "1200 340"→1200340 on blur.
 - [useCalcField draft/emit contract](amount_card_draft_emit_contract.md) — headless calc hook (3 consumers); emittedRef safe only because every reset is a remount; insert() trusts selectionStart on never-focused inputs.
 - [useDatePin kept-date store](date_pin_session_store.md) — localStorage + sliding 6h idle window (touchDatePin in onSuccess); emits SECONDS-bearing datetime strings; tz-clean; expiry fires no notification.
+- [Icon registry & emoji invariants](icon_registry_emoji_invariants.md) — round-4 verified: 609+2 keys, shell/container + strip-tabstop + isComposing fixes land; top traps now = prefix accidents still LEADING ("car loan"→credit-card) and the flat typo tier inverting curated primaries ("grocerries"→apple).

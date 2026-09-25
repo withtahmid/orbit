@@ -105,135 +105,141 @@ export function CreateOrEditEventDialog({
                         </Button>
                     ))}
             </DialogTrigger>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle>{editing ? "Edit event" : "Create event"}</DialogTitle>
-                    <DialogDescription>
-                        Events group related transactions (weddings, trips, etc).
-                    </DialogDescription>
-                </DialogHeader>
-                <form
-                    className="grid gap-3"
-                    onSubmit={(e) => {
-                        e.preventDefault();
-                        if (!name.trim() || !start || !end) return;
-                        const estimate = parseEstimate(estimatedAmount);
-                        if (editing) {
-                            update.mutate({
-                                eventId: event!.eventId,
-                                name: name.trim(),
-                                startTime: fromInputDateTime(start),
-                                endTime: fromInputDateTime(end),
-                                color,
-                                icon,
-                                description: description.trim() || null,
-                                estimatedAmount: estimate,
-                                addAttachmentFileIds:
-                                    attachmentFileIds.length > 0
-                                        ? attachmentFileIds
-                                        : undefined,
-                            });
-                        } else {
-                            create.mutate({
-                                spaceId: space.id,
-                                name: name.trim(),
-                                startTime: fromInputDateTime(start),
-                                endTime: fromInputDateTime(end),
-                                color,
-                                icon,
-                                description: description.trim() || undefined,
-                                estimatedAmount: estimate,
-                                attachmentFileIds:
-                                    attachmentFileIds.length > 0
-                                        ? attachmentFileIds
-                                        : undefined,
-                            });
-                        }
-                    }}
-                >
-                    <div className="grid gap-1.5">
-                        <Label htmlFor="ev-name">Name</Label>
-                        <Input
-                            id="ev-name"
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            required
-                            autoFocus
-                        />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
+            {/* Scroll lives on an inner wrapper: shadcn's DialogContent is transformed
+                (translate -50%), which makes it the containing block for the pickers'
+                position:fixed popovers — overflow on it would clip them. */}
+            <DialogContent className="max-h-none overflow-visible sm:max-w-lg">
+                <div className="grid max-h-[calc(100dvh-5rem)] gap-4 overflow-y-auto">
+                    <DialogHeader>
+                        <DialogTitle>{editing ? "Edit event" : "Create event"}</DialogTitle>
+                        <DialogDescription>
+                            Events group related transactions (weddings, trips, etc).
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form
+                        className="grid gap-3"
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!name.trim() || !start || !end) return;
+                            const estimate = parseEstimate(estimatedAmount);
+                            if (editing) {
+                                update.mutate({
+                                    eventId: event!.eventId,
+                                    name: name.trim(),
+                                    startTime: fromInputDateTime(start),
+                                    endTime: fromInputDateTime(end),
+                                    color,
+                                    icon,
+                                    description: description.trim() || null,
+                                    estimatedAmount: estimate,
+                                    addAttachmentFileIds:
+                                        attachmentFileIds.length > 0
+                                            ? attachmentFileIds
+                                            : undefined,
+                                });
+                            } else {
+                                create.mutate({
+                                    spaceId: space.id,
+                                    name: name.trim(),
+                                    startTime: fromInputDateTime(start),
+                                    endTime: fromInputDateTime(end),
+                                    color,
+                                    icon,
+                                    description: description.trim() || undefined,
+                                    estimatedAmount: estimate,
+                                    attachmentFileIds:
+                                        attachmentFileIds.length > 0
+                                            ? attachmentFileIds
+                                            : undefined,
+                                });
+                            }
+                        }}
+                    >
                         <div className="grid gap-1.5">
-                            <Label htmlFor="ev-start">Starts</Label>
+                            <Label htmlFor="ev-name">Name</Label>
                             <Input
-                                id="ev-start"
-                                type="datetime-local"
-                                value={start}
-                                onChange={(e) => setStart(e.target.value)}
+                                id="ev-name"
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
                                 required
+                                autoFocus
                             />
                         </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="grid gap-1.5">
+                                <Label htmlFor="ev-start">Starts</Label>
+                                <Input
+                                    id="ev-start"
+                                    type="datetime-local"
+                                    value={start}
+                                    onChange={(e) => setStart(e.target.value)}
+                                    required
+                                />
+                            </div>
+                            <div className="grid gap-1.5">
+                                <Label htmlFor="ev-end">Ends</Label>
+                                <Input
+                                    id="ev-end"
+                                    type="datetime-local"
+                                    value={end}
+                                    onChange={(e) => setEnd(e.target.value)}
+                                    required
+                                />
+                            </div>
+                        </div>
                         <div className="grid gap-1.5">
-                            <Label htmlFor="ev-end">Ends</Label>
+                            <Label htmlFor="ev-est">Estimated spend (optional)</Label>
                             <Input
-                                id="ev-end"
-                                type="datetime-local"
-                                value={end}
-                                onChange={(e) => setEnd(e.target.value)}
-                                required
+                                id="ev-est"
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                step="0.01"
+                                placeholder="e.g. 50000"
+                                value={estimatedAmount}
+                                onChange={(e) => setEstimatedAmount(e.target.value)}
+                            />
+                            <span className="text-[11.5px] text-muted-foreground">
+                                Tracks progress on the event card. Edit any time.
+                            </span>
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label htmlFor="ev-desc">Description (optional)</Label>
+                            <Textarea
+                                id="ev-desc"
+                                rows={2}
+                                maxLength={2000}
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
                             />
                         </div>
-                    </div>
-                    <div className="grid gap-1.5">
-                        <Label htmlFor="ev-est">Estimated spend (optional)</Label>
-                        <Input
-                            id="ev-est"
-                            type="number"
-                            inputMode="decimal"
-                            min="0"
-                            step="0.01"
-                            placeholder="e.g. 50000"
-                            value={estimatedAmount}
-                            onChange={(e) => setEstimatedAmount(e.target.value)}
+                        <EntityStyleFields
+                            defaultIcon={event?.icon ?? "calendar-days"}
+                            name={name}
+                            color={color}
+                            setColor={setColor}
+                            icon={icon}
+                            setIcon={setIcon}
                         />
-                        <span style={{ fontSize: 11.5, color: "var(--fg-4)" }}>
-                            Tracks progress on the event card. Edit any time.
-                        </span>
-                    </div>
-                    <div className="grid gap-1.5">
-                        <Label htmlFor="ev-desc">Description (optional)</Label>
-                        <Textarea
-                            id="ev-desc"
-                            rows={2}
-                            maxLength={2000}
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
+                        <FileUploadField
+                            purpose="event_attachment"
+                            fileIds={attachmentFileIds}
+                            onChange={setAttachmentFileIds}
                         />
-                    </div>
-                    <EntityStyleFields
-                        name={name}
-                        color={color}
-                        setColor={setColor}
-                        icon={icon}
-                        setIcon={setIcon}
-                    />
-                    <FileUploadField
-                        purpose="event_attachment"
-                        fileIds={attachmentFileIds}
-                        onChange={setAttachmentFileIds}
-                    />
-                    <DialogFooter className="gap-2">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => setOpenAndNotify(false)}
-                        >
-                            Cancel
-                        </Button>
-                        <Button type="submit" variant="gradient" disabled={pending}>
-                            {pending ? "Saving…" : editing ? "Save" : "Create"}
-                        </Button>
-                    </DialogFooter>
-                </form>
+                        <DialogFooter className="gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setOpenAndNotify(false)}
+                            >
+                                Cancel
+                            </Button>
+                            <Button type="submit" variant="gradient" disabled={pending}>
+                                {pending ? "Saving…" : editing ? "Save" : "Create"}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </div>
             </DialogContent>
         </Dialog>
     );
