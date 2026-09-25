@@ -1649,7 +1649,12 @@ function Inspector({
                         <OrbitField label="Style" noWrapperLabel>
                             <div className="ct-insp-style-row">
                                 <ColorPickerButton value={color} onChange={setColor} />
-                                <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                                <IconPickerButton
+                                    value={icon}
+                                    onChange={setIcon}
+                                    color={color}
+                                    defaultValue={node.icon}
+                                />
                             </div>
                         </OrbitField>
 
@@ -2008,7 +2013,12 @@ function CreatePanel({
                 <OrbitField label="Style" noWrapperLabel>
                     <div className="ct-insp-style-row">
                         <ColorPickerButton value={color} onChange={setColor} />
-                        <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                        <IconPickerButton
+                            value={icon}
+                            onChange={setIcon}
+                            color={color}
+                            defaultValue="folder"
+                        />
                     </div>
                 </OrbitField>
 

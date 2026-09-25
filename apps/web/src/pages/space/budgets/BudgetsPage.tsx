@@ -1618,7 +1618,12 @@ export function CreateOrEditEnvelopeDialog({
                     <div className="env-mod-id-row">
                         <div className="env-mod-style-row">
                             <ColorPickerButton value={color} onChange={setColor} />
-                            <IconPickerButton value={icon} onChange={setIcon} color={color} />
+                            <IconPickerButton
+                                value={icon}
+                                onChange={setIcon}
+                                color={color}
+                                defaultValue={envelope?.icon ?? "mail"}
+                            />
                         </div>
                         <div className="env-mod-name-wrap">
                             <OrbitField label="Name" required>

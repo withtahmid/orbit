@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Plus, Edit3, Link2, Lock, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -60,6 +60,15 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
     const [color, setColor] = useState<string>(DEFAULT_COLOR);
     const [icon, setIcon] = useState(DEFAULT_ICON_BY_TYPE.asset);
     const [iconTouched, setIconTouched] = useState(false);
+    // Stable identity: the picker's memoised grids re-render on every new onChange.
+    const handleIconChange = useCallback(
+        (i: string) => {
+            setIcon(i);
+            // Reverting to the type default un-touches it, so a later type switch still swaps the icon.
+            setIconTouched(i !== DEFAULT_ICON_BY_TYPE[accountType]);
+        },
+        [accountType]
+    );
     const utils = trpc.useUtils();
 
     const create = trpc.account.create.useMutation({
@@ -228,11 +237,9 @@ export function CreateAccountDialog({ trigger }: { trigger?: React.ReactNode } =
                             <ColorPickerButton value={color} onChange={setColor} />
                             <IconPickerButton
                                 value={icon}
-                                onChange={(i) => {
-                                    setIcon(i);
-                                    setIconTouched(true);
-                                }}
+                                onChange={handleIconChange}
                                 color={color}
+                                defaultValue={DEFAULT_ICON_BY_TYPE[accountType]}
                             />
                         </div>
                     </OrbitField>

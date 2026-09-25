@@ -400,6 +400,7 @@ function AccountAppearanceForm({
                 setColor={setColor}
                 icon={icon}
                 setIcon={setIcon}
+                defaultIcon={currentIcon}
             />
             <div className="flex justify-end">
                 <Button type="submit" disabled={!dirty || update.isPending}>

@@ -43,7 +43,7 @@ function DialogContent({
                 {children}
                 <DialogPrimitive.Close
                     data-slot="dialog-close"
-                    className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring disabled:pointer-events-none"
+                    className="absolute right-3 top-3 z-10 rounded-md bg-card p-1 text-foreground/70 ring-offset-background transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
                 >
                     <X className="h-4 w-4" />
                     <span className="sr-only">Close</span>
@@ -73,10 +73,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
     );
 }
 
-function DialogTitle({
-    className,
-    ...props
-}: React.ComponentProps<typeof DialogPrimitive.Title>) {
+function DialogTitle({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Title>) {
     return (
         <DialogPrimitive.Title
             data-slot="dialog-title"

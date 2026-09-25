@@ -1273,8 +1273,10 @@ All under [`apps/web/src/components/`](../apps/web/src/components/).
 - [`ColorPicker`](../apps/web/src/components/shared/ColorPicker.tsx) +
   [`IconPicker`](../apps/web/src/components/shared/IconPicker.tsx) +
   [`EntityStyleFields`](../apps/web/src/components/shared/EntityStyleFields.tsx) —
-  picker pair + live-preview wrapper. 14-color curated palette, ~45-icon
-  lucide subset.
+  picker pair + live-preview wrapper. Curated color palette; the icon picker
+  offers ~610 curated Lucide icons plus the full Unicode emoji set
+  (lazy-loaded, filtered to what the device renders, skin tones) behind one
+  tag-based search — see [`icons.md`](modules/web/icons.md).
 - [`PeriodSelector`](../apps/web/src/components/shared/PeriodSelector.tsx)
   \+ [`usePeriod` hook](../apps/web/src/hooks/usePeriod.ts) —
   URL-persisted `?period=this-month|last-month|…|custom`. Default
