@@ -48,3 +48,4 @@
 - [useCalcField draft/emit contract](amount_card_draft_emit_contract.md) — headless calc hook (3 consumers); emittedRef safe only because every reset is a remount; insert() trusts selectionStart on never-focused inputs.
 - [useDatePin kept-date store](date_pin_session_store.md) — localStorage + sliding 6h idle window (touchDatePin in onSuccess); emits SECONDS-bearing datetime strings; tz-clean; expiry fires no notification.
 - [Icon registry & emoji invariants](icon_registry_emoji_invariants.md) — round-4 verified: 609+2 keys, shell/container + strip-tabstop + isComposing fixes land; top traps now = prefix accidents still LEADING ("car loan"→credit-card) and the flat typo tier inverting curated primaries ("grocerries"→apple).
+- [Tx write permission model](tx_permission_no_space_membership.md) — 2026-10-28 rewrite; update reauthorizes both legs on money change (round-2 OK); residual non-owner effects are delete-like only.

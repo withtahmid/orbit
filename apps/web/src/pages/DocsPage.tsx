@@ -1005,7 +1005,7 @@ function Permissions() {
                 <RoleCard
                     role="Editor"
                     tone="brand"
-                    body="Record transactions, allocate, rebalance, create events. Cannot change membership or envelopes/categories."
+                    body="Record transactions, edit or delete any member's transactions, allocate, rebalance, create events. Cannot change membership or envelopes/categories."
                 />
                 <RoleCard
                     role="Viewer"
@@ -1082,7 +1082,7 @@ function Faq() {
                 />
                 <FaqItem
                     q="Can I edit a transaction after recording it?"
-                    a="Yes — if you recorded it. Open the row's detail sheet and hit the pencil: amount, date, account, category, envelope, event, and description are all editable, and balances and envelope usage recompute automatically. Transfer-fee rows are edited through their parent transfer."
+                    a="Yes — if you're an owner or editor of the space. Open the row's detail sheet and hit the pencil. Anyone with edit access can fix the date, category, envelope, event, description or location on any member's row. Changing the amount or the accounts needs the same rights as recording it: you must own the account the money leaves; for income, own the receiving account or have recorded it; for an adjustment, own its account. Balances and envelope usage recompute automatically. A transfer-fee row's account, date and event follow its parent transfer."
                 />
                 <FaqItem
                     q="What happens when I delete an account?"

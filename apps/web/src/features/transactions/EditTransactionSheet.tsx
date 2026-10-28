@@ -34,6 +34,7 @@ import { getIcon } from "@/lib/entityIcons";
 import { NT_STYLES, SourceOverspendHint } from "./NewTransactionSheet";
 import { TransactionDatePicker, TDP_POPOVER_STYLES } from "./TransactionDatePicker";
 import { useOptimisticTransactionCache } from "./useOptimisticTransactionCache";
+import { useStore } from "@/stores/useStore";
 
 type SpaceAccount = RouterOutput["account"]["listBySpace"][number];
 const ownedByMe = (a: SpaceAccount) => a.myRole === "owner";
@@ -74,6 +75,8 @@ type TxType = "income" | "expense" | "transfer" | "adjustment";
 export interface EditableTransaction {
     id: string;
     space_id: string;
+    /** Who recorded the row — drives the money-lock for income/adjustments. */
+    created_by: string;
     type: unknown;
     amount: string | number;
     source_account_id: string | null;
@@ -199,6 +202,8 @@ function EditForm({
     const invalidate = useInvalidateAnalytics();
     const optimistic = useOptimisticTransactionCache();
     const isFeeExpense = type === "expense" && transaction.parent_transfer_id != null;
+    const { authStore } = useStore();
+    const myUserId = authStore.user?.id;
 
     const accountsQuery = trpc.account.listBySpace.useQuery({ spaceId });
     const categoriesQuery = trpc.expenseCategory.listBySpace.useQuery({ spaceId });
@@ -241,30 +246,60 @@ function EditForm({
         () => (accountsQuery.data ?? []).map(toAccountItem),
         [accountsQuery.data]
     );
+    /* Source accounts the caller may MOVE this row onto: owned + unlocked.
+       The row's CURRENT source is kept even when the caller doesn't own it
+       — any space owner/editor may edit a teammate's row's metadata (the
+       picker is disabled via `moneyLocked` below in that case), and
+       dropping the current source from the list would blank the field. */
     const spendableItems = useMemo(
         () =>
             (accountsQuery.data ?? [])
-                .filter((a) => a.account_type !== "locked")
-                .filter(ownedByMe)
+                .filter(
+                    (a) =>
+                        (a.account_type !== "locked" && ownedByMe(a)) ||
+                        a.id === transaction.source_account_id
+                )
                 .map(toAccountItem),
-        [accountsQuery.data]
+        [accountsQuery.data, transaction.source_account_id]
     );
-    /* Transfer destinations only — mirrors NewTransactionSheet's filter (see
-       the reasoning there): the server needs an owner/viewer
-       `user_accounts` row for the caller, so accounts reachable through
-       space membership alone would fail with FORBIDDEN. Offering them here
-       was worse than in the create sheet: the edit sheet closes on submit,
-       so the rejection also discarded everything the user had typed.
-       Keep the transaction's CURRENT destination even if it wouldn't pass —
-       an older row may point at an account the caller has since lost their
-       row on, and dropping it from the list would silently blank the field. */
+    /* "Metadata is shared, money is owned" (server rule in update.mts): any
+       space owner/editor may fix a teammate's description, category,
+       envelope, event, date or location, but the amount and the accounts
+       may only be changed by whoever owns the money — the source owner for
+       expense/transfer/fee rows; for an adjustment, the owner of its
+       account; for income, the owner of the receiving account OR whoever
+       recorded the deposit. Locking those fields up-front beats a FORBIDDEN
+       toast after the sheet has already closed. Only lock when we can SEE
+       the account and know it isn't ours; an account outside this space
+       isn't in the list, so we let the server decide for it. */
+    const moneyLocked = useMemo(() => {
+        const accounts = accountsQuery.data ?? [];
+        const find = (id: string | null) => (id ? accounts.find((a) => a.id === id) : undefined);
+        if (type === "income") {
+            if (transaction.created_by === myUserId) return false;
+            const dest = find(transaction.destination_account_id);
+            return dest ? !ownedByMe(dest) : false;
+        }
+        if (type === "adjustment") {
+            const acct = find(transaction.source_account_id ?? transaction.destination_account_id);
+            return acct ? !ownedByMe(acct) : false;
+        }
+        const source = find(transaction.source_account_id);
+        return source ? !ownedByMe(source) : false;
+    }, [
+        accountsQuery.data,
+        type,
+        myUserId,
+        transaction.created_by,
+        transaction.source_account_id,
+        transaction.destination_account_id,
+    ]);
+
+    /* Transfer destinations: every account in this space except the source
+       — same rule as NewTransactionSheet. */
     const destItems = useMemo(
-        () =>
-            (accountsQuery.data ?? [])
-                .filter((a) => a.id !== sourceAccountId)
-                .filter((a) => a.myRole != null || a.id === transaction.destination_account_id)
-                .map(toAccountItem),
-        [accountsQuery.data, sourceAccountId, transaction.destination_account_id]
+        () => (accountsQuery.data ?? []).filter((a) => a.id !== sourceAccountId).map(toAccountItem),
+        [accountsQuery.data, sourceAccountId]
     );
 
     const selectedEnvelope = useMemo(
@@ -462,7 +497,10 @@ function EditForm({
         e.preventDefault();
         if (submittingRef.current || mutate.isPending) return;
         const parsed = Number(amount);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
+        /* Skipped when locked: the amount isn't sent then, and a draft
+           cleared before the lock engaged would otherwise block every
+           submit with no way to fix the disabled field. */
+        if (!moneyLocked && (!Number.isFinite(parsed) || parsed <= 0)) {
             toast.error("Amount must be greater than zero");
             return;
         }
@@ -513,18 +551,22 @@ function EditForm({
                   ? undefined
                   : sourceAccountId || null;
         submittingRef.current = true;
+        /* When the money fields are locked, send none of them. If the lock
+           flipped on after the field had already taken focus (accounts
+           loading), a stray draft could otherwise reach the server and be
+           rejected after the sheet has closed. */
         mutate.mutate({
             transactionId: transaction.id,
-            amount: parsed,
+            amount: moneyLocked ? undefined : parsed,
             /* Parent-owned on a fee row (the server re-syncs both from the
                transfer), so send nothing rather than echo a value we don't
                control — same stance as `sendSource` below. */
             datetime: isFeeExpense ? undefined : parsedDatetime,
             description: description.trim() === "" ? null : description.trim(),
             location: location.trim() === "" ? null : location.trim(),
-            sourceAccountId: sendSource,
+            sourceAccountId: moneyLocked ? undefined : sendSource,
             destinationAccountId:
-                type === "expense" || type === "adjustment"
+                moneyLocked || type === "expense" || type === "adjustment"
                     ? undefined
                     : destinationAccountId || null,
             expenseCategoryId: type === "expense" ? categoryId : undefined,
@@ -551,12 +593,32 @@ function EditForm({
                    rows so it can't drift from its parent). */
                 <OrbitInfoPill tone="transfer">
                     This is a transfer fee. Its account, date, and event follow the parent transfer
-                    and are locked here — the amount, category, envelope, and notes are yours to
-                    edit.
+                    and are locked here —{" "}
+                    {moneyLocked
+                        ? "the category, envelope, and notes are yours to edit."
+                        : "the amount, category, envelope, and notes are yours to edit."}
+                </OrbitInfoPill>
+            )}
+            {moneyLocked && (
+                <OrbitInfoPill tone="gold">
+                    {type === "income"
+                        ? "You can edit the details. The amount and account are locked — only the account's owner or whoever recorded this can change them."
+                        : type === "adjustment"
+                          ? "You can edit the details. The amount and account are locked — only the account's owner can change them."
+                          : "You can edit the details. The amount and accounts are locked — only the owner of the paying account can change them."}
                 </OrbitInfoPill>
             )}
 
-            <OrbitAmountCard value={amount} onChange={setAmount} tone={meta.tone} autoFocus />
+            {/* autoFocus waits for the account list: if `moneyLocked` flips
+                to true after the field has already taken focus, focus drops
+                to <body> and the mobile keyboard flashes. */}
+            <OrbitAmountCard
+                value={amount}
+                onChange={setAmount}
+                tone={meta.tone}
+                autoFocus={accountsQuery.isSuccess && !moneyLocked}
+                disabled={moneyLocked}
+            />
 
             {type !== "adjustment" &&
                 (isFeeExpense ? (
@@ -582,7 +644,11 @@ function EditForm({
                 ))}
 
             {type === "income" && (
-                <OrbitField label="Into account" required>
+                <OrbitField
+                    label="Into account"
+                    required
+                    hint={moneyLocked ? "Locked — see note above" : undefined}
+                >
                     <OrbitSelect
                         value={destinationAccountId}
                         onValueChange={setDest}
@@ -590,6 +656,7 @@ function EditForm({
                         placeholder="Choose account"
                         leadIcon={<Wallet className="size-3.5" />}
                         leadColor="var(--ent-1)"
+                        disabled={moneyLocked}
                     />
                 </OrbitField>
             )}
@@ -602,7 +669,9 @@ function EditForm({
                         hint={
                             isFeeExpense
                                 ? "Locked — fees share the parent transfer's source"
-                                : undefined
+                                : moneyLocked
+                                  ? "Locked — see note above"
+                                  : undefined
                         }
                     >
                         <OrbitSelect
@@ -612,7 +681,7 @@ function EditForm({
                             placeholder="Choose account"
                             leadIcon={<Wallet className="size-3.5" />}
                             leadColor="var(--ent-1)"
-                            disabled={isFeeExpense}
+                            disabled={isFeeExpense || moneyLocked}
                         />
                     </OrbitField>
                     {!isFeeExpense && (
@@ -693,7 +762,11 @@ function EditForm({
 
             {type === "transfer" && (
                 <>
-                    <OrbitField label="From" required>
+                    <OrbitField
+                        label="From"
+                        required
+                        hint={moneyLocked ? "Locked — see note above" : undefined}
+                    >
                         <OrbitSelect
                             value={sourceAccountId}
                             onValueChange={setSource}
@@ -701,6 +774,7 @@ function EditForm({
                             placeholder="Choose source"
                             leadIcon={<Wallet className="size-3.5" />}
                             leadColor="var(--ent-1)"
+                            disabled={moneyLocked}
                         />
                     </OrbitField>
                     <SourceOverspendHint
@@ -712,13 +786,10 @@ function EditForm({
                             <ArrowDown className="size-3.5" />
                         </span>
                     </div>
-                    {/* See NewTransactionSheet's "To" field: the list hides
-                        accounts the server would reject, so the rule needs
-                        saying out loud. */}
                     <OrbitField
                         label="To"
                         required
-                        hint="Only accounts shared with you can receive a transfer"
+                        hint={moneyLocked ? "Locked — see note above" : "Any account in this space"}
                     >
                         <OrbitSelect
                             value={destinationAccountId}
@@ -727,6 +798,7 @@ function EditForm({
                             placeholder="Choose destination"
                             leadIcon={<Wallet className="size-3.5" />}
                             leadColor="var(--ent-3)"
+                            disabled={moneyLocked}
                         />
                     </OrbitField>
                 </>

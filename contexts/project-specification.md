@@ -887,8 +887,11 @@ procedure:
   frozen on the row), validates source account isn't locked and the
   envelope is active.
 - [`transaction.transfer`](../apps/server/src/procedures/transaction/transfer.mts)
-  — requires both accounts in the same space, source not locked, source
-  has enough balance. Optional fee triple (`feeAmount`,
+  — caller must be owner/editor of `spaceId`; source must be owned by
+  the caller and not locked; destination must be owned by the caller OR
+  shared into `spaceId` (no `user_accounts` row needed — paying into a
+  roommate's account or a shared pot is the point). No balance check.
+  Optional fee triple (`feeAmount`,
   `feeExpenseCategoryId`, `feeEnvelopId` — all three or none) spawns a
   paired fee expense row (§11.6).
 - [`transaction.adjust`](../apps/server/src/procedures/transaction/adjust.mts)
@@ -906,12 +909,41 @@ be wasteful. Edits reverse the OLD effect and apply the NEW effect.
 
 ### 11.3 Permission model
 
-- **Delete**: the transaction's creator, OR a space editor+. Not
-  viewers. See [`transaction.delete`](../apps/server/src/procedures/transaction/delete.mts).
-- **Source/destination account permissions**: enforced by
-  [`resolveTransactionPermission`](../apps/server/src/procedures/transaction/utils/resolveTransactionPermission.mts).
+- **Space role**: every transaction write (create, update, delete)
+  requires the caller to be a current `owner`/`editor` of the row's
+  space. Viewers are read-only, and there is **no creator bypass** — a
+  creator who was demoted or removed loses write access to their old
+  rows (the creator exception below is for income money edits only, not
+  the space-role check). Enforced by
+  [`resolveTransactionPermission`](../apps/server/src/procedures/transaction/utils/resolveTransactionPermission.mts)
+  (create/update) and directly in
+  [`transaction.delete`](../apps/server/src/procedures/transaction/delete.mts).
+- **Money out** (expense source, transfer source, adjustment account):
+  the caller must be `user_accounts.role = 'owner'` of the account.
   Locked accounts can never be the source of an expense or transfer, but
   they can receive income.
+- **Money in** (income destination, transfer destination): the account
+  must be owned by the caller OR shared into the recording space. No
+  account-level row is required on the destination.
+- **Update — metadata is shared, money is owned.** Any space
+  owner/editor may change a teammate's description, category, envelope,
+  event, date or location without owning the accounts involved. An edit
+  that changes how much money moves or where (amount, either account, or
+  setting a fee) is re-authorized on both legs exactly like a new write,
+  so an editor can neither inflate a transfer out of an account they
+  don't own nor redirect its destination to themselves. Income and
+  adjustments have no payer-side leg, so a money/account change on those
+  rows additionally requires owning the *old* credited account; for income
+  only, whoever recorded the deposit may also change it (an adjustment's
+  new account must be owned anyway, so no creator exception there). A
+  fee row's source cannot be changed directly (it follows the parent
+  transfer).
+- **Delete** is any space owner/editor, no account check — it reverses a
+  row as recorded rather than creating a new money movement.
+- **Transfer fees** are expense rows whose only account is the source,
+  so whenever a transfer carries a fee the source must itself be shared
+  into the recording space (`resolveTransactionSpaceIntegrity` on the
+  source alone).
 
 ### 11.4 Attachments
 
@@ -1020,7 +1052,9 @@ only move your own money out. Destination dropdowns list every
 account in the space — income and transfers can land in shared pots
 or other members' accounts.
 [`resolveTransactionPermission`](../apps/server/src/procedures/transaction/utils/resolveTransactionPermission.mts)
-mirrors this on the server: destination needs only space-member access.
+mirrors this on the server: the destination must be owned by the caller
+or shared into the recording space, and the caller must be an
+owner/editor of that space (§11.3).
 
 ### 11.7 No transaction-time budget gate
 

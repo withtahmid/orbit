@@ -52,3 +52,4 @@
 - [Shared component vs page-native](shared_component_vs_page_native_boundary.md) — chrome may be page-native; anything with cross-row/cross-page invariants must be one component.
 - [Kept date + inline calculator](kept_date_and_inline_calculator.md) — settled calls on the "Keep" date mode and the arithmetic money fields, plus the seconds-truncation residual.
 - [Icon picker review 2026-09-23](icon_picker_review_2026_09_23.md) — 4 rounds; the recurring defect is one mechanism: a weight applied to score but not to the sort key. Settled verdicts + shipped residuals.
+- [Transaction write permission model](transaction_write_permission_model.md) — 2026-10-28 owner/editor gate, money-out=owned, money-in=owned-or-in-space; /s/me edit gate pitfall.

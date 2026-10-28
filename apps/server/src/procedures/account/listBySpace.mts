@@ -8,14 +8,16 @@ import { TRPCError } from "@trpc/server";
 /**
  * All accounts shared into this space. Access is gated by space membership
  * alone — once an account is shared into a space, every space member can
- * see it and transact against it. Account-level ACL (`user_accounts`)
- * governs edits to the account row itself (name, sharing, delete), not
- * visibility inside a space.
+ * see it, and every space owner/editor may pay INTO it (income or transfer
+ * destination). Money may only LEAVE it if the caller is an account owner
+ * (`resolveTransactionPermission`). Account-level ACL (`user_accounts`)
+ * also governs edits to the account row itself (name, sharing, delete).
  *
  * `myRole` is the caller's role in `user_accounts` (if any), surfaced so
- * the UI can gate account-level mutations. It is `null` when the caller
- * has no `user_accounts` row — which is legal: they can still view/use
- * the account in this space, but cannot rename/share/delete it.
+ * the UI can gate account-level mutations and the "from" dropdowns. It is
+ * `null` when the caller has no `user_accounts` row — which is legal: they
+ * can still see the account and send money to it in this space, but cannot
+ * spend from, rename, share or delete it.
  */
 export const listAccountsBySpace = authorizedProcedure
     .input(
@@ -40,11 +42,7 @@ export const listAccountsBySpace = authorizedProcedure
                         .onRef("user_accounts.account_id", "=", "accounts.id")
                         .on("user_accounts.user_id", "=", ctx.auth.user.id)
                 )
-                .innerJoin(
-                    "account_balances",
-                    "account_balances.account_id",
-                    "accounts.id"
-                )
+                .innerJoin("account_balances", "account_balances.account_id", "accounts.id")
                 .where("space_accounts.space_id", "=", input.spaceId)
                 .select([
                     "accounts.id",
@@ -74,12 +72,7 @@ export const listAccountsBySpace = authorizedProcedure
                 .innerJoin("users as u", "u.id", "ua.user_id")
                 .where("ua.account_id", "in", accountIds)
                 .where("ua.role", "=", "owner" as unknown as UserAccounts["role"])
-                .select([
-                    "ua.account_id",
-                    "u.id",
-                    "u.first_name",
-                    "u.avatar_file_id",
-                ])
+                .select(["ua.account_id", "u.id", "u.first_name", "u.avatar_file_id"])
                 .execute();
             for (const row of ownerRows) {
                 const list = ownersByAccount.get(row.account_id) ?? [];

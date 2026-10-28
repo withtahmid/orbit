@@ -38,6 +38,7 @@ export const createExpenseTransaction = authorizedProcedure
                     fn: async () => {
                         await resolveTransactionPermission({
                             trx,
+                            spaceId: input.spaceId,
                             userId: ctx.auth.user.id,
                             destinationAccountId: null,
                             sourceAccountId: input.sourceAccountId,

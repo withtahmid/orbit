@@ -42,14 +42,14 @@ import { useAnalyticsFilters } from "../analytics/components/useAnalyticsFilters
 import { trpc } from "@/trpc";
 import type { RouterOutput } from "@/trpc";
 import { useInvalidateAnalytics } from "@/lib/invalidate";
-import { useCurrentSpace } from "@/hooks/useCurrentSpace";
+import { useCanEdit, useCurrentSpace } from "@/hooks/useCurrentSpace";
+import { canEdit, type SpaceRole } from "@/lib/permissions";
 import { usePeriod } from "@/hooks/usePeriod";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { NewTransactionSheet } from "@/features/transactions/NewTransactionSheet";
 import { EditTransactionSheet } from "@/features/transactions/EditTransactionSheet";
 import { TransactionDetailsSheet } from "@/features/transactions/TransactionDetailsSheet";
 import { ROUTES } from "@/router/routes";
-import { useStore } from "@/stores/useStore";
 import { UNALLOCATED_COLOR } from "@/lib/entityStyle";
 
 type TxType = "income" | "expense" | "transfer" | "adjustment";
@@ -198,7 +198,17 @@ const PERIOD_PRESETS: Array<{ value: string; label: string }> = [
 export default function TransactionsPage() {
     const { space } = useCurrentSpace();
     const isPersonal = space.isPersonal;
-    const { authStore } = useStore();
+    const canEditRows = useCanEdit();
+    /* The virtual "My money" space is forced to viewer, but every row in
+       it lives in a real space; edit/delete there is decided by the
+       caller's role in THAT space (the edit sheet already reads
+       `transaction.space_id`). */
+    const spacesQuery = trpc.space.list.useQuery(undefined, { enabled: isPersonal });
+    const roleBySpace = useMemo(() => {
+        const m = new Map<string, SpaceRole>();
+        for (const s of spacesQuery.data ?? []) m.set(s.id, s.myRole);
+        return m;
+    }, [spacesQuery.data]);
     const { period, preset } = usePeriod(DEFAULT_PERIOD_PRESET);
     /* Envelope / Account / Category multi-select — the same URL-backed
        (`env`/`acc`/`cat`) filter state the analytics Spending views use,
@@ -1278,7 +1288,12 @@ export default function TransactionsPage() {
                 accountsById={accountsById}
                 categoriesById={categoriesById}
                 eventsById={eventsById}
-                canEdit={selectedTx?.created_by === authStore.user?.id}
+                /* Any space owner/editor may edit or delete any row (server rule). */
+                canEdit={
+                    isPersonal
+                        ? canEdit(selectedTx ? roleBySpace.get(selectedTx.space_id) : null)
+                        : canEditRows
+                }
                 /* Gates the Edit hand-off only — re-editing a row whose own
                    save is still out would snapshot already-optimistic values
                    as its rollback baseline. Delete and attachments stay

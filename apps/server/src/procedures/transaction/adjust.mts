@@ -34,6 +34,7 @@ export const adjustAccountBalance = authorizedProcedure
                     fn: async () => {
                         await resolveTransactionPermission({
                             trx,
+                            spaceId: input.spaceId,
                             userId: ctx.auth.user.id,
                             destinationAccountId: input.accountId,
                             sourceAccountId: input.accountId,
@@ -85,8 +86,7 @@ export const adjustAccountBalance = authorizedProcedure
                         if (Number(row.delta) === 0) {
                             throw new TRPCError({
                                 code: "BAD_REQUEST",
-                                message:
-                                    "New balance is equal to current balance",
+                                message: "New balance is equal to current balance",
                             });
                         }
 
@@ -98,12 +98,10 @@ export const adjustAccountBalance = authorizedProcedure
                                 type: "adjustment" as unknown as Transactions["type"],
                                 amount: row.abs_delta as unknown as number,
                                 source_account_id: row.source_account_id,
-                                destination_account_id:
-                                    row.destination_account_id,
+                                destination_account_id: row.destination_account_id,
                                 description: input.description || null,
                                 location: input.location || null,
-                                transaction_datetime:
-                                    input.datetime || new Date(),
+                                transaction_datetime: input.datetime || new Date(),
                             })
                             .returning(["id"])
                             .executeTakeFirstOrThrow();

@@ -186,6 +186,7 @@ export function OrbitAmountCard({
     autoFocus,
     tone = "fg",
     leadIconBefore,
+    disabled,
 }: {
     value: string;
     onChange: (v: string) => void;
@@ -195,6 +196,8 @@ export function OrbitAmountCard({
     tone?: "fg" | "brand" | "expense" | "income" | "transfer" | "gold";
     /** Optional small icon rendered before the input (e.g. arrow up/down). */
     leadIconBefore?: ReactNode;
+    /** Read-only amount (e.g. editing a row whose money the caller doesn't own). */
+    disabled?: boolean;
 }) {
     const toneColor =
         tone === "brand"
@@ -233,7 +236,8 @@ export function OrbitAmountCard({
                     onChange={(e) => calcField.commit(e.target.value)}
                     onBlur={calcField.onBlur}
                     onKeyDown={calcField.onKeyDown}
-                    autoFocus={autoFocus}
+                    autoFocus={autoFocus && !disabled}
+                    disabled={disabled}
                     /* The eyebrow is a plain span, so without this the field
                        announces as "edit text, blank". */
                     aria-label={typeof eyebrow === "string" ? eyebrow : "Amount"}
@@ -267,10 +271,12 @@ export function OrbitAmountCard({
                 {calcField.announcement}
             </span>
 
-            <OrbitCalcKeys
-                field={calcField}
-                label={typeof eyebrow === "string" ? eyebrow : "Amount"}
-            />
+            {!disabled && (
+                <OrbitCalcKeys
+                    field={calcField}
+                    label={typeof eyebrow === "string" ? eyebrow : "Amount"}
+                />
+            )}
         </div>
     );
 }
@@ -774,6 +780,9 @@ const ORBIT_FORM_STYLES = `
     color: var(--fg);
 }
 .of-amount-input::placeholder { color: var(--fg-4); font-weight: 400; }
+/* Inline tone color would otherwise hide the disabled state entirely;
+   -webkit-text-fill-color stops iOS dimming the text a second time. */
+.of-amount-input:disabled { opacity: 0.55; cursor: not-allowed; -webkit-text-fill-color: currentColor; }
 .of-amount-unit {
     margin-left: auto;
     font-size: 11px;
