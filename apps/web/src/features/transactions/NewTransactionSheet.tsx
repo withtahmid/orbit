@@ -2171,22 +2171,13 @@ function TransferForm({
         [accountsQuery.data]
     );
 
-    /* Transfer destinations need a `user_accounts` row — owner OR viewer —
-       for the caller; `resolveTransactionPermission` rejects a destination
-       the caller merely reaches through space membership with
-       FORBIDDEN "You do not have permission to transfer into the
-       destination account". `myRole` is exactly that row's role and is null
-       when there is none (legal: such an account is still visible and
-       usable for income/expense in this space, just not as a transfer
-       target). Offering those accounts here guaranteed a failed submit.
-       The server's "same space" half of the viewer rule is satisfied by
-       construction — every row here comes from this space's account list. */
+    /* Transfer destinations: every account shared into this space except
+       the source. Money may only LEAVE an owned account, but it may LAND
+       in any account the space can see — a shared pot or a roommate's
+       account — with no `user_accounts` row needed (server rule in
+       `resolveTransactionPermission`). */
     const destItems = useMemo(
-        () =>
-            (accountsQuery.data ?? [])
-                .filter((a) => a.id !== sourceAccountId)
-                .filter((a) => a.myRole != null)
-                .map(toAccountItem),
+        () => (accountsQuery.data ?? []).filter((a) => a.id !== sourceAccountId).map(toAccountItem),
         [accountsQuery.data, sourceAccountId]
     );
 
@@ -2404,17 +2395,7 @@ function TransferForm({
                 </span>
             </div>
 
-            {/* The hint explains an otherwise invisible rule: destItems hides
-                accounts the caller has no user_accounts row for, because the
-                server refuses those transfers. Without it, a shared-space
-                member finds a co-member's account offered for INCOME but
-                absent here — and if it's their only candidate, an empty
-                dropdown with no reason given. */}
-            <OrbitField
-                label="To"
-                required
-                hint="Only accounts shared with you can receive a transfer"
-            >
+            <OrbitField label="To" required hint="Any account in this space">
                 <OrbitSelect
                     value={destinationAccountId}
                     onValueChange={setDest}

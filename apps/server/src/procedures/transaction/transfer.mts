@@ -57,6 +57,7 @@ export const createTransferTransaction = authorizedProcedure
                     fn: async () => {
                         await resolveTransactionPermission({
                             trx,
+                            spaceId: input.spaceId,
                             userId: ctx.auth.user.id,
                             destinationAccountId: input.destinationAccountId,
                             sourceAccountId: input.sourceAccountId,
@@ -80,6 +81,19 @@ export const createTransferTransaction = authorizedProcedure
                         }
 
                         if (hasFee) {
+                            // The fee is its own expense row whose only
+                            // account is the source, so it must pass the
+                            // same integrity rule on its own — otherwise a
+                            // cross-space contribution would leave an
+                            // orphaned expense in a space that can't see
+                            // the account it debits.
+                            await resolveTransactionSpaceIntegrity({
+                                trx,
+                                spaceId: input.spaceId,
+                                sourceAccountId: input.sourceAccountId,
+                                destinationAccountId: null,
+                                reason: "A transfer fee is paid from the source account, so the source must be shared into this space",
+                            });
                             await resolveExpenseCategoryBelongsToSpace({
                                 trx,
                                 expenseCategoryId: input.feeExpenseCategoryId!,

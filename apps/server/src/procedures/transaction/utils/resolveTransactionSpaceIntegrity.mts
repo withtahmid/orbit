@@ -18,15 +18,16 @@ export const resolveTransactionSpaceIntegrity = async ({
     spaceId,
     sourceAccountId,
     destinationAccountId,
+    reason,
 }: {
     trx: Kysely<DB>;
     spaceId: string;
     sourceAccountId: string | null;
     destinationAccountId: string | null;
+    /** Optional override for the error message (e.g. the fee-row case). */
+    reason?: string;
 }) => {
-    const accountIds = [sourceAccountId, destinationAccountId].filter(
-        (id): id is string => !!id
-    );
+    const accountIds = [sourceAccountId, destinationAccountId].filter((id): id is string => !!id);
     if (accountIds.length === 0) {
         return;
     }
@@ -43,6 +44,7 @@ export const resolveTransactionSpaceIntegrity = async ({
         throw new TRPCError({
             code: "BAD_REQUEST",
             message:
+                reason ??
                 "The chosen space has no relationship to either account — pick a space one of these accounts is shared into",
         });
     }

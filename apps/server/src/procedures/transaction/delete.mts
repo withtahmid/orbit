@@ -23,15 +23,15 @@ export const deleteTransaction = authorizedProcedure
                     });
                 }
 
-                const isCreator = tx.created_by === ctx.auth.user.id;
-                if (!isCreator) {
-                    await resolveSpaceMembership({
-                        trx,
-                        spaceId: tx.space_id,
-                        userId: ctx.auth.user.id,
-                        roles: ["owner", "editor"] as unknown as SpaceMembers["role"][],
-                    });
-                }
+                // Any current owner/editor of the row's space may delete it.
+                // No creator bypass (see update.mts): leaving or being
+                // demoted in a space ends write access to old rows too.
+                await resolveSpaceMembership({
+                    trx,
+                    spaceId: tx.space_id,
+                    userId: ctx.auth.user.id,
+                    roles: ["owner", "editor"] as unknown as SpaceMembers["role"][],
+                });
 
                 await trx
                     .deleteFrom("transactions")

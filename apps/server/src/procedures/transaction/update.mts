@@ -2,13 +2,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { authorizedProcedure } from "../../trpc/middlewares/authorized.mjs";
 import { safeAwait } from "../../utils/safeAwait.mjs";
-import { resolveSpaceMembership } from "../space/utils/resolveSpaceMembership.mjs";
 import { resolveTransactionPermission } from "./utils/resolveTransactionPermission.mjs";
 import { resolveTransactionSpaceIntegrity } from "./utils/resolveTransactionSpaceIntegrity.mjs";
 import { resolveEventBelongsToSpace } from "../event/utils/resolveEventBelongsToSpace.mjs";
 import { resolveExpenseCategoryBelongsToSpace } from "../expenseCategory/utils/resolveExpenseCategoryBelongsToSpace.mjs";
 import { resolveEnvelopActive } from "../envelop/utils/resolveEnvelopActive.mjs";
-import type { SpaceMembers, Transactions } from "../../db/kysely/types.mjs";
+import type { Transactions, UserAccounts } from "../../db/kysely/types.mjs";
 import { attachFilesToTransaction } from "../file/attach.mjs";
 
 export const updateTransaction = authorizedProcedure
@@ -50,13 +49,24 @@ export const updateTransaction = authorizedProcedure
                     });
                 }
 
-                const isCreator = existing.created_by === ctx.auth.user.id;
-                if (!isCreator) {
-                    await resolveSpaceMembership({
-                        trx,
-                        spaceId: existing.space_id,
-                        userId: ctx.auth.user.id,
-                        roles: ["owner", "editor"] as unknown as SpaceMembers["role"][],
+                // Who may edit: any current owner/editor of the row's
+                // space — enforced inside resolveTransactionPermission
+                // below. There is deliberately no creator bypass: a
+                // creator demoted to viewer or removed from the space
+                // loses write access to their old rows too.
+
+                // A fee row's source is owned by its parent transfer (the
+                // parent edit re-syncs it); repointing it here would split
+                // one logical operation across two accounts.
+                if (
+                    existing.parent_transfer_id &&
+                    input.sourceAccountId !== undefined &&
+                    input.sourceAccountId !== existing.source_account_id
+                ) {
+                    throw new TRPCError({
+                        code: "BAD_REQUEST",
+                        message:
+                            "A fee's account follows its parent transfer — edit the transfer instead",
                     });
                 }
 
@@ -167,12 +177,91 @@ export const updateTransaction = authorizedProcedure
                     });
                 }
 
+                // Metadata is shared, money is owned. Any owner/editor of
+                // the space may fix a teammate's description, category,
+                // envelope, event, date or location without owning the
+                // accounts involved — the original write already
+                // authorized those legs. But an edit that changes how much
+                // money moves or where it moves (amount, either account,
+                // or setting a fee — a fresh debit of the source) is
+                // re-authorized on BOTH legs exactly like a new write, so an
+                // editor can neither inflate a transfer out of an account
+                // they don't own nor redirect its destination to their own
+                // account. Space role is always checked.
+                const sourceChanged = merged.sourceAccountId !== existing.source_account_id;
+                const destinationChanged =
+                    merged.destinationAccountId !== existing.destination_account_id;
+                // Round like numeric(…,2) does: `toPrecision(15)` first so a
+                // half-cent input (1.005 → 100.4999…) lands on 101, not 100.
+                const cents = (n: number) => Math.round(Number((n * 100).toPrecision(15)));
+                // Normalise what we store to what we compared, so a sub-cent
+                // input can't slip past the re-authorization and still nudge
+                // the stored value when Postgres rounds it.
+                merged.amount = cents(merged.amount) / 100;
+                if (desiredFee) desiredFee.amount = cents(desiredFee.amount) / 100;
+                const amountChanged = cents(merged.amount) !== cents(Number(existing.amount));
+                const feeAmountChanged =
+                    desiredFee !== null &&
+                    (linkedFee === null || cents(linkedFee.amount) !== cents(desiredFee.amount));
+                const moneyChanged = amountChanged || feeAmountChanged;
+                const reauthorize = sourceChanged || destinationChanged || moneyChanged;
+                const isIncome = (existing.type as unknown as string) === "income";
+                if (
+                    (existing.type as unknown as string) === "adjustment" &&
+                    merged.sourceAccountId &&
+                    merged.destinationAccountId
+                ) {
+                    throw new TRPCError({
+                        code: "BAD_REQUEST",
+                        message:
+                            "An adjustment has exactly one account — set either source or destination",
+                    });
+                }
+                // Income and adjustments have no payer-side anchor: income
+                // has no source, and an adjustment's single account may be
+                // re-pointed. Without this gate any editor could pull a
+                // credit off a teammate's account by retargeting or
+                // shrinking the row. Altering what an account already
+                // received requires owning that account. Income only: the
+                // person who recorded the deposit may also fix it (their
+                // own typo into the household pot; deleting it is allowed
+                // anyway). Adjustments get no such exception — the resolver
+                // below demands ownership of the adjusted account anyway,
+                // so a creator exception here would be unreachable.
+                const isAdjustment = (existing.type as unknown as string) === "adjustment";
+                const anchoredAccountId = isIncome
+                    ? existing.destination_account_id
+                    : isAdjustment
+                      ? (existing.source_account_id ?? existing.destination_account_id)
+                      : null;
+                if (reauthorize && anchoredAccountId) {
+                    const isCreator = isIncome && existing.created_by === ctx.auth.user.id;
+                    if (!isCreator) {
+                        const ownsAnchoredAccount = await trx
+                            .selectFrom("user_accounts")
+                            .select("user_id")
+                            .where("account_id", "=", anchoredAccountId)
+                            .where("user_id", "=", ctx.auth.user.id)
+                            .where("role", "=", "owner" as unknown as UserAccounts["role"])
+                            .executeTakeFirst();
+                        if (!ownsAnchoredAccount) {
+                            throw new TRPCError({
+                                code: "FORBIDDEN",
+                                message: isIncome
+                                    ? "Only the account owner or whoever recorded this income can change its amount or account"
+                                    : "Only the account owner can change an adjustment's amount or account",
+                            });
+                        }
+                    }
+                }
                 await resolveTransactionPermission({
                     trx,
+                    spaceId: existing.space_id,
                     userId: ctx.auth.user.id,
                     sourceAccountId: merged.sourceAccountId,
                     destinationAccountId: merged.destinationAccountId,
                     type: existing.type as unknown as Transactions["type"],
+                    check: { source: reauthorize, destination: reauthorize },
                 });
 
                 await resolveTransactionSpaceIntegrity({
@@ -181,6 +270,24 @@ export const updateTransaction = authorizedProcedure
                     sourceAccountId: merged.sourceAccountId,
                     destinationAccountId: merged.destinationAccountId,
                 });
+
+                // A fee row's only account is the source, so the source
+                // must pass integrity on its own whenever this edit sets a
+                // fee or moves a surviving fee onto a new source. Mirrors
+                // the create-path rule in transfer.mts. An untouched
+                // legacy fee on an unchanged source is left alone so old
+                // rows stay editable.
+                const feeNeedsSourceCheck =
+                    desiredFee !== null || (linkedFee !== null && !clearFee && sourceChanged);
+                if (isTransfer && feeNeedsSourceCheck) {
+                    await resolveTransactionSpaceIntegrity({
+                        trx,
+                        spaceId: existing.space_id,
+                        sourceAccountId: merged.sourceAccountId,
+                        destinationAccountId: null,
+                        reason: "A transfer fee is paid from the source account, so the source must be shared into this space",
+                    });
+                }
 
                 if (merged.expenseCategoryId) {
                     await resolveExpenseCategoryBelongsToSpace({
@@ -282,9 +389,10 @@ export const updateTransaction = authorizedProcedure
                  * fee stranded in the wrong month or event skewed those
                  * envelope/event/category rollups with no visible cause.
                  *
-                 * Permission-safe: a transfer's source has already been
-                 * validated as owner-held and unlocked, which is exactly
-                 * what an expense row's source requires.
+                 * Permission-safe: a transfer's source is validated as
+                 * owner-held and unlocked whenever it changes (see the
+                 * re-authorization block above), which is exactly what an
+                 * expense row's source requires.
                  *
                  * The rule is STRUCTURAL columns follow the parent;
                  * user-authored free text does not. `source_account_id`,
